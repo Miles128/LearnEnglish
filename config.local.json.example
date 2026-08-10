@@ -2,5 +2,7 @@
   "base_url": "https://api.openai.com/v1",
   "api_key": "YOUR_API_KEY",
   "model": "gpt-4o-mini",
-  "disabled_feeds": []
+  "disabled_feeds": [],
+  "cefr_level": "B1",
+  "freq_band": 3000
 }

@@ -393,6 +393,49 @@ a {
   line-height: 1.7;
 }
 
+mark.vocab-hit {
+  background: rgba(15, 92, 76, 0.14);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 2px;
+  box-decoration-break: clone;
+  cursor: pointer;
+}
+
+mark.vocab-hit:hover {
+  background: rgba(15, 92, 76, 0.26);
+}
+
+.hard-word {
+  text-decoration: underline;
+  text-decoration-color: rgba(15, 92, 76, 0.55);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.hard-word:hover,
+.hard-word:focus-visible {
+  background: rgba(15, 92, 76, 0.08);
+  outline: none;
+}
+
+.hard-word.vocab-hit {
+  background: rgba(15, 92, 76, 0.14);
+}
+
+.settings-section select {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+}
+
 .source-link {
   margin-top: 28px;
   word-break: break-all;

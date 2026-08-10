@@ -9,7 +9,16 @@ import {
 import Markdown from "react-markdown";
 import { Link, useParams } from "react-router-dom";
 import { api, Article, TranslationRow } from "../api";
+import { renderAnnotatedParagraph } from "../annotateText";
 import { shouldRenderMarkdown } from "../markdown";
+import {
+  defaultDifficultyPrefs,
+  ensureLexiconLoaded,
+  isCefrLevel,
+  isFreqBand,
+  lookupWord,
+  type DifficultyPrefs,
+} from "../wordLevels";
 
 type Popover = {
   x: number;
@@ -25,6 +34,9 @@ export default function Reader() {
   const [article, setArticle] = useState<Article | null>(null);
   const [paragraphs, setParagraphs] = useState<string[]>([]);
   const [translations, setTranslations] = useState<Record<string, string>>({});
+  const [vocabTerms, setVocabTerms] = useState<string[]>([]);
+  const [prefs, setPrefs] = useState<DifficultyPrefs>(defaultDifficultyPrefs);
+  const [lexReady, setLexReady] = useState(false);
   const [showFullZh, setShowFullZh] = useState(false);
   const [visibleParas, setVisibleParas] = useState<Record<number, boolean>>({});
   const [busyFull, setBusyFull] = useState(false);
@@ -33,6 +45,28 @@ export default function Reader() {
   const [popover, setPopover] = useState<Popover | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const clickGuardRef = useRef(false);
+
+  const loadVocabTerms = useCallback(async () => {
+    try {
+      const list = await api.listVocab("learning");
+      setVocabTerms(list.map((v) => v.term));
+    } catch {
+      // vocab highlight is optional if list fails
+    }
+  }, []);
+
+  const loadPrefs = useCallback(async () => {
+    try {
+      const cfg = await api.getConfig();
+      setPrefs({
+        cefrLevel: isCefrLevel(cfg.cefr_level) ? cfg.cefr_level : "B1",
+        freqBand: isFreqBand(cfg.freq_band) ? cfg.freq_band : 3000,
+      });
+    } catch {
+      setPrefs(defaultDifficultyPrefs());
+    }
+  }, []);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -48,10 +82,17 @@ export default function Reader() {
         map[r.scope_key] = r.translated_text;
       });
       setTranslations(map);
+      await Promise.all([loadVocabTerms(), loadPrefs()]);
     } catch (e) {
       setError(String(e));
     }
-  }, [id]);
+  }, [id, loadVocabTerms, loadPrefs]);
+
+  useEffect(() => {
+    void ensureLexiconLoaded()
+      .then(() => setLexReady(true))
+      .catch(() => setLexReady(true));
+  }, []);
 
   useEffect(() => {
     void load();
@@ -74,6 +115,43 @@ export default function Reader() {
     const body = paragraphs.length > 0 ? paragraphs.join("\n\n") : article.content_text;
     return shouldRenderMarkdown(article.url, body);
   }, [article, paragraphs]);
+
+  async function showMeaning(opts: {
+    text: string;
+    x: number;
+    y: number;
+    bundledZh?: string;
+  }) {
+    const { text, x, y, bundledZh } = opts;
+    const fromLexicon = bundledZh || lookupWord(text)?.zh;
+    if (fromLexicon) {
+      setPopover({
+        x,
+        y,
+        text,
+        translation: fromLexicon,
+        loading: false,
+      });
+      return;
+    }
+
+    setPopover({ x, y, text, loading: true });
+    if (!id) return;
+    try {
+      const row = await api.translateSelection(id, text);
+      setPopover((p) =>
+        p && p.text === text
+          ? { ...p, translation: row.translated_text, loading: false }
+          : p,
+      );
+    } catch (err) {
+      setPopover((p) =>
+        p && p.text === text
+          ? { ...p, error: String(err), loading: false }
+          : p,
+      );
+    }
+  }
 
   async function toggleFullTranslation() {
     if (!id) return;
@@ -127,33 +205,33 @@ export default function Reader() {
   }
 
   async function onMouseUp(e: MouseEvent) {
+    if (clickGuardRef.current) {
+      clickGuardRef.current = false;
+      return;
+    }
     const sel = window.getSelection();
     const text = sel?.toString().trim() ?? "";
     if (!text || text.length > 120) {
       setPopover(null);
       return;
     }
-    setPopover({
-      x: e.clientX,
-      y: e.clientY,
-      text,
-      loading: true,
+    await showMeaning({ text, x: e.clientX, y: e.clientY });
+  }
+
+  function onHardWordClick(info: {
+    term: string;
+    display: string;
+    zh?: string;
+    clientX: number;
+    clientY: number;
+  }) {
+    clickGuardRef.current = true;
+    void showMeaning({
+      text: info.term,
+      x: info.clientX || 80,
+      y: info.clientY || 120,
+      bundledZh: info.zh,
     });
-    if (!id) return;
-    try {
-      const row = await api.translateSelection(id, text);
-      setPopover((p) =>
-        p && p.text === text
-          ? { ...p, translation: row.translated_text, loading: false }
-          : p,
-      );
-    } catch (err) {
-      setPopover((p) =>
-        p && p.text === text
-          ? { ...p, error: String(err), loading: false }
-          : p,
-      );
-    }
   }
 
   async function addToVocab() {
@@ -163,9 +241,11 @@ export default function Reader() {
         term: popover.text,
         contextSentence: findContext(paragraphs, popover.text),
         articleId: id,
+        definitionZh: popover.translation ?? null,
       });
       setToast(`已加入生词库：${popover.text}`);
       setPopover(null);
+      await loadVocabTerms();
       setTimeout(() => setToast(null), 2500);
     } catch (e) {
       setError(String(e));
@@ -193,15 +273,12 @@ export default function Reader() {
           <h1>{title}</h1>
           {article.title_zh && <p className="article-title-zh">{article.title_zh}</p>}
           <p className="muted">
-            {article.source} · {labelCategory(article.category)}
+            {article.source} · {labelCategory(article.category)} · 难度 {prefs.cefrLevel} /{" "}
+            {prefs.freqBand / 1000}k
           </p>
         </div>
         <button className="btn" onClick={toggleFullTranslation} disabled={busyFull}>
-          {busyFull
-            ? "翻译中…"
-            : showFullZh
-              ? "隐藏全文翻译"
-              : "显示全文翻译"}
+          {busyFull ? "…" : showFullZh ? "隐藏译文" : "全文翻译"}
         </button>
       </header>
 
@@ -231,13 +308,29 @@ export default function Reader() {
                           {children}
                         </a>
                       ),
+                      p: ({ children }) => (
+                        <p>
+                          {lexReady && typeof children === "string"
+                            ? renderAnnotatedParagraph(
+                                children,
+                                prefs,
+                                vocabTerms,
+                                onHardWordClick,
+                              )
+                            : children}
+                        </p>
+                      ),
                     }}
                   >
                     {p}
                   </Markdown>
                 </div>
               ) : (
-                <p>{p}</p>
+                <p>
+                  {lexReady
+                    ? renderAnnotatedParagraph(p, prefs, vocabTerms, onHardWordClick)
+                    : p}
+                </p>
               )}
               {(showFullZh || visibleParas[i]) && translations[String(i)] && (
                 <p className="zh">{translations[String(i)]}</p>
@@ -278,7 +371,8 @@ export default function Reader() {
 }
 
 function findContext(paragraphs: string[], term: string): string {
-  const hit = paragraphs.find((p) => p.includes(term));
+  const lower = term.toLowerCase();
+  const hit = paragraphs.find((p) => p.toLowerCase().includes(lower));
   return hit ?? term;
 }
 

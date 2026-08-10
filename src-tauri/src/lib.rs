@@ -10,10 +10,10 @@ mod db_tests;
 use chrono::Utc;
 use config::AppConfig;
 use db::{Article, DbState, FeedSource, TranslationRow, VocabItem};
-use feeds::RefreshResult;
+use feeds::{RefreshProgress, RefreshResult};
 use srs::{apply_rating, Rating};
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 use vocab::VocabEnrichment;
 
@@ -56,17 +56,46 @@ fn set_feed_enabled(
 }
 
 #[tauri::command]
-fn refresh_feeds(state: tauri::State<'_, DbState>) -> Result<RefreshResult, String> {
+async fn refresh_feeds(app: AppHandle) -> Result<RefreshResult, String> {
+    // Sync commands run on the UI main thread — blocking HTTP there freezes the window.
+    // Offload to a blocking pool so the UI can paint progress events.
+    let _ = app.emit(
+        "refresh-progress",
+        RefreshProgress {
+            phase: "download".into(),
+            current: 0,
+            total: 0,
+            label: "开始刷新…".into(),
+            percent: 0,
+        },
+    );
+
     let cfg = config::load_config()?;
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    feeds::refresh_feeds(&conn, &cfg)
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle
+            .try_state::<DbState>()
+            .ok_or_else(|| "数据库未就绪".to_string())?;
+        feeds::refresh_feeds(&state.0, &cfg, |progress: RefreshProgress| {
+            let _ = app_handle.emit("refresh-progress", &progress);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn translate_missing_titles(state: tauri::State<'_, DbState>) -> Result<usize, String> {
+async fn translate_missing_titles(app: AppHandle) -> Result<usize, String> {
     let cfg = config::load_config()?;
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    feeds::fill_missing_title_translations(&conn, &cfg, 40)
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle
+            .try_state::<DbState>()
+            .ok_or_else(|| "数据库未就绪".to_string())?;
+        feeds::fill_missing_title_translations(&state.0, &cfg, 40)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

@@ -61,10 +61,17 @@ export default function Home() {
     setRefreshing(true);
     setMessage(null);
     setError(null);
+    // Yield so React can paint「刷新中」before the long IPC call.
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
     try {
       const result: RefreshResult = await api.refreshFeeds();
       setMessage(
-        `刷新完成：更新 ${result.added_or_updated} 篇，标题翻译 ${result.titles_translated}，跳过短文 ${result.skipped_short}` +
+        `刷新完成：新增 ${result.added_or_updated} 篇` +
+          (result.skipped_existing ? `，跳过已有 ${result.skipped_existing}` : "") +
+          `，标题翻译 ${result.titles_translated}，跳过短文 ${result.skipped_short}` +
+          (result.skipped_non_english
+            ? `，跳过非英文 ${result.skipped_non_english}`
+            : "") +
           (result.errors.length ? `；${result.errors.length} 个问题` : ""),
       );
       await load();

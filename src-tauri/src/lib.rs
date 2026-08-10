@@ -9,13 +9,13 @@ mod db_tests;
 
 use chrono::Utc;
 use config::AppConfig;
-use db::{Article, DbState, FeedSource, TranslationRow, VocabItem};
-use feeds::{RefreshProgress, RefreshResult};
+use db::{Article, DbState, FeedCategory, FeedSource, TranslationRow, VocabItem};
+use feeds::{FeedValidation, RefreshProgress, RefreshResult};
 use srs::{apply_rating, Rating};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
-use vocab::VocabEnrichment;
+use vocab::{FeedDiscoverCandidate, VocabEnrichment};
 
 #[tauri::command]
 fn get_config() -> Result<AppConfig, String> {
@@ -53,6 +53,74 @@ fn set_feed_enabled(
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     db::set_feed_enabled(&conn, &id, enabled)
+}
+
+#[tauri::command]
+fn list_feed_categories(
+    state: tauri::State<'_, DbState>,
+) -> Result<Vec<FeedCategory>, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::list_feed_categories(&conn)
+}
+
+#[tauri::command]
+fn add_feed_category(
+    state: tauri::State<'_, DbState>,
+    label: String,
+) -> Result<FeedCategory, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::add_feed_category(&conn, &label)
+}
+
+#[derive(serde::Deserialize)]
+struct SubscribeFeedInput {
+    name: String,
+    category: String,
+    url: String,
+    description: Option<String>,
+}
+
+#[tauri::command]
+fn subscribe_feed(
+    state: tauri::State<'_, DbState>,
+    input: SubscribeFeedInput,
+) -> Result<FeedSource, String> {
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+    db::subscribe_feed(
+        &conn,
+        &input.name,
+        &input.category,
+        &input.url,
+        input.description.as_deref().unwrap_or(""),
+    )
+}
+
+#[tauri::command]
+async fn validate_feed(url: String) -> Result<FeedValidation, String> {
+    tauri::async_runtime::spawn_blocking(move || feeds::validate_feed_url(&url))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn discover_feeds(
+    app: AppHandle,
+    category_id: String,
+) -> Result<Vec<FeedDiscoverCandidate>, String> {
+    let cfg = config::load_config()?;
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle
+            .try_state::<DbState>()
+            .ok_or_else(|| "数据库未就绪".to_string())?;
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        let cat = db::get_feed_category(&conn, &category_id)?
+            .ok_or_else(|| format!("未知分类：{category_id}"))?;
+        drop(conn);
+        vocab::discover_rss_feeds(&cfg, &cat.id, &cat.label)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -341,6 +409,11 @@ pub fn run() {
             get_article,
             list_feeds,
             set_feed_enabled,
+            list_feed_categories,
+            add_feed_category,
+            subscribe_feed,
+            validate_feed,
+            discover_feeds,
             refresh_feeds,
             translate_missing_titles,
             import_article_url,

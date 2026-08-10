@@ -712,6 +712,138 @@ mark.vocab-hit:hover {
   transition: width 0.28s ease;
 }
 
+.page-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.feeds-drawer-root {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.feeds-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(28, 26, 23, 0.28);
+  cursor: pointer;
+}
+
+.feeds-drawer {
+  position: relative;
+  width: min(440px, 100%);
+  height: 100%;
+  overflow: auto;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  padding: 20px 18px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.feeds-drawer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.feeds-drawer-head h2 {
+  margin: 0 0 4px;
+  font-size: 1.35rem;
+}
+
+.feeds-cat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.feeds-add-cat,
+.feeds-paste {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.feeds-add-cat input,
+.feeds-paste input {
+  flex: 1 1 140px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.feeds-drawer-section h3 {
+  margin: 0 0 10px;
+  font-size: 1.05rem;
+}
+
+.feeds-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.feeds-section-head h3 {
+  margin: 0;
+}
+
+.feed-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.feed-url {
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+
+.discover-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.discover-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.discover-desc {
+  margin: 4px 0;
+  font-size: 0.9rem;
+}
+
+.inline-status {
+  display: inline-block;
+  margin: 4px 0 0;
+  padding: 2px 8px;
+  font-size: 0.8rem;
+}
+
 @media (max-width: 800px) {
   .app-shell {
     grid-template-columns: 1fr;

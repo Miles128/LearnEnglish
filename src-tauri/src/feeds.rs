@@ -41,6 +41,72 @@ pub struct RefreshProgress {
     pub percent: u8,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct FeedValidation {
+    pub ok: bool,
+    pub title: Option<String>,
+    pub entry_count: usize,
+    pub error: Option<String>,
+}
+
+/// Probe a URL: fetch + parse as RSS/Atom. Does not write to DB.
+pub fn validate_feed_url(url: &str) -> FeedValidation {
+    let url = url.trim();
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return FeedValidation {
+            ok: false,
+            title: None,
+            entry_count: 0,
+            error: Some("URL 必须以 http(s) 开头".into()),
+        };
+    }
+    let client = match Client::builder()
+        .user_agent("LearnEnglish/0.1 (+local; educational)")
+        .timeout(std::time::Duration::from_secs(25))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return FeedValidation {
+                ok: false,
+                title: None,
+                entry_count: 0,
+                error: Some(e.to_string()),
+            };
+        }
+    };
+    match client.get(url).send().and_then(|r| r.error_for_status()) {
+        Ok(resp) => match resp.bytes() {
+            Ok(bytes) => match parser::parse(&bytes[..]) {
+                Ok(parsed) => FeedValidation {
+                    ok: true,
+                    title: parsed.title.map(|t| t.content),
+                    entry_count: parsed.entries.len(),
+                    error: None,
+                },
+                Err(e) => FeedValidation {
+                    ok: false,
+                    title: None,
+                    entry_count: 0,
+                    error: Some(format!("不是有效的 RSS/Atom：{e}")),
+                },
+            },
+            Err(e) => FeedValidation {
+                ok: false,
+                title: None,
+                entry_count: 0,
+                error: Some(e.to_string()),
+            },
+        },
+        Err(e) => FeedValidation {
+            ok: false,
+            title: None,
+            entry_count: 0,
+            error: Some(e.to_string()),
+        },
+    }
+}
+
 /// Split candidate URLs into new vs already-known. Returns (new_urls, skipped_count).
 pub fn partition_new_urls(candidates: &[String], known: &HashSet<String>) -> (Vec<String>, usize) {
     let mut new_urls = Vec::new();

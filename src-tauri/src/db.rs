@@ -127,14 +127,8 @@ pub fn open_db(path: PathBuf) -> Result<Connection, String> {
 }
 
 fn seed_feeds(conn: &Connection) -> Result<(), String> {
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM feed_sources", [], |r| r.get(0))
-        .map_err(|e| e.to_string())?;
-    if count > 0 {
-        return Ok(());
-    }
-    let seeds = curated_feeds();
-    for f in seeds {
+    // Always insert newly curated feeds; IGNORE keeps user enable/disable intact.
+    for f in curated_feeds() {
         conn.execute(
             "INSERT OR IGNORE INTO feed_sources (id, name, category, url, enabled) VALUES (?1,?2,?3,?4,1)",
             params![f.id, f.name, f.category, f.url],
@@ -144,57 +138,175 @@ fn seed_feeds(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+fn feed(id: &str, name: &str, category: &str, url: &str) -> FeedSource {
+    FeedSource {
+        id: id.into(),
+        name: name.into(),
+        category: category.into(),
+        url: url.into(),
+        enabled: true,
+    }
+}
+
+/// Curated free / full-text-friendly English RSS sources for learning.
 pub fn curated_feeds() -> Vec<FeedSource> {
     vec![
-        FeedSource {
-            id: "freecodecamp".into(),
-            name: "freeCodeCamp".into(),
-            category: "tech".into(),
-            url: "https://www.freecodecamp.org/news/rss/".into(),
-            enabled: true,
-        },
-        FeedSource {
-            id: "devto".into(),
-            name: "DEV Community".into(),
-            category: "tech".into(),
-            url: "https://dev.to/feed".into(),
-            enabled: true,
-        },
-        FeedSource {
-            id: "mit-news".into(),
-            name: "MIT News".into(),
-            category: "tech".into(),
-            url: "https://news.mit.edu/rss/feed".into(),
-            enabled: true,
-        },
-        FeedSource {
-            id: "conversation-us".into(),
-            name: "The Conversation US".into(),
-            category: "world".into(),
-            url: "https://theconversation.com/us/articles.atom".into(),
-            enabled: true,
-        },
-        FeedSource {
-            id: "nasa".into(),
-            name: "NASA Breaking News".into(),
-            category: "other".into(),
-            url: "https://www.nasa.gov/rss/dyn/breaking_news.rss".into(),
-            enabled: true,
-        },
-        FeedSource {
-            id: "quanta".into(),
-            name: "Quanta Magazine".into(),
-            category: "other".into(),
-            url: "https://www.quantamagazine.org/feed/".into(),
-            enabled: true,
-        },
-        FeedSource {
-            id: "brookings".into(),
-            name: "Brookings".into(),
-            category: "finance".into(),
-            url: "https://www.brookings.edu/feed/".into(),
-            enabled: true,
-        },
+        // tech
+        feed(
+            "freecodecamp",
+            "freeCodeCamp",
+            "tech",
+            "https://www.freecodecamp.org/news/rss/",
+        ),
+        feed("devto", "DEV Community", "tech", "https://dev.to/feed"),
+        feed(
+            "mit-news",
+            "MIT News",
+            "tech",
+            "https://news.mit.edu/rss/feed",
+        ),
+        feed(
+            "stackoverflow-blog",
+            "Stack Overflow Blog",
+            "tech",
+            "https://stackoverflow.blog/feed/",
+        ),
+        feed(
+            "smashing-magazine",
+            "Smashing Magazine",
+            "tech",
+            "https://www.smashingmagazine.com/feed/",
+        ),
+        feed(
+            "cloudflare-blog",
+            "Cloudflare Blog",
+            "tech",
+            "https://blog.cloudflare.com/rss/",
+        ),
+        feed(
+            "github-blog",
+            "GitHub Blog",
+            "tech",
+            "https://github.blog/feed/",
+        ),
+        feed(
+            "martin-fowler",
+            "Martin Fowler",
+            "tech",
+            "https://martinfowler.com/feed.atom",
+        ),
+        feed(
+            "mozilla-hacks",
+            "Mozilla Hacks",
+            "tech",
+            "https://hacks.mozilla.org/feed/",
+        ),
+        feed(
+            "rust-blog",
+            "Rust Blog",
+            "tech",
+            "https://blog.rust-lang.org/feed.xml",
+        ),
+        feed(
+            "go-blog",
+            "Go Blog",
+            "tech",
+            "https://go.dev/blog/feed.atom?format=atom",
+        ),
+        feed(
+            "webkit-blog",
+            "WebKit Blog",
+            "tech",
+            "https://webkit.org/feed/",
+        ),
+        feed(
+            "thenewstack",
+            "The New Stack",
+            "tech",
+            "https://thenewstack.io/feed/",
+        ),
+        feed(
+            "hackernoon",
+            "HackerNoon",
+            "tech",
+            "https://hackernoon.com/feed",
+        ),
+        feed(
+            "arstechnica",
+            "Ars Technica",
+            "tech",
+            "https://feeds.arstechnica.com/arstechnica/index",
+        ),
+        feed("infoq", "InfoQ", "tech", "https://feed.infoq.com/"),
+        // finance
+        feed(
+            "brookings",
+            "Brookings",
+            "finance",
+            "https://www.brookings.edu/feed/",
+        ),
+        feed(
+            "marginal-revolution",
+            "Marginal Revolution",
+            "finance",
+            "https://marginalrevolution.com/feed",
+        ),
+        feed(
+            "nber",
+            "NBER New Papers",
+            "finance",
+            "https://www.nber.org/rss/new.xml",
+        ),
+        // world
+        feed(
+            "conversation-us",
+            "The Conversation US",
+            "world",
+            "https://theconversation.com/us/articles.atom",
+        ),
+        feed(
+            "propublica",
+            "ProPublica",
+            "world",
+            "https://www.propublica.org/feeds/propublica/main",
+        ),
+        feed(
+            "who-news",
+            "WHO News",
+            "world",
+            "https://www.who.int/rss-feeds/news-english.xml",
+        ),
+        // other
+        feed(
+            "nasa",
+            "NASA Breaking News",
+            "other",
+            "https://www.nasa.gov/rss/dyn/breaking_news.rss",
+        ),
+        feed(
+            "quanta",
+            "Quanta Magazine",
+            "other",
+            "https://www.quantamagazine.org/feed/",
+        ),
+        feed(
+            "atlas-obscura",
+            "Atlas Obscura",
+            "other",
+            "https://www.atlasobscura.com/feeds/latest",
+        ),
+        feed(
+            "literary-hub",
+            "Literary Hub",
+            "other",
+            "https://lithub.com/feed/",
+        ),
+        feed(
+            "longreads",
+            "Longreads",
+            "other",
+            "https://longreads.com/feed/",
+        ),
     ]
 }
 
@@ -212,7 +324,7 @@ pub fn list_articles(
             params_vec.push(cat.to_string());
         }
     }
-    sql.push_str(" ORDER BY source ASC, fetched_at DESC, published_at DESC LIMIT 200");
+    sql.push_str(" ORDER BY source ASC, fetched_at DESC, published_at DESC LIMIT 400");
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = if params_vec.is_empty() {
@@ -253,35 +365,66 @@ pub fn get_article(conn: &Connection, id: &str) -> Result<Option<Article>, Strin
     .map_err(|e| e.to_string())
 }
 
+pub fn get_article_by_url(conn: &Connection, url: &str) -> Result<Option<Article>, String> {
+    conn.query_row(
+        "SELECT id,url,title,title_zh,source,category,published_at,content_text,fetched_at FROM articles WHERE url=?1",
+        params![url],
+        map_article,
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+pub fn list_article_urls(conn: &Connection) -> Result<std::collections::HashSet<String>, String> {
+    let mut stmt = conn
+        .prepare("SELECT url FROM articles")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<std::collections::HashSet<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+/// Insert only when `url` is new. Returns `true` if inserted, `false` if already present.
+/// Idempotent: never overwrites existing content / translations.
+pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, String> {
+    let changed = conn
+        .execute(
+            "INSERT INTO articles (id,url,title,title_zh,source,category,published_at,content_text,fetched_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+             ON CONFLICT(url) DO NOTHING",
+            params![
+                a.id,
+                a.url,
+                a.title,
+                a.title_zh,
+                a.source,
+                a.category,
+                a.published_at,
+                a.content_text,
+                a.fetched_at
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(changed > 0)
+}
+
 pub fn upsert_article(conn: &Connection, a: &Article) -> Result<(), String> {
+    // Legacy alias used by older tests; refresh path uses insert_article_if_new.
+    let _ = insert_article_if_new(conn, a)?;
+    Ok(())
+}
+
+pub fn delete_article(conn: &Connection, id: &str) -> Result<(), String> {
     conn.execute(
-        "INSERT INTO articles (id,url,title,title_zh,source,category,published_at,content_text,fetched_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
-         ON CONFLICT(url) DO UPDATE SET
-           title=excluded.title,
-           title_zh=CASE
-             WHEN articles.title = excluded.title AND IFNULL(articles.title_zh,'') != ''
-             THEN articles.title_zh
-             ELSE excluded.title_zh
-           END,
-           content_text=excluded.content_text,
-           fetched_at=excluded.fetched_at,
-           published_at=excluded.published_at,
-           source=excluded.source,
-           category=excluded.category",
-        params![
-            a.id,
-            a.url,
-            a.title,
-            a.title_zh,
-            a.source,
-            a.category,
-            a.published_at,
-            a.content_text,
-            a.fetched_at
-        ],
+        "DELETE FROM translations WHERE article_id=?1",
+        params![id],
     )
     .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM articles WHERE id=?1", params![id])
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 

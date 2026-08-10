@@ -43,6 +43,7 @@ a {
   display: grid;
   grid-template-columns: 200px 1fr;
   min-height: 100%;
+  position: relative;
 }
 
 .sidebar {
@@ -79,6 +80,10 @@ a {
 
 .main {
   min-width: 0;
+}
+
+.app-shell.refreshing .main {
+  padding-bottom: 64px;
 }
 
 .page {
@@ -486,6 +491,62 @@ a {
   background: rgba(255, 253, 249, 0.6);
 }
 
+.refresh-progress {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  padding: 12px 20px 14px;
+  background: rgba(255, 253, 249, 0.94);
+  border-top: 1px solid var(--line);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 -8px 24px rgba(28, 26, 23, 0.06);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.refresh-progress.done {
+  opacity: 0.85;
+}
+
+.refresh-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.refresh-progress-label {
+  font-size: 0.92rem;
+  color: var(--ink);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.refresh-progress-pct {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.refresh-progress-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #e8e1d6;
+  overflow: hidden;
+}
+
+.refresh-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #0f5c4c 0%, #1a7a66 100%);
+  transition: width 0.28s ease;
+}
+
 @media (max-width: 800px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -507,5 +568,8 @@ a {
   }
   .page {
     padding: 18px 16px 36px;
+  }
+  .refresh-progress {
+    padding: 10px 14px 12px;
   }
 }

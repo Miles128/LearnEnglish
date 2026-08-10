@@ -73,7 +73,9 @@ export type VocabItem = {
 export type RefreshResult = {
   fetched_feeds: number;
   added_or_updated: number;
+  skipped_existing: number;
   skipped_short: number;
+  skipped_non_english: number;
   titles_translated: number;
   errors: string[];
 };

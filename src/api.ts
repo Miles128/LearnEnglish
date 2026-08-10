@@ -11,7 +11,7 @@ function isTauri(): boolean {
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (!isTauri()) {
     throw new Error(
-      "当前不在 LearnEnglish 桌面窗口中。请关闭浏览器页，使用已打开的 LearnEnglish 窗口（或重新运行 pnpm tauri dev）。",
+      "当前不在拾言桌面窗口中。请关闭浏览器页，使用已打开的拾言窗口（或重新运行 pnpm tauri dev）。",
     );
   }
   return tauriInvoke<T>(cmd, args);
@@ -22,6 +22,10 @@ export type AppConfig = {
   api_key: string;
   model: string;
   disabled_feeds: string[];
+  /** User CEFR level (A1–C2). */
+  cefr_level: string;
+  /** Known vocab band: 1000 | 3000 | 5000 | 10000 | 20000 */
+  freq_band: number;
 };
 
 export type Article = {
@@ -91,6 +95,8 @@ export const api = {
     invoke<void>("set_feed_enabled", { id, enabled }),
   refreshFeeds: () => invoke<RefreshResult>("refresh_feeds"),
   translateMissingTitles: () => invoke<number>("translate_missing_titles"),
+  importArticleUrl: (url: string) =>
+    invoke<Article>("import_article_url", { url }),
   getParagraphs: (id: string) => invoke<string[]>("get_paragraphs", { id }),
   listParagraphTranslations: (articleId: string) =>
     invoke<TranslationRow[]>("list_paragraph_translations", {

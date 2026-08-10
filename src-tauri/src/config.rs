@@ -9,6 +9,21 @@ pub struct AppConfig {
     pub model: String,
     #[serde(default)]
     pub disabled_feeds: Vec<String>,
+    /// User CEFR level (A1–C2). Words above this are underlined when reading.
+    #[serde(default = "default_cefr_level")]
+    pub cefr_level: String,
+    /// Known vocabulary band (1000 / 3000 / 5000 / 10000 / 20000).
+    /// Words with frequency rank above this are underlined.
+    #[serde(default = "default_freq_band")]
+    pub freq_band: u32,
+}
+
+fn default_cefr_level() -> String {
+    "B1".into()
+}
+
+fn default_freq_band() -> u32 {
+    3000
 }
 
 impl Default for AppConfig {
@@ -18,6 +33,8 @@ impl Default for AppConfig {
             api_key: String::new(),
             model: "gpt-4o-mini".into(),
             disabled_feeds: vec![],
+            cefr_level: default_cefr_level(),
+            freq_band: default_freq_band(),
         }
     }
 }

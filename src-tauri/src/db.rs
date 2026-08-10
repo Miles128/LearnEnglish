@@ -127,13 +127,28 @@ pub fn open_db(path: PathBuf) -> Result<Connection, String> {
 }
 
 fn seed_feeds(conn: &Connection) -> Result<(), String> {
-    // Always insert newly curated feeds; IGNORE keeps user enable/disable intact.
-    for f in curated_feeds() {
+    let seeds = curated_feeds();
+    // Insert newly curated feeds; IGNORE keeps existing enable/disable.
+    for f in &seeds {
         conn.execute(
             "INSERT OR IGNORE INTO feed_sources (id, name, category, url, enabled) VALUES (?1,?2,?3,?4,1)",
             params![f.id, f.name, f.category, f.url],
         )
         .map_err(|e| e.to_string())?;
+        // Keep name/category/url in sync if we retarget a curated id.
+        conn.execute(
+            "UPDATE feed_sources SET name=?1, category=?2, url=?3 WHERE id=?4",
+            params![f.name, f.category, f.url, f.id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    // Drop obsolete curated sources (e.g. old programming blogs).
+    let keep: std::collections::HashSet<&str> = seeds.iter().map(|f| f.id.as_str()).collect();
+    for existing in list_feeds(conn)? {
+        if !keep.contains(existing.id.as_str()) {
+            conn.execute("DELETE FROM feed_sources WHERE id=?1", params![existing.id])
+                .map_err(|e| e.to_string())?;
+        }
     }
     Ok(())
 }
@@ -148,88 +163,28 @@ fn feed(id: &str, name: &str, category: &str, url: &str) -> FeedSource {
     }
 }
 
-/// Curated free / full-text-friendly English RSS sources for learning.
+/// Classic news + well-known blogs/newsletters + AI-oriented tech.
+/// Prefer free/full-text article feeds; no podcasts (show notes only).
 pub fn curated_feeds() -> Vec<FeedSource> {
     vec![
-        // tech
+        // tech — AI / general tech news & commentary
         feed(
-            "freecodecamp",
-            "freeCodeCamp",
+            "mit-technology-review",
+            "MIT Technology Review",
             "tech",
-            "https://www.freecodecamp.org/news/rss/",
-        ),
-        feed("devto", "DEV Community", "tech", "https://dev.to/feed"),
-        feed(
-            "mit-news",
-            "MIT News",
-            "tech",
-            "https://news.mit.edu/rss/feed",
+            "https://www.technologyreview.com/feed/",
         ),
         feed(
-            "stackoverflow-blog",
-            "Stack Overflow Blog",
+            "mit-tr-ai",
+            "MIT TR · Artificial Intelligence",
             "tech",
-            "https://stackoverflow.blog/feed/",
+            "https://www.technologyreview.com/topic/artificial-intelligence/feed",
         ),
         feed(
-            "smashing-magazine",
-            "Smashing Magazine",
+            "the-verge",
+            "The Verge",
             "tech",
-            "https://www.smashingmagazine.com/feed/",
-        ),
-        feed(
-            "cloudflare-blog",
-            "Cloudflare Blog",
-            "tech",
-            "https://blog.cloudflare.com/rss/",
-        ),
-        feed(
-            "github-blog",
-            "GitHub Blog",
-            "tech",
-            "https://github.blog/feed/",
-        ),
-        feed(
-            "martin-fowler",
-            "Martin Fowler",
-            "tech",
-            "https://martinfowler.com/feed.atom",
-        ),
-        feed(
-            "mozilla-hacks",
-            "Mozilla Hacks",
-            "tech",
-            "https://hacks.mozilla.org/feed/",
-        ),
-        feed(
-            "rust-blog",
-            "Rust Blog",
-            "tech",
-            "https://blog.rust-lang.org/feed.xml",
-        ),
-        feed(
-            "go-blog",
-            "Go Blog",
-            "tech",
-            "https://go.dev/blog/feed.atom?format=atom",
-        ),
-        feed(
-            "webkit-blog",
-            "WebKit Blog",
-            "tech",
-            "https://webkit.org/feed/",
-        ),
-        feed(
-            "thenewstack",
-            "The New Stack",
-            "tech",
-            "https://thenewstack.io/feed/",
-        ),
-        feed(
-            "hackernoon",
-            "HackerNoon",
-            "tech",
-            "https://hackernoon.com/feed",
+            "https://www.theverge.com/rss/index.xml",
         ),
         feed(
             "arstechnica",
@@ -237,32 +192,127 @@ pub fn curated_feeds() -> Vec<FeedSource> {
             "tech",
             "https://feeds.arstechnica.com/arstechnica/index",
         ),
-        feed("infoq", "InfoQ", "tech", "https://feed.infoq.com/"),
-        // finance
         feed(
-            "brookings",
-            "Brookings",
-            "finance",
-            "https://www.brookings.edu/feed/",
+            "conversation-ai",
+            "The Conversation · AI",
+            "tech",
+            "https://theconversation.com/us/topics/artificial-intelligence-ai-90/articles.atom",
         ),
         feed(
-            "marginal-revolution",
-            "Marginal Revolution",
-            "finance",
-            "https://marginalrevolution.com/feed",
+            "platformer",
+            "Platformer",
+            "tech",
+            "https://www.platformer.news/feed",
         ),
         feed(
-            "nber",
-            "NBER New Papers",
-            "finance",
-            "https://www.nber.org/rss/new.xml",
+            "last-week-in-ai",
+            "Last Week in AI",
+            "tech",
+            "https://lastweekin.ai/feed",
         ),
-        // world
+        feed(
+            "one-useful-thing",
+            "One Useful Thing",
+            "tech",
+            "https://www.oneusefulthing.org/feed",
+        ),
+        feed(
+            "benedict-evans",
+            "Benedict Evans",
+            "tech",
+            "https://www.ben-evans.com/benedictevans?format=rss",
+        ),
+        feed(
+            "stratechery",
+            "Stratechery",
+            "tech",
+            "https://stratechery.com/feed/",
+        ),
+        feed(
+            "daring-fireball",
+            "Daring Fireball",
+            "tech",
+            "https://daringfireball.net/feeds/main",
+        ),
+        // finance — business explainers & newsletters
+        feed(
+            "conversation-business",
+            "The Conversation · Business",
+            "finance",
+            "https://theconversation.com/us/business/articles.atom",
+        ),
+        feed(
+            "lennys-newsletter",
+            "Lenny's Newsletter",
+            "finance",
+            "https://www.lennysnewsletter.com/feed",
+        ),
+        feed(
+            "not-boring",
+            "Not Boring",
+            "finance",
+            "https://www.notboring.co/feed",
+        ),
+        // world — classic free / open newsrooms (RSS + page fetch for full text)
+        feed(
+            "guardian-world",
+            "The Guardian · World",
+            "world",
+            "https://www.theguardian.com/world/rss",
+        ),
+        feed(
+            "guardian-international",
+            "The Guardian · International",
+            "world",
+            "https://www.theguardian.com/international/rss",
+        ),
+        feed(
+            "bbc-world",
+            "BBC News · World",
+            "world",
+            "https://feeds.bbci.co.uk/news/world/rss.xml",
+        ),
+        feed(
+            "aljazeera",
+            "Al Jazeera English",
+            "world",
+            "https://www.aljazeera.com/xml/rss/all.xml",
+        ),
+        feed(
+            "dw-english",
+            "Deutsche Welle",
+            "world",
+            "https://rss.dw.com/rdf/rss-en-all",
+        ),
+        feed(
+            "npr-news",
+            "NPR News",
+            "world",
+            "https://feeds.npr.org/1001/rss.xml",
+        ),
+        feed(
+            "france24",
+            "France 24 English",
+            "world",
+            "https://www.france24.com/en/rss",
+        ),
+        feed(
+            "un-news",
+            "UN News",
+            "world",
+            "https://news.un.org/feed/subscribe/en/news/all/rss.xml",
+        ),
         feed(
             "conversation-us",
             "The Conversation US",
             "world",
             "https://theconversation.com/us/articles.atom",
+        ),
+        feed(
+            "conversation-world",
+            "The Conversation · World",
+            "world",
+            "https://theconversation.com/us/world/articles.atom",
         ),
         feed(
             "propublica",
@@ -276,12 +326,18 @@ pub fn curated_feeds() -> Vec<FeedSource> {
             "world",
             "https://www.who.int/rss-feeds/news-english.xml",
         ),
-        // other
+        // other — classic blogs, science / space
         feed(
             "nasa",
             "NASA Breaking News",
             "other",
             "https://www.nasa.gov/rss/dyn/breaking_news.rss",
+        ),
+        feed(
+            "space-com",
+            "Space.com",
+            "other",
+            "https://www.space.com/feeds/all",
         ),
         feed(
             "quanta",
@@ -290,22 +346,58 @@ pub fn curated_feeds() -> Vec<FeedSource> {
             "https://www.quantamagazine.org/feed/",
         ),
         feed(
-            "atlas-obscura",
-            "Atlas Obscura",
+            "conversation-science",
+            "The Conversation · Science",
             "other",
-            "https://www.atlasobscura.com/feeds/latest",
+            "https://theconversation.com/us/science/articles.atom",
         ),
         feed(
-            "literary-hub",
-            "Literary Hub",
+            "wait-but-why",
+            "Wait But Why",
             "other",
-            "https://lithub.com/feed/",
+            "https://waitbutwhy.com/feed",
         ),
         feed(
-            "longreads",
-            "Longreads",
+            "the-marginalian",
+            "The Marginalian",
             "other",
-            "https://longreads.com/feed/",
+            "https://www.themarginalian.org/feed/",
+        ),
+        feed(
+            "farnam-street",
+            "Farnam Street",
+            "other",
+            "https://fs.blog/feed/",
+        ),
+        feed(
+            "seth-godin",
+            "Seth's Blog",
+            "other",
+            "https://seths.blog/feed/",
+        ),
+        feed(
+            "james-clear",
+            "James Clear",
+            "other",
+            "https://jamesclear.com/feed",
+        ),
+        feed(
+            "cal-newport",
+            "Cal Newport",
+            "other",
+            "https://www.calnewport.com/blog/feed/",
+        ),
+        feed(
+            "ted-ideas",
+            "TED Ideas",
+            "other",
+            "https://ideas.ted.com/feed/",
+        ),
+        feed(
+            "open-culture",
+            "Open Culture",
+            "other",
+            "https://www.openculture.com/feed",
         ),
     ]
 }

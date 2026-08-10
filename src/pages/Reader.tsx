@@ -6,8 +6,10 @@ import {
   useState,
   type MouseEvent,
 } from "react";
+import Markdown from "react-markdown";
 import { Link, useParams } from "react-router-dom";
 import { api, Article, TranslationRow } from "../api";
+import { shouldRenderMarkdown } from "../markdown";
 
 type Popover = {
   x: number;
@@ -66,6 +68,12 @@ export default function Reader() {
   }, []);
 
   const title = useMemo(() => article?.title ?? "阅读", [article]);
+
+  const asMarkdown = useMemo(() => {
+    if (!article) return false;
+    const body = paragraphs.length > 0 ? paragraphs.join("\n\n") : article.content_text;
+    return shouldRenderMarkdown(article.url, body);
+  }, [article, paragraphs]);
 
   async function toggleFullTranslation() {
     if (!id) return;
@@ -214,7 +222,23 @@ export default function Reader() {
               </button>
             </div>
             <div className="para-content">
-              <p>{p}</p>
+              {asMarkdown ? (
+                <div className="md-preview">
+                  <Markdown
+                    components={{
+                      a: ({ href, children }) => (
+                        <a href={href} target="_blank" rel="noreferrer">
+                          {children}
+                        </a>
+                      ),
+                    }}
+                  >
+                    {p}
+                  </Markdown>
+                </div>
+              ) : (
+                <p>{p}</p>
+              )}
               {(showFullZh || visibleParas[i]) && translations[String(i)] && (
                 <p className="zh">{translations[String(i)]}</p>
               )}

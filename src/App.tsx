@@ -41,7 +41,10 @@ export default function App() {
   return (
     <div className={`app-shell${progress ? " refreshing" : ""}`}>
       <aside className="sidebar">
-        <div className="brand">LearnEnglish</div>
+        <div className="brand">
+          拾言
+          <span className="brand-en">Shiyan</span>
+        </div>
         <nav>
           <NavLink to="/" end>
             今日阅读

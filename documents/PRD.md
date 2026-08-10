@@ -1,72 +1,114 @@
-# LearnEnglish — Product Requirements Document
+# 拾言（Shiyan）— Product Requirements Document
 
 ## 1. Overview
 
 | Field | Value |
 |-------|-------|
-| Product | LearnEnglish |
-| Platform (MVP) | macOS desktop (Tauri) |
-| Type | Local-first learning app |
-| Primary user | Self — learning English via real articles |
+| 产品名（对内） | 拾言 |
+| 产品名（对外 / 包名） | Shiyan |
+| 工程仓库 | LearnEnglish（过渡名，可后续改名） |
+| 平台（当前） | macOS 桌面（Tauri 2） |
+| 类型 | 本地优先英语学习 App |
+| 主要用户 | 本人：用真实英文新闻学词汇与阅读 |
 
-**One-liner:** Read free English articles on Mac, translate on demand, and review saved vocabulary until mastered.
+**一句话：** 自动收录经典英文新闻全文，干净阅读；按需翻译；把生词捡进词库并复习到掌握。
+
+**定位对照：** 比 LingQ 更轻、本地免费、不啰嗦；不做全媒介 immersion 平台。
 
 ## 2. Problem
 
-Learners need authentic English (tech/finance/world/blogs) with frictionless lookup and a lightweight vocab loop — without paywalled news or always-on translation clutter.
+- LingQ 等产品收费烦、界面重，学习路径被功能淹没。
+- 需要**自动找到**可免费阅读的经典新闻，并落到本地全文。
+- 需要点词翻译与生词复习，但翻译默认不要抢戏。
 
 ## 3. Goals
 
-1. Aggregate **free full-text** English articles from curated RSS sources; support refresh.
-2. Show full article text in a clean reader.
-3. Provide on-demand translation (full / paragraph / selection); **hidden by default**.
-4. Save rare words/phrases/usages to a vocab bank with type and collocations.
-5. Vocab overview + spaced review; auto-remove (mastered) when review criteria met.
+1. **自动收录**：精选经典新闻站（RSS 发现 + 摘要不足时抓公开文章页正文）。
+2. **干净阅读**：按来源分板块；英文正文为主；标题可带中文译名。
+3. **按需翻译**：全文 / 段落 / 划词；默认隐藏；段落按钮悬停才出现。
+4. **生词闭环**：划词入库（释义、词性/类型、搭配、出处句）；总览 / 复习 / 已掌握自动移出。
+5. **难度标注**：设置 CEFR + 词频双阈值；超出任一标准的词/短语正文下划线；点击看释义并可加入生词库。
+6. **正文高亮**：阅读页高亮「学习中」生词；点击可查看释义 / 搭配。
+7. **认识度**：列表与阅读页显示「约认识 N%」（未在生词库中的词视为可读）。
+8. **链接导入**：粘贴公开文章 URL → Readability 抽正文入库（不做付费墙）。
+9. **本地可控**：SQLite + `config.local.json` 自配 LLM 与难度；无账号。
 
-## 4. Non-goals (MVP)
+## 4. Non-goals（当前阶段硬约束）
 
-- Accounts / multi-device sync
-- Paywall bypass or paid sources
-- TTS / speaking assessment
-- Windows / iOS shipping
-- Auto-translate entire articles on open
+- YouTube / 播客 / 视频字幕导入
+- 账号、云同步、社区
+- 付费墙破解、盗链受保护流媒体
+- 大规模无节制全网爬虫
+- Windows / iOS 发布（架构可预留）
+- 打开文章自动全文预翻译
+- 与 LingQ 功能对标竞赛
 
-## 5. User flows
+## 5. 用户流程
 
-### 5.1 Refresh & read
+### 5.1 刷新与阅读
 
-User opens Home → taps Refresh → sees categorized list → opens article → reads English full text offline from cache.
+打开「今日阅读」→ 点刷新 → 进度条显示下载/译标题 → 按 RSS 源分板块浏览 → 点进全文阅读（可离线看已缓存）。也可粘贴公开文章链接导入。
 
-### 5.2 Translate
+### 5.2 翻译与难词
 
-- Toggle full-article translation (paragraph-wise LLM + cache).
-- Hover paragraph gutter → show translate control → show/hide that paragraph’s Chinese.
-- Select word/phrase → popover translate → optional Add to vocab.
+- 全文翻译开关（按段请求并缓存）
+- 段旁悬停显示「译」
+- 设置中的 CEFR + 词频双阈值：超出任一标准的词/词表短语自动下划线
+- 点击下划线词 → 优先词表释义，否则 LLM → 可加入生词库
+- 划词浮层翻译 → 可加入生词库（表外短语）
 
-### 5.3 Vocab & review
+### 5.3 生词
 
-Add from selection (LLM fills definition, word_type, collocations). Overview lists learning items. Review mode: front (term + context), back (zh + type + collocations); rate 不认识 / 模糊 / 认识. Auto-master when consecutive_know ≥ 3 and interval at 14-day step; archive restorable.
+加入时 LLM 补全释义 / 类型 / 搭配（若已有词表释义则作初值）。总览可搜。复习三档：不认识 / 模糊 / 认识。连续 3 次「认识」且间隔到 14 天档 → 已掌握（可恢复）。
 
-## 6. Settings
+## 6. 内容策略
 
-`config.local.json` (gitignored): `base_url`, `api_key`, `model`, optional feed overrides. Example file committed without secrets.
+| 原则 | 说明 |
+|------|------|
+| 免费可读 | 只收录可合法免费阅读的源 |
+| 经典新闻优先 | Guardian、BBC World、Al Jazeera、DW、NPR、France 24、UN 等 |
+| RSS + 页抓 | RSS 摘要不够则抓公开 HTML 抽正文；疑似付费墙跳过 |
+| 英文 only | 过滤明显非英文条目 |
+| 难度词表 | 内置 CEFR-J + 词频（约 20k）+ 常用短语；本地标注 |
 
-## 7. Tech constraints
+## 7. 设置
+
+`config.local.json`（gitignore）：`base_url` / `api_key` / `model` / `cefr_level` / `freq_band`。示例见 `config.local.json.example`。
+
+默认难度：CEFR **B1** + 词频 **3k**。
+
+## 8. 技术约束
 
 - Tauri 2 + React + TypeScript + Vite + SQLite
-- OpenAI-compatible `chat/completions`
-- Secrets only in local config file
+- OpenAI 兼容 `chat/completions`
+- 密钥仅存本地配置文件
 
-## 8. Acceptance criteria
+## 9. 信息架构
 
-- [ ] App launches on Mac via `tauri dev`
-- [ ] Refresh loads free full-text articles into list
-- [ ] Reader shows full English; translations default off
-- [ ] Paragraph controls hidden until hover
-- [ ] Selection translate + add vocab with type/collocations
-- [ ] Vocab overview, review, auto/manual mastered
-- [ ] Settings persist to `config.local.json`
+1. 今日阅读（主页）
+2. 阅读页
+3. 生词库（学习中 / 复习 / 已掌握）
+4. 设置
 
-## 9. Success metrics (personal)
+## 10. 验收标准
 
-Daily: can refresh, finish ≥1 article with lookups, clear due reviews without UI friction.
+- [ ] `pnpm tauri dev` 可在 Mac 打开「拾言」窗口
+- [ ] 刷新能从经典新闻源拉到全文（国际分类可见多源板块）
+- [ ] 阅读页默认无译文；悬停段译、划词译可用
+- [ ] 超出难度的词有下划线；点击可看释义并加入生词库
+- [ ] 生词可加、可复习、可掌握归档
+- [ ] 学习中的生词在正文中有高亮，点击可查看释义
+- [ ] 列表/阅读页显示「约认识 N%」
+- [ ] 可粘贴公开 URL 导入全文（付费墙跳过）
+- [ ] 设置可改 CEFR / 词频并写入 `config.local.json`
+- [ ] `pnpm test` 与 `cargo test` 通过
+
+## 11. 成功标准（个人）
+
+连续一周愿意用本 App 读新闻，而不是打开 LingQ；刷新不烦、界面不吵。
+
+## 12. 后续（明确延后）
+
+- 拾言·播客 / 拾言·视听（用户粘贴链接导入文稿）
+- 浏览器剪藏扩展
+- 仓库 / bundle id 正式改为 `shiyan`

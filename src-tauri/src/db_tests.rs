@@ -8,7 +8,27 @@ fn db_seeds_feeds_and_stores_article() {
     let path = temp_dir().join(format!("le-test-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");
     let feeds = db::list_feeds(&conn).expect("feeds");
-    assert!(feeds.len() >= 20, "expected expanded curated feeds, got {}", feeds.len());
+    assert!(
+        feeds.len() >= 20,
+        "expected curated news/blog feeds, got {}",
+        feeds.len()
+    );
+    assert!(
+        feeds.iter().any(|f| f.id == "mit-tr-ai"),
+        "expected AI-focused tech feed"
+    );
+    assert!(
+        feeds.iter().any(|f| f.id == "wait-but-why"),
+        "expected classic blog feed"
+    );
+    assert!(
+        !feeds.iter().any(|f| f.name.contains("Podcast") || f.id == "planet-money"),
+        "podcasts should not be curated"
+    );
+    assert!(
+        !feeds.iter().any(|f| f.id == "freecodecamp" || f.id == "rust-blog"),
+        "programming blogs should be removed"
+    );
 
     let article = db::Article {
         id: Uuid::new_v4().to_string(),
@@ -33,7 +53,7 @@ fn seed_feeds_adds_new_curated_sources() {
     let conn = db::open_db(path.clone()).expect("open");
     let before = db::list_feeds(&conn).unwrap().len();
     // Simulate older DB missing a curated feed; re-open triggers seed INSERT OR IGNORE.
-    conn.execute("DELETE FROM feed_sources WHERE id='longreads'", [])
+    conn.execute("DELETE FROM feed_sources WHERE id='propublica'", [])
         .unwrap();
     let mid = db::list_feeds(&conn).unwrap().len();
     assert_eq!(mid, before - 1);
@@ -44,7 +64,32 @@ fn seed_feeds_adds_new_curated_sources() {
     assert!(db::list_feeds(&conn)
         .unwrap()
         .iter()
-        .any(|f| f.id == "longreads"));
+        .any(|f| f.id == "propublica"));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn seed_feeds_removes_obsolete_sources() {
+    let path = temp_dir().join(format!("le-test-obsolete-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    conn.execute(
+        "INSERT INTO feed_sources (id, name, category, url, enabled) VALUES ('rust-blog','Rust Blog','tech','https://example.com/rust',1)",
+        [],
+    )
+    .unwrap();
+    assert!(db::list_feeds(&conn)
+        .unwrap()
+        .iter()
+        .any(|f| f.id == "rust-blog"));
+    drop(conn);
+    let conn = db::open_db(path.clone()).expect("reopen");
+    assert!(
+        !db::list_feeds(&conn)
+            .unwrap()
+            .iter()
+            .any(|f| f.id == "rust-blog"),
+        "obsolete feeds should be deleted on open"
+    );
     let _ = std::fs::remove_file(path);
 }
 

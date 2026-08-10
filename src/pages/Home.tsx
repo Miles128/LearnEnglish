@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { api, Article, RefreshResult } from "../api";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { api, Article, RefreshResult, VocabItem } from "../api";
+import { estimateKnownPercent, formatKnownPercent } from "../knownPercent";
 
 const CATEGORIES = [
   { id: "all", label: "全部" },
@@ -17,10 +18,14 @@ type SourceSection = {
 };
 
 export default function Home() {
+  const navigate = useNavigate();
   const [category, setCategory] = useState("all");
   const [articles, setArticles] = useState<Article[]>([]);
+  const [learningTerms, setLearningTerms] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [importUrl, setImportUrl] = useState("");
+  const [importing, setImporting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,8 +33,12 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
-      const list = await api.listArticles(category === "all" ? undefined : category);
+      const [list, learning] = await Promise.all([
+        api.listArticles(category === "all" ? undefined : category),
+        api.listVocab("learning").catch(() => [] as VocabItem[]),
+      ]);
       setArticles(list);
+      setLearningTerms(learning.map((v) => v.term));
       const missing = list.some((a) => !a.title_zh);
       if (missing) {
         try {
@@ -41,7 +50,7 @@ export default function Home() {
             setArticles(refreshed);
           }
         } catch {
-          // LLM 未配置时忽略，英文标题仍可显示
+          // LLM 未配置时忽略
         }
       }
     } catch (e) {
@@ -61,18 +70,14 @@ export default function Home() {
     setRefreshing(true);
     setMessage(null);
     setError(null);
-    // Yield so React can paint「刷新中」before the long IPC call.
     await new Promise<void>((r) => requestAnimationFrame(() => r()));
     try {
       const result: RefreshResult = await api.refreshFeeds();
       setMessage(
-        `刷新完成：新增 ${result.added_or_updated} 篇` +
-          (result.skipped_existing ? `，跳过已有 ${result.skipped_existing}` : "") +
-          `，标题翻译 ${result.titles_translated}，跳过短文 ${result.skipped_short}` +
-          (result.skipped_non_english
-            ? `，跳过非英文 ${result.skipped_non_english}`
-            : "") +
-          (result.errors.length ? `；${result.errors.length} 个问题` : ""),
+        `新增 ${result.added_or_updated}` +
+          (result.skipped_existing ? ` · 已有 ${result.skipped_existing}` : "") +
+          (result.titles_translated ? ` · 译题 ${result.titles_translated}` : "") +
+          (result.errors.length ? ` · ${result.errors.length} 个问题` : ""),
       );
       await load();
     } catch (e) {
@@ -82,17 +87,49 @@ export default function Home() {
     }
   }
 
+  async function onImport(e: FormEvent) {
+    e.preventDefault();
+    const url = importUrl.trim();
+    if (!url) return;
+    setImporting(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const article = await api.importArticleUrl(url);
+      setImportUrl("");
+      setMessage(`已导入：${article.title}`);
+      navigate(`/article/${article.id}`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setImporting(false);
+    }
+  }
+
   return (
     <div className="page">
       <header className="page-header">
         <div>
           <h1>今日阅读</h1>
-          <p className="muted">按 RSS 源分板块 · 标题含中文翻译</p>
         </div>
         <button className="btn primary" onClick={onRefresh} disabled={refreshing}>
           {refreshing ? "刷新中…" : "刷新"}
         </button>
       </header>
+
+      <form className="import-row" onSubmit={(e) => void onImport(e)}>
+        <input
+          className="import-input"
+          type="url"
+          placeholder="粘贴公开文章链接导入…"
+          value={importUrl}
+          onChange={(e) => setImportUrl(e.target.value)}
+          disabled={importing}
+        />
+        <button className="btn" type="submit" disabled={importing || !importUrl.trim()}>
+          {importing ? "导入中…" : "导入"}
+        </button>
+      </form>
 
       <div className="tabs">
         {CATEGORIES.map((c) => (
@@ -112,10 +149,7 @@ export default function Home() {
 
       {!loading && articles.length === 0 && !error && (
         <div className="empty">
-          <p>还没有文章。点击「刷新」从免费 RSS 源拉取全文。</p>
-          <p className="muted" style={{ marginTop: 8 }}>
-            请在 LearnEnglish 桌面窗口中操作，不要用浏览器打开 localhost:1420。
-          </p>
+          <p>还没有文章。点「刷新」或粘贴链接导入。</p>
         </div>
       )}
 
@@ -128,19 +162,26 @@ export default function Home() {
               <span className="muted">{sec.articles.length} 篇</span>
             </header>
             <ul className="article-list">
-              {sec.articles.map((a) => (
-                <li key={a.id}>
-                  <Link to={`/article/${a.id}`} className="article-row">
-                    <h3 className="article-title-en">{a.title}</h3>
-                    {a.title_zh ? (
-                      <p className="article-title-zh">{a.title_zh}</p>
-                    ) : (
-                      <p className="article-title-zh muted">中文标题待翻译…</p>
-                    )}
-                    <p className="snippet">{a.content_text.slice(0, 140)}…</p>
-                  </Link>
-                </li>
-              ))}
+              {sec.articles.map((a) => {
+                const pct = estimateKnownPercent(a.content_text, learningTerms);
+                const pctLabel = formatKnownPercent(pct);
+                return (
+                  <li key={a.id}>
+                    <Link to={`/article/${a.id}`} className="article-row">
+                      {pctLabel && (
+                        <div className="article-row-meta">
+                          <span className="known-pct">{pctLabel}</span>
+                        </div>
+                      )}
+                      <h3 className="article-title-en">{a.title}</h3>
+                      {a.title_zh ? (
+                        <p className="article-title-zh">{a.title_zh}</p>
+                      ) : null}
+                      <p className="snippet">{a.content_text.slice(0, 140)}…</p>
+                    </Link>
+                  </li>
+                );
+              })}
             </ul>
           </section>
         ))}
@@ -152,20 +193,23 @@ export default function Home() {
 function groupBySource(articles: Article[]): SourceSection[] {
   const map = new Map<string, SourceSection>();
   for (const a of articles) {
-    const existing = map.get(a.source);
-    if (existing) {
-      existing.articles.push(a);
-    } else {
-      map.set(a.source, {
-        source: a.source,
-        category: a.category,
-        articles: [a],
-      });
+    const key = a.source || "其他";
+    let sec = map.get(key);
+    if (!sec) {
+      sec = { source: key, category: a.category, articles: [] };
+      map.set(key, sec);
     }
+    sec.articles.push(a);
   }
   return Array.from(map.values());
 }
 
 function labelCategory(c: string) {
-  return CATEGORIES.find((x) => x.id === c)?.label ?? c;
+  const map: Record<string, string> = {
+    tech: "科技",
+    finance: "财经",
+    world: "国际",
+    other: "其他",
+  };
+  return map[c] ?? c;
 }

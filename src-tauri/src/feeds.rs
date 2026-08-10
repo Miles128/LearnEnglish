@@ -263,6 +263,9 @@ fn download_feed_articles(
     };
     let now = Utc::now().to_rfc3339();
 
+    let mut page_fetches = 0usize;
+    const MAX_PAGE_FETCHES: usize = 12;
+
     for entry in parsed.entries.into_iter().take(40) {
         let url = entry
             .links
@@ -295,8 +298,26 @@ fn download_feed_articles(
             .or_else(|| entry.summary.map(|s| s.content))
             .unwrap_or_default();
 
-        let content_text = html_to_text(&raw_html);
+        let mut content_text = html_to_text(&raw_html);
+        // Classic news RSS is often only a teaser — fetch the article page.
         if content_text.chars().count() < MIN_FULLTEXT_CHARS {
+            if page_fetches >= MAX_PAGE_FETCHES {
+                stats.skipped_short += 1;
+                continue;
+            }
+            page_fetches += 1;
+            match fetch_article_page(client, &url) {
+                Ok(page_text) if page_text.chars().count() >= MIN_FULLTEXT_CHARS => {
+                    content_text = page_text;
+                }
+                _ => {
+                    stats.skipped_short += 1;
+                    continue;
+                }
+            }
+        }
+
+        if looks_like_paywall(&content_text) {
             stats.skipped_short += 1;
             continue;
         }
@@ -403,6 +424,176 @@ fn html_to_text(html: &str) -> String {
     s.trim().to_string()
 }
 
+fn title_from_html(html: &str) -> Option<String> {
+    let re = Regex::new(r"(?is)<title[^>]*>(.*?)</title>").ok()?;
+    let caps = re.captures(html)?;
+    let raw = caps.get(1)?.as_str();
+    let decoded = html_to_text(raw);
+    let mut title = decoded.lines().next().unwrap_or("").trim().to_string();
+    for sep in [" | ", " — ", " – ", " - "] {
+        if let Some((left, _)) = title.split_once(sep) {
+            let left = left.trim();
+            if left.chars().count() >= 8 {
+                title = left.to_string();
+                break;
+            }
+        }
+    }
+    if title.is_empty() {
+        None
+    } else {
+        Some(title)
+    }
+}
+
+pub fn source_from_url(url: &str) -> String {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.trim_start_matches("www.").to_string()))
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "导入".into())
+}
+
+struct ExtractedPage {
+    title: String,
+    text: String,
+}
+
+/// Fetch a public article URL and extract title + main text (no paywall bypass).
+fn extract_article_page(client: &Client, url: &str) -> Result<ExtractedPage, String> {
+    let parsed = url::Url::parse(url).map_err(|e| e.to_string())?;
+    let html = client
+        .get(url)
+        .header(
+            "Accept",
+            "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        )
+        .send()
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .text()
+        .map_err(|e| e.to_string())?;
+
+    if looks_like_paywall(&html) {
+        return Err("疑似付费墙，已跳过".into());
+    }
+
+    let mut title = title_from_html(&html).unwrap_or_default();
+
+    // Prefer readability extraction; fall back to html2text.
+    let from_readability = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut cursor = std::io::Cursor::new(html.as_bytes());
+        readability::extractor::extract(&mut cursor, &parsed).ok().map(|p| {
+            let text = p.text.trim().to_string();
+            let text = if text.is_empty() {
+                html_to_text(&p.content)
+            } else {
+                text
+            };
+            let page_title = p.title.trim().to_string();
+            (page_title, text)
+        })
+    }))
+    .ok()
+    .flatten();
+
+    let text = if let Some((page_title, text)) = from_readability {
+        if title.is_empty() && !page_title.is_empty() {
+            title = page_title;
+        }
+        if text.chars().count() >= MIN_FULLTEXT_CHARS {
+            text
+        } else {
+            html_to_text(&html)
+        }
+    } else {
+        html_to_text(&html)
+    };
+
+    if text.chars().count() < MIN_FULLTEXT_CHARS {
+        return Err("正文太短，未能抽到可读全文".into());
+    }
+
+    if title.is_empty() {
+        title = "Untitled".into();
+    }
+
+    Ok(ExtractedPage { title, text })
+}
+
+/// Fetch a public article URL and extract main text (no paywall bypass).
+fn fetch_article_page(client: &Client, url: &str) -> Result<String, String> {
+    Ok(extract_article_page(client, url)?.text)
+}
+
+/// Import one public article URL into the local library.
+pub fn import_article_from_url(db: &Mutex<Connection>, url: &str) -> Result<Article, String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("请输入文章链接".into());
+    }
+    let parsed = url::Url::parse(url).map_err(|_| "链接格式不正确".to_string())?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("仅支持 http/https 链接".into());
+    }
+
+    {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        if let Some(existing) = db::get_article_by_url(&conn, url)? {
+            return Ok(existing);
+        }
+    }
+
+    let client = Client::builder()
+        .user_agent("Shiyan/0.1 (+local; educational)")
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let extracted = extract_article_page(&client, url)?;
+    if looks_like_paywall(&extracted.text) {
+        return Err("疑似付费墙，已跳过".into());
+    }
+    if !is_english_article(None, &extracted.title, &extracted.text) {
+        return Err("看起来不是英文文章".into());
+    }
+
+    let article = Article {
+        id: Uuid::new_v4().to_string(),
+        url: url.to_string(),
+        title: extracted.title,
+        title_zh: String::new(),
+        source: source_from_url(url),
+        category: "other".into(),
+        published_at: None,
+        content_text: extracted.text,
+        fetched_at: Utc::now().to_rfc3339(),
+    };
+
+    let conn = db.lock().map_err(|e| e.to_string())?;
+    let inserted = db::insert_article_if_new(&conn, &article)?;
+    if inserted {
+        return Ok(article);
+    }
+    db::get_article_by_url(&conn, url)?
+        .ok_or_else(|| "导入失败：文章未写入".into())
+}
+
+fn looks_like_paywall(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    const MARKERS: &[&str] = &[
+        "subscribe to continue",
+        "subscription required",
+        "create a free account to read",
+        "sign in to read",
+        "already a subscriber",
+        "metered paywall",
+        "for subscribers only",
+    ];
+    MARKERS.iter().any(|m| lower.contains(m))
+}
+
 pub fn split_paragraphs(text: &str) -> Vec<String> {
     text.split("\n\n")
         .map(|p| p.trim().to_string())
@@ -448,5 +639,20 @@ mod tests {
             partition_new_urls(&["https://a".into(), "https://b".into()], &known);
         assert_eq!(skipped, 1);
         assert_eq!(new_urls, vec!["https://b".to_string()]);
+    }
+
+    #[test]
+    fn source_strips_www() {
+        assert_eq!(
+            source_from_url("https://www.theguardian.com/world/example"),
+            "theguardian.com"
+        );
+        assert_eq!(source_from_url("not-a-url"), "导入");
+    }
+
+    #[test]
+    fn title_parses_html_title() {
+        let html = "<html><head><title>  Hello World  | Site </title></head></html>";
+        assert_eq!(title_from_html(html).as_deref(), Some("Hello World"));
     }
 }

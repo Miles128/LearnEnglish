@@ -99,6 +99,19 @@ async fn translate_missing_titles(app: AppHandle) -> Result<usize, String> {
 }
 
 #[tauri::command]
+async fn import_article_url(app: AppHandle, url: String) -> Result<Article, String> {
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle
+            .try_state::<DbState>()
+            .ok_or_else(|| "数据库未就绪".to_string())?;
+        feeds::import_article_from_url(&state.0, &url)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 fn get_paragraphs(state: tauri::State<'_, DbState>, id: String) -> Result<Vec<String>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
     let article = db::get_article(&conn, &id)?.ok_or_else(|| "article not found".to_string())?;
@@ -330,6 +343,7 @@ pub fn run() {
             set_feed_enabled,
             refresh_feeds,
             translate_missing_titles,
+            import_article_url,
             get_paragraphs,
             list_paragraph_translations,
             translate_paragraph,

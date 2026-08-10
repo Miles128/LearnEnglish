@@ -1,13 +1,25 @@
 import { useEffect, useState } from "react";
 import { api, AppConfig, FeedSource } from "../api";
+import {
+  CEFR_LEVELS,
+  FREQ_BANDS,
+  isCefrLevel,
+  isFreqBand,
+  type CefrLevel,
+  type FreqBand,
+} from "../wordLevels";
+
+const defaultCfg = (): AppConfig => ({
+  base_url: "https://api.openai.com/v1",
+  api_key: "",
+  model: "gpt-4o-mini",
+  disabled_feeds: [],
+  cefr_level: "B1",
+  freq_band: 3000,
+});
 
 export default function Settings() {
-  const [cfg, setCfg] = useState<AppConfig>({
-    base_url: "https://api.openai.com/v1",
-    api_key: "",
-    model: "gpt-4o-mini",
-    disabled_feeds: [],
-  });
+  const [cfg, setCfg] = useState<AppConfig>(defaultCfg);
   const [feeds, setFeeds] = useState<FeedSource[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -15,7 +27,13 @@ export default function Settings() {
   useEffect(() => {
     void (async () => {
       try {
-        setCfg(await api.getConfig());
+        const loaded = await api.getConfig();
+        setCfg({
+          ...defaultCfg(),
+          ...loaded,
+          cefr_level: isCefrLevel(loaded.cefr_level) ? loaded.cefr_level : "B1",
+          freq_band: isFreqBand(loaded.freq_band) ? loaded.freq_band : 3000,
+        });
         setFeeds(await api.listFeeds());
       } catch (e) {
         setError(String(e));
@@ -44,7 +62,7 @@ export default function Settings() {
       <header className="page-header">
         <div>
           <h1>设置</h1>
-          <p className="muted">LLM 与 RSS 源（密钥写入本地 config.local.json）</p>
+          <p className="muted">难度、LLM 与 RSS 源（写入本地 config.local.json）</p>
         </div>
         <button className="btn primary" onClick={() => void save()}>
           保存
@@ -53,6 +71,46 @@ export default function Settings() {
 
       {msg && <p className="banner ok">{msg}</p>}
       {error && <p className="banner err">{error}</p>}
+
+      <section className="settings-section">
+        <h2>阅读难度</h2>
+        <p className="muted">
+          正文会给「超出 CEFR」或「超出词频上限」的词/短语加下划线。两套阈值同时生效。
+        </p>
+        <label>
+          我的 CEFR 水平
+          <select
+            value={cfg.cefr_level}
+            onChange={(e) =>
+              setCfg({ ...cfg, cefr_level: e.target.value as CefrLevel })
+            }
+          >
+            {CEFR_LEVELS.map((lv) => (
+              <option key={lv} value={lv}>
+                {lv}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          词频上限（大约认识多少词）
+          <select
+            value={cfg.freq_band}
+            onChange={(e) =>
+              setCfg({
+                ...cfg,
+                freq_band: Number(e.target.value) as FreqBand,
+              })
+            }
+          >
+            {FREQ_BANDS.map((n) => (
+              <option key={n} value={n}>
+                {n >= 1000 ? `${n / 1000}k` : n}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
 
       <section className="settings-section">
         <h2>大模型（OpenAI 兼容）</h2>

@@ -22,6 +22,10 @@ export type AppConfig = {
   api_key: string;
   model: string;
   disabled_feeds: string[];
+  /** User CEFR level (A1–C2). */
+  cefr_level: string;
+  /** Known vocab band: 1000 | 3000 | 5000 | 10000 | 20000 */
+  freq_band: number;
 };
 
 export type Article = {

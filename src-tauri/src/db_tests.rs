@@ -9,7 +9,7 @@ fn db_seeds_feeds_and_stores_article() {
     let conn = db::open_db(path.clone()).expect("open");
     let feeds = db::list_feeds(&conn).expect("feeds");
     assert!(
-        feeds.len() >= 20,
+        feeds.len() >= 80,
         "expected curated news/blog feeds, got {}",
         feeds.len()
     );
@@ -18,8 +18,8 @@ fn db_seeds_feeds_and_stores_article() {
         "expected AI-focused tech feed"
     );
     assert!(
-        feeds.iter().any(|f| f.id == "wait-but-why"),
-        "expected classic blog feed"
+        feeds.iter().any(|f| f.id == "vox" || f.id == "the-atlantic"),
+        "expected classic explainer/magazine feed"
     );
     assert!(
         !feeds.iter().any(|f| f.name.contains("Podcast") || f.id == "planet-money"),
@@ -73,7 +73,7 @@ fn seed_feeds_removes_obsolete_sources() {
     let path = temp_dir().join(format!("le-test-obsolete-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");
     conn.execute(
-        "INSERT INTO feed_sources (id, name, category, url, enabled) VALUES ('rust-blog','Rust Blog','tech','https://example.com/rust',1)",
+        "INSERT INTO feed_sources (id, name, category, url, enabled, origin, description) VALUES ('rust-blog','Rust Blog','tech','https://example.com/rust',1,'curated','')",
         [],
     )
     .unwrap();
@@ -88,8 +88,36 @@ fn seed_feeds_removes_obsolete_sources() {
             .unwrap()
             .iter()
             .any(|f| f.id == "rust-blog"),
-        "obsolete feeds should be deleted on open"
+        "obsolete curated feeds should be deleted on open"
     );
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn seed_feeds_preserves_user_subscriptions() {
+    let path = temp_dir().join(format!("le-test-user-feed-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    let feed = db::subscribe_feed(
+        &conn,
+        "My Climate Blog",
+        "tech",
+        "https://example.com/climate/rss.xml",
+        "user pick",
+    )
+    .unwrap();
+    assert_eq!(feed.origin, "user");
+    drop(conn);
+    let conn = db::open_db(path.clone()).expect("reopen");
+    let feeds = db::list_feeds(&conn).unwrap();
+    assert!(
+        feeds.iter().any(|f| f.id == feed.id && f.origin == "user"),
+        "user subscriptions must survive curated seed"
+    );
+    let cats = db::list_feed_categories(&conn).unwrap();
+    assert!(cats.iter().any(|c| c.id == "tech" && c.builtin));
+    let custom = db::add_feed_category(&conn, "气候").unwrap();
+    assert!(!custom.builtin);
+    assert!(!custom.id.is_empty());
     let _ = std::fs::remove_file(path);
 }
 

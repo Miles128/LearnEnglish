@@ -79,6 +79,51 @@ No markdown fences."#;
     serde_json::from_str(cleaned).map_err(|e| format!("parse vocab JSON: {e}; raw={raw}"))
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedDiscoverCandidate {
+    pub name: String,
+    pub url: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// Ask the configured LLM for free full-text English RSS feeds in a category.
+pub fn discover_rss_feeds(
+    cfg: &AppConfig,
+    category_id: &str,
+    category_label: &str,
+) -> Result<Vec<FeedDiscoverCandidate>, String> {
+    ensure_configured(cfg)?;
+    let system = r#"You help curate free, publicly available English news RSS/Atom feeds for language learners.
+Return ONLY a JSON array (no markdown fences) of 6–10 objects with keys:
+name (string, publication name),
+url (string, direct RSS or Atom feed URL, https preferred),
+description (string, one short English sentence).
+Prefer classic reputable outlets and blogs with free full-text or long excerpts.
+Do NOT suggest podcasts, paywalled-only feeds, or non-English sources.
+URLs must look like real feed endpoints (often ending in /feed, /rss, .xml)."#;
+    let user = format!(
+        "Category id: {category_id}\nCategory label: {category_label}\nRecommend English RSS feeds for this category."
+    );
+    let raw = chat(cfg, system, &user)?;
+    let cleaned = raw
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    let mut out: Vec<FeedDiscoverCandidate> = serde_json::from_str(cleaned)
+        .map_err(|e| format!("parse discover JSON: {e}; raw={raw}"))?;
+    out.retain(|c| {
+        let u = c.url.trim();
+        (u.starts_with("https://") || u.starts_with("http://")) && !c.name.trim().is_empty()
+    });
+    if out.is_empty() {
+        return Err("模型未返回可用的 RSS 候选".into());
+    }
+    Ok(out)
+}
+
 fn ensure_configured(cfg: &AppConfig) -> Result<(), String> {
     if cfg.api_key.trim().is_empty() || cfg.api_key.contains("YOUR_API_KEY") {
         return Err("请先在设置中配置 API Key（config.local.json）".into());

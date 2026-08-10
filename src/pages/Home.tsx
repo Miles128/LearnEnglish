@@ -1,15 +1,8 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, Article, RefreshResult, VocabItem } from "../api";
+import { api, Article, FeedCategory, RefreshResult, VocabItem } from "../api";
 import { estimateKnownPercent, formatKnownPercent } from "../knownPercent";
-
-const CATEGORIES = [
-  { id: "all", label: "全部" },
-  { id: "tech", label: "科技" },
-  { id: "finance", label: "财经" },
-  { id: "world", label: "国际" },
-  { id: "other", label: "其他" },
-];
+import ManageFeedsDrawer from "./ManageFeedsDrawer";
 
 type SourceSection = {
   source: string;
@@ -20,12 +13,14 @@ type SourceSection = {
 export default function Home() {
   const navigate = useNavigate();
   const [category, setCategory] = useState("all");
+  const [categories, setCategories] = useState<FeedCategory[]>([]);
   const [articles, setArticles] = useState<Article[]>([]);
   const [learningTerms, setLearningTerms] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [importUrl, setImportUrl] = useState("");
   const [importing, setImporting] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,12 +28,14 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
-      const [list, learning] = await Promise.all([
+      const [list, learning, cats] = await Promise.all([
         api.listArticles(category === "all" ? undefined : category),
         api.listVocab("learning").catch(() => [] as VocabItem[]),
+        api.listFeedCategories().catch(() => [] as FeedCategory[]),
       ]);
       setArticles(list);
       setLearningTerms(learning.map((v) => v.term));
+      setCategories(cats);
       const missing = list.some((a) => !a.title_zh);
       if (missing) {
         try {
@@ -65,6 +62,13 @@ export default function Home() {
   }, [load]);
 
   const sections = useMemo(() => groupBySource(articles), [articles]);
+  const tabCategories = useMemo(() => {
+    const tabs = [{ id: "all", label: "全部" }];
+    for (const c of categories) {
+      tabs.push({ id: c.id, label: c.label });
+    }
+    return tabs;
+  }, [categories]);
 
   async function onRefresh() {
     setRefreshing(true);
@@ -112,9 +116,14 @@ export default function Home() {
         <div>
           <h1>今日阅读</h1>
         </div>
-        <button className="btn primary" onClick={onRefresh} disabled={refreshing}>
-          {refreshing ? "刷新中…" : "刷新"}
-        </button>
+        <div className="page-header-actions">
+          <button type="button" className="btn" onClick={() => setManageOpen(true)}>
+            管理订阅
+          </button>
+          <button className="btn primary" onClick={onRefresh} disabled={refreshing}>
+            {refreshing ? "刷新中…" : "刷新"}
+          </button>
+        </div>
       </header>
 
       <form className="import-row" onSubmit={(e) => void onImport(e)}>
@@ -132,7 +141,7 @@ export default function Home() {
       </form>
 
       <div className="tabs">
-        {CATEGORIES.map((c) => (
+        {tabCategories.map((c) => (
           <button
             key={c.id}
             className={category === c.id ? "tab active" : "tab"}
@@ -158,7 +167,10 @@ export default function Home() {
           <section key={sec.source} className="source-board">
             <header className="source-board-head">
               <h2>{sec.source}</h2>
-              <span className="pill">{labelCategory(sec.category)}</span>
+              <span className="pill">
+                {categories.find((c) => c.id === sec.category)?.label ??
+                  sec.category}
+              </span>
               <span className="muted">{sec.articles.length} 篇</span>
             </header>
             <ul className="article-list">
@@ -186,6 +198,14 @@ export default function Home() {
           </section>
         ))}
       </div>
+
+      <ManageFeedsDrawer
+        open={manageOpen}
+        onClose={() => {
+          setManageOpen(false);
+          void load();
+        }}
+      />
     </div>
   );
 }
@@ -202,14 +222,4 @@ function groupBySource(articles: Article[]): SourceSection[] {
     sec.articles.push(a);
   }
   return Array.from(map.values());
-}
-
-function labelCategory(c: string) {
-  const map: Record<string, string> = {
-    tech: "科技",
-    finance: "财经",
-    world: "国际",
-    other: "其他",
-  };
-  return map[c] ?? c;
 }

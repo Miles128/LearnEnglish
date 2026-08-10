@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, AppConfig, FeedSource } from "../api";
+import { Link } from "react-router-dom";
+import { api, AppConfig } from "../api";
 import {
   CEFR_LEVELS,
   FREQ_BANDS,
@@ -20,7 +21,6 @@ const defaultCfg = (): AppConfig => ({
 
 export default function Settings() {
   const [cfg, setCfg] = useState<AppConfig>(defaultCfg);
-  const [feeds, setFeeds] = useState<FeedSource[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,7 +34,6 @@ export default function Settings() {
           cefr_level: isCefrLevel(loaded.cefr_level) ? loaded.cefr_level : "B1",
           freq_band: isFreqBand(loaded.freq_band) ? loaded.freq_band : 3000,
         });
-        setFeeds(await api.listFeeds());
       } catch (e) {
         setError(String(e));
       }
@@ -52,17 +51,12 @@ export default function Settings() {
     }
   }
 
-  async function toggleFeed(id: string, enabled: boolean) {
-    await api.setFeedEnabled(id, enabled);
-    setFeeds((fs) => fs.map((f) => (f.id === id ? { ...f, enabled } : f)));
-  }
-
   return (
     <div className="page">
       <header className="page-header">
         <div>
           <h1>设置</h1>
-          <p className="muted">难度、LLM 与 RSS 源（写入本地 config.local.json）</p>
+          <p className="muted">难度与 LLM（写入本地 config.local.json）</p>
         </div>
         <button className="btn primary" onClick={() => void save()}>
           保存
@@ -146,24 +140,12 @@ export default function Settings() {
       </section>
 
       <section className="settings-section">
-        <h2>RSS 源（免费全文）</h2>
-        <ul className="feed-list">
-          {feeds.map((f) => (
-            <li key={f.id}>
-              <label className="feed-row">
-                <input
-                  type="checkbox"
-                  checked={f.enabled}
-                  onChange={(e) => void toggleFeed(f.id, e.target.checked)}
-                />
-                <span>
-                  <strong>{f.name}</strong>
-                  <span className="muted"> · {f.category}</span>
-                </span>
-              </label>
-            </li>
-          ))}
-        </ul>
+        <h2>RSS 订阅</h2>
+        <p className="muted">
+          请到{" "}
+          <Link to="/">今日阅读 → 管理订阅</Link>
+          {" "}新增、退订与按分类搜索推荐源。
+        </p>
       </section>
     </div>
   );

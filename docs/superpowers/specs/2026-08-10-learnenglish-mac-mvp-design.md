@@ -43,7 +43,11 @@ Only free, full-text (or reliably free) sources. Minimum body length on ingest. 
 
 ## Out of scope
 
-Multi-device sync, accounts, TTS, Windows/iOS packaging, non-free sources.
+Multi-device sync, accounts, Windows/iOS packaging, non-free sources.
+
+## In scope additions
+
+- Reader TTS (Web Speech API): word/selection, paragraph, full article — mirrors translate entry points.
 
 ## Verification
 

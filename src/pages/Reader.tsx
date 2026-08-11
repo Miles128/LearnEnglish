@@ -11,6 +11,7 @@ import { Link, useParams } from "react-router-dom";
 import { api, Article, TranslationRow } from "../api";
 import { renderAnnotatedParagraph } from "../annotateText";
 import { shouldRenderMarkdown } from "../markdown";
+import { getTts } from "../tts";
 import {
   defaultDifficultyPrefs,
   ensureLexiconLoaded,
@@ -29,6 +30,11 @@ type Popover = {
   error?: string;
 };
 
+type SpeakTarget =
+  | { kind: "article" }
+  | { kind: "paragraph"; index: number }
+  | { kind: "word" };
+
 export default function Reader() {
   const { id } = useParams();
   const [article, setArticle] = useState<Article | null>(null);
@@ -44,6 +50,8 @@ export default function Reader() {
   const [error, setError] = useState<string | null>(null);
   const [popover, setPopover] = useState<Popover | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [speaking, setSpeaking] = useState(false);
+  const [speakTarget, setSpeakTarget] = useState<SpeakTarget | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const clickGuardRef = useRef(false);
 
@@ -108,6 +116,22 @@ export default function Reader() {
     return () => document.removeEventListener("mousedown", onDocMouseDown);
   }, []);
 
+  useEffect(() => {
+    const tts = getTts();
+    return tts.subscribe((isSpeaking) => {
+      setSpeaking(isSpeaking);
+      if (!isSpeaking) {
+        setSpeakTarget(null);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      getTts().stop();
+    };
+  }, []);
+
   const title = useMemo(() => article?.title ?? "阅读", [article]);
 
   const asMarkdown = useMemo(() => {
@@ -115,6 +139,44 @@ export default function Reader() {
     const body = paragraphs.length > 0 ? paragraphs.join("\n\n") : article.content_text;
     return shouldRenderMarkdown(article.url, body);
   }, [article, paragraphs]);
+
+  function startSpeak(target: SpeakTarget, chunks: string[]) {
+    setSpeakTarget(target);
+    getTts().speakChunks(chunks);
+  }
+
+  function stopSpeak() {
+    getTts().stop();
+    setSpeakTarget(null);
+  }
+
+  function speakArticle() {
+    if (speaking && speakTarget?.kind === "article") {
+      stopSpeak();
+      return;
+    }
+    if (paragraphs.length === 0) return;
+    startSpeak({ kind: "article" }, paragraphs);
+  }
+
+  function speakParagraph(index: number) {
+    if (speaking && speakTarget?.kind === "paragraph" && speakTarget.index === index) {
+      stopSpeak();
+      return;
+    }
+    const text = paragraphs[index];
+    if (!text) return;
+    startSpeak({ kind: "paragraph", index }, [text]);
+  }
+
+  function speakWord(text: string) {
+    if (speaking && speakTarget?.kind === "word") {
+      stopSpeak();
+      return;
+    }
+    if (!text.trim()) return;
+    startSpeak({ kind: "word" }, [text]);
+  }
 
   async function showMeaning(opts: {
     text: string;
@@ -263,6 +325,8 @@ export default function Reader() {
     );
   }
 
+  const articleSpeaking = speaking && speakTarget?.kind === "article";
+
   return (
     <div className="page reader" ref={rootRef}>
       <header className="page-header">
@@ -277,67 +341,91 @@ export default function Reader() {
             {prefs.freqBand / 1000}k
           </p>
         </div>
-        <button className="btn" onClick={toggleFullTranslation} disabled={busyFull}>
-          {busyFull ? "…" : showFullZh ? "隐藏译文" : "全文翻译"}
-        </button>
+        <div className="page-header-actions">
+          <button
+            className="btn"
+            type="button"
+            onClick={speakArticle}
+            disabled={paragraphs.length === 0}
+            title={articleSpeaking ? "停止朗读" : "朗读全文"}
+          >
+            {articleSpeaking ? "停止朗读" : "朗读全文"}
+          </button>
+          <button className="btn" onClick={toggleFullTranslation} disabled={busyFull}>
+            {busyFull ? "…" : showFullZh ? "隐藏译文" : "全文翻译"}
+          </button>
+        </div>
       </header>
 
       {error && <p className="banner err">{error}</p>}
       {toast && <p className="banner ok">{toast}</p>}
 
       <article className="article-body" onMouseUp={onMouseUp}>
-        {paragraphs.map((p, i) => (
-          <div key={i} className="para-block">
-            <div className="para-gutter" aria-hidden>
-              <button
-                className="para-btn"
-                title="翻译本段"
-                onClick={() => void translatePara(i)}
-                disabled={busyPara === i}
-              >
-                {busyPara === i ? "…" : visibleParas[i] ? "隐" : "译"}
-              </button>
+        {paragraphs.map((p, i) => {
+          const paraSpeaking =
+            speaking && speakTarget?.kind === "paragraph" && speakTarget.index === i;
+          return (
+            <div key={i} className="para-block">
+              <div className="para-gutter">
+                <button
+                  className="para-btn"
+                  type="button"
+                  title="翻译本段"
+                  onClick={() => void translatePara(i)}
+                  disabled={busyPara === i}
+                >
+                  {busyPara === i ? "…" : visibleParas[i] ? "隐" : "译"}
+                </button>
+                <button
+                  className={`para-btn${paraSpeaking ? " active" : ""}`}
+                  type="button"
+                  title={paraSpeaking ? "停止朗读" : "朗读本段"}
+                  onClick={() => speakParagraph(i)}
+                >
+                  {paraSpeaking ? "停" : "读"}
+                </button>
+              </div>
+              <div className="para-content">
+                {asMarkdown ? (
+                  <div className="md-preview">
+                    <Markdown
+                      components={{
+                        a: ({ href, children }) => (
+                          <a href={href} target="_blank" rel="noreferrer">
+                            {children}
+                          </a>
+                        ),
+                        p: ({ children }) => (
+                          <p>
+                            {lexReady && typeof children === "string"
+                              ? renderAnnotatedParagraph(
+                                  children,
+                                  prefs,
+                                  vocabTerms,
+                                  onHardWordClick,
+                                )
+                              : children}
+                          </p>
+                        ),
+                      }}
+                    >
+                      {p}
+                    </Markdown>
+                  </div>
+                ) : (
+                  <p>
+                    {lexReady
+                      ? renderAnnotatedParagraph(p, prefs, vocabTerms, onHardWordClick)
+                      : p}
+                  </p>
+                )}
+                {(showFullZh || visibleParas[i]) && translations[String(i)] && (
+                  <p className="zh">{translations[String(i)]}</p>
+                )}
+              </div>
             </div>
-            <div className="para-content">
-              {asMarkdown ? (
-                <div className="md-preview">
-                  <Markdown
-                    components={{
-                      a: ({ href, children }) => (
-                        <a href={href} target="_blank" rel="noreferrer">
-                          {children}
-                        </a>
-                      ),
-                      p: ({ children }) => (
-                        <p>
-                          {lexReady && typeof children === "string"
-                            ? renderAnnotatedParagraph(
-                                children,
-                                prefs,
-                                vocabTerms,
-                                onHardWordClick,
-                              )
-                            : children}
-                        </p>
-                      ),
-                    }}
-                  >
-                    {p}
-                  </Markdown>
-                </div>
-              ) : (
-                <p>
-                  {lexReady
-                    ? renderAnnotatedParagraph(p, prefs, vocabTerms, onHardWordClick)
-                    : p}
-                </p>
-              )}
-              {(showFullZh || visibleParas[i]) && translations[String(i)] && (
-                <p className="zh">{translations[String(i)]}</p>
-              )}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </article>
 
       <p className="muted source-link">
@@ -361,6 +449,13 @@ export default function Reader() {
           {popover.error && <div className="err-inline">{popover.error}</div>}
           {popover.translation && <div className="pop-zh">{popover.translation}</div>}
           <div className="pop-actions">
+            <button
+              className="btn small"
+              type="button"
+              onClick={() => speakWord(popover.text)}
+            >
+              {speaking && speakTarget?.kind === "word" ? "停止" : "朗读"}
+            </button>
             <button className="btn small primary" onClick={() => void addToVocab()}>
               加入生词库
             </button>

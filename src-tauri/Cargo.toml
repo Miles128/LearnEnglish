@@ -28,3 +28,6 @@ once_cell = "1"
 html2text = "0.13"
 readability = "0.3"
 url = "2"
+tauri-plugin-dialog = "2.7.2"
+pdf-extract = "0.12.0"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

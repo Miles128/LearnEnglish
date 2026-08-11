@@ -1,6 +1,7 @@
 mod config;
 mod db;
 mod feeds;
+mod import_file;
 mod srs;
 mod vocab;
 
@@ -174,6 +175,19 @@ async fn import_article_url(app: AppHandle, url: String) -> Result<Article, Stri
             .try_state::<DbState>()
             .ok_or_else(|| "数据库未就绪".to_string())?;
         feeds::import_article_from_url(&state.0, &url)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn import_article_file(app: AppHandle, path: String) -> Result<Article, String> {
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle
+            .try_state::<DbState>()
+            .ok_or_else(|| "数据库未就绪".to_string())?;
+        import_file::import_article_from_file(&state.0, &path)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -392,6 +406,7 @@ fn delete_vocab(state: tauri::State<'_, DbState>, id: String) -> Result<(), Stri
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = app
                 .path()
@@ -417,6 +432,7 @@ pub fn run() {
             refresh_feeds,
             translate_missing_titles,
             import_article_url,
+            import_article_file,
             get_paragraphs,
             list_paragraph_translations,
             translate_paragraph,

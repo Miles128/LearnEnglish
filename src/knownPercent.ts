@@ -1,4 +1,7 @@
-/** Estimate how familiar an article feels given the user's learning vocab. */
+/** Estimate how familiar an article feels given freq band + learning vocab. */
+
+import { lookupWord } from "./wordLevels";
+import type { FreqBand } from "./wordLevels";
 
 const WORD_RE = /[A-Za-z][A-Za-z'-]*/g;
 
@@ -14,12 +17,14 @@ export function tokenizeWords(text: string): string[] {
 }
 
 /**
- * Words not in the learning list are treated as "already readable".
+ * Tokens with rank <= freqBand (or OOV) count as known, except learning terms.
  * Returns 0–100, or null if the article has too few tokens.
+ * Requires lexicon loaded for accurate band checks.
  */
 export function estimateKnownPercent(
   content: string,
   learningTerms: string[],
+  freqBand: FreqBand,
 ): number | null {
   const tokens = tokenizeWords(content);
   if (tokens.length < 40) return null;
@@ -44,14 +49,17 @@ export function estimateKnownPercent(
     }
   }
 
-  let learningTokenCount = 0;
+  let known = 0;
   for (const tok of tokens) {
     if (single.has(tok) || learningWordHits.has(tok)) {
-      learningTokenCount += 1;
+      continue; // learning = not yet known
+    }
+    const entry = lookupWord(tok);
+    if (!entry || entry.rank <= freqBand) {
+      known += 1;
     }
   }
 
-  const known = tokens.length - learningTokenCount;
   const pct = Math.round((100 * known) / tokens.length);
   return Math.max(0, Math.min(100, pct));
 }

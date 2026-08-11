@@ -2,6 +2,11 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, Article, FeedCategory, RefreshResult, VocabItem } from "../api";
 import { estimateKnownPercent, formatKnownPercent } from "../knownPercent";
+import {
+  ensureLexiconLoaded,
+  isFreqBand,
+  type FreqBand,
+} from "../wordLevels";
 import ManageFeedsDrawer from "./ManageFeedsDrawer";
 
 type SourceSection = {
@@ -16,6 +21,7 @@ export default function Home() {
   const [categories, setCategories] = useState<FeedCategory[]>([]);
   const [articles, setArticles] = useState<Article[]>([]);
   const [learningTerms, setLearningTerms] = useState<string[]>([]);
+  const [freqBand, setFreqBand] = useState<FreqBand>(3000);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [importUrl, setImportUrl] = useState("");
@@ -28,14 +34,17 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
-      const [list, learning, cats] = await Promise.all([
+      await ensureLexiconLoaded();
+      const [list, learning, cats, cfg] = await Promise.all([
         api.listArticles(category === "all" ? undefined : category),
         api.listVocab("learning").catch(() => [] as VocabItem[]),
         api.listFeedCategories().catch(() => [] as FeedCategory[]),
+        api.getConfig().catch(() => null),
       ]);
       setArticles(list);
       setLearningTerms(learning.map((v) => v.term));
       setCategories(cats);
+      if (cfg && isFreqBand(cfg.freq_band)) setFreqBand(cfg.freq_band);
       const missing = list.some((a) => !a.title_zh);
       if (missing) {
         try {
@@ -175,7 +184,11 @@ export default function Home() {
             </header>
             <ul className="article-list">
               {sec.articles.map((a) => {
-                const pct = estimateKnownPercent(a.content_text, learningTerms);
+                const pct = estimateKnownPercent(
+                  a.content_text,
+                  learningTerms,
+                  freqBand,
+                );
                 const pctLabel = formatKnownPercent(pct);
                 return (
                   <li key={a.id}>

@@ -102,6 +102,14 @@ a {
   max-width: 920px;
 }
 
+.page.reader {
+  width: 100%;
+  max-width: min(52rem, 100%);
+  margin-inline: auto;
+  padding-inline: clamp(1.25rem, 5vw, 3.5rem);
+  box-sizing: border-box;
+}
+
 .page-header {
   display: flex;
   justify-content: space-between;
@@ -306,6 +314,7 @@ a {
 
 .article-body {
   margin-top: 8px;
+  width: 100%;
 }
 
 .para-block {
@@ -343,11 +352,19 @@ a {
   margin: 0;
   line-height: 1.75;
   font-size: 1.08rem;
+  text-align: justify;
+  text-justify: inter-word;
+  hyphens: auto;
+  overflow-wrap: break-word;
 }
 
 .para-content .md-preview {
   line-height: 1.75;
   font-size: 1.08rem;
+  text-align: justify;
+  text-justify: inter-word;
+  hyphens: auto;
+  overflow-wrap: break-word;
 }
 
 .para-content .md-preview > :first-child {
@@ -367,10 +384,20 @@ a {
   margin: 0.4em 0 0.35em;
   line-height: 1.35;
   font-weight: 650;
+  text-align: left;
+  hyphens: none;
 }
 
 .para-content .md-preview p {
   margin: 0.35em 0;
+  text-align: justify;
+  text-justify: inter-word;
+}
+
+.para-content .md-preview pre,
+.para-content .md-preview code {
+  text-align: left;
+  hyphens: none;
 }
 
 .para-content .md-preview ul,
@@ -424,6 +451,8 @@ a {
   border-left: 2px solid var(--accent-soft);
   padding-left: 12px;
   line-height: 1.7;
+  text-align: justify;
+  text-justify: inter-ideograph;
 }
 
 mark.vocab-hit {
@@ -844,6 +873,56 @@ mark.vocab-hit:hover {
   font-size: 0.8rem;
 }
 
+.placement-page .placement-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
+.placement-quiz {
+  margin-top: 12px;
+  max-width: 36rem;
+}
+
+.placement-term {
+  font-size: 2rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  margin: 12px 0 20px;
+}
+
+.placement-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.placement-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  text-align: left;
+  width: 100%;
+  padding: 12px 14px;
+  white-space: normal;
+  line-height: 1.4;
+}
+
+.placement-opt-letter {
+  flex: 0 0 1.5rem;
+  font-weight: 650;
+  opacity: 0.7;
+}
+
+.placement-settings {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+
 @media (max-width: 800px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -865,6 +944,9 @@ mark.vocab-hit:hover {
   }
   .page {
     padding: 18px 16px 36px;
+  }
+  .page.reader {
+    padding-inline: clamp(1rem, 4vw, 1.5rem);
   }
   .refresh-progress {
     padding: 10px 14px 12px;

@@ -16,6 +16,15 @@ pub struct AppConfig {
     /// Words with frequency rank above this are underlined.
     #[serde(default = "default_freq_band")]
     pub freq_band: u32,
+    /// Whether the adaptive vocab placement test has been completed.
+    #[serde(default)]
+    pub vocab_placement_done: bool,
+    /// Final continuous ability L from the last placement test.
+    #[serde(default)]
+    pub vocab_placement_l: Option<f64>,
+    /// ISO timestamp of the last placement test.
+    #[serde(default)]
+    pub vocab_placement_at: Option<String>,
 }
 
 fn default_cefr_level() -> String {
@@ -35,6 +44,9 @@ impl Default for AppConfig {
             disabled_feeds: vec![],
             cefr_level: default_cefr_level(),
             freq_band: default_freq_band(),
+            vocab_placement_done: false,
+            vocab_placement_l: None,
+            vocab_placement_at: None,
         }
     }
 }

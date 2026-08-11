@@ -26,6 +26,12 @@ export type AppConfig = {
   cefr_level: string;
   /** Known vocab band: 1000 | 3000 | 5000 | 10000 | 20000 */
   freq_band: number;
+  /** Adaptive placement test completed. */
+  vocab_placement_done?: boolean;
+  /** Final continuous ability L from last placement. */
+  vocab_placement_l?: number | null;
+  /** ISO timestamp of last placement. */
+  vocab_placement_at?: string | null;
 };
 
 export type Article = {

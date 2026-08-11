@@ -12,6 +12,9 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 const MIN_FULLTEXT_CHARS: usize = 400;
+/// RSS bodies at or above this length are treated as full-text feeds (no page required).
+/// Shorter bodies are teasers/summaries — page fetch must succeed or the entry is skipped.
+const TRUST_RSS_FULLTEXT_CHARS: usize = 2000;
 
 #[derive(Debug, Serialize)]
 pub struct RefreshResult {
@@ -364,24 +367,26 @@ fn download_feed_articles(
             .or_else(|| entry.summary.map(|s| s.content))
             .unwrap_or_default();
 
-        let mut content_text = html_to_text(&raw_html);
-        // Classic news RSS is often only a teaser — fetch the article page.
-        if content_text.chars().count() < MIN_FULLTEXT_CHARS {
+        let rss_text = html_to_text(&raw_html);
+        // Full-text RSS can be trusted; teaser/summary feeds must fetch the article page.
+        // If anti-crawl / paywall leaves us with only the RSS summary, skip — do not ingest teasers.
+        let content_text = if rss_text.chars().count() >= TRUST_RSS_FULLTEXT_CHARS {
+            rss_text
+        } else {
             if page_fetches >= MAX_PAGE_FETCHES {
                 stats.skipped_short += 1;
                 continue;
             }
             page_fetches += 1;
-            match fetch_article_page(client, &url) {
-                Ok(page_text) if page_text.chars().count() >= MIN_FULLTEXT_CHARS => {
-                    content_text = page_text;
-                }
-                _ => {
+            let page_text = fetch_article_page(client, &url).ok();
+            match choose_article_body(&rss_text, page_text.as_deref()) {
+                Some(body) => body,
+                None => {
                     stats.skipped_short += 1;
                     continue;
                 }
             }
-        }
+        };
 
         if looks_like_paywall(&content_text) {
             stats.skipped_short += 1;
@@ -660,6 +665,22 @@ fn looks_like_paywall(text: &str) -> bool {
     MARKERS.iter().any(|m| lower.contains(m))
 }
 
+/// Decide final article body from RSS text and an optional page extract.
+///
+/// - Long RSS (≥ [`TRUST_RSS_FULLTEXT_CHARS`]): trust as full-text feed (page unused).
+/// - Shorter RSS (summary/teaser): only accept page text that meets [`MIN_FULLTEXT_CHARS`].
+///   Never fall back to the RSS summary when the page is missing or too short (anti-crawl).
+fn choose_article_body(rss_text: &str, page_text: Option<&str>) -> Option<String> {
+    let rss_len = rss_text.chars().count();
+    if rss_len >= TRUST_RSS_FULLTEXT_CHARS {
+        return Some(rss_text.to_string());
+    }
+    match page_text {
+        Some(page) if page.chars().count() >= MIN_FULLTEXT_CHARS => Some(page.to_string()),
+        _ => None,
+    }
+}
+
 pub fn split_paragraphs(text: &str) -> Vec<String> {
     text.split("\n\n")
         .map(|p| p.trim().to_string())
@@ -720,5 +741,33 @@ mod tests {
     fn title_parses_html_title() {
         let html = "<html><head><title>  Hello World  | Site </title></head></html>";
         assert_eq!(title_from_html(html).as_deref(), Some("Hello World"));
+    }
+
+    #[test]
+    fn skips_rss_summary_when_page_fetch_fails() {
+        // Mid-length teaser (≥ old 400 threshold) must not be kept if page is unavailable
+        // (anti-crawl / paywall / short extract).
+        let teaser = "a".repeat(500);
+        assert!(teaser.chars().count() >= MIN_FULLTEXT_CHARS);
+        assert!(teaser.chars().count() < TRUST_RSS_FULLTEXT_CHARS);
+        assert!(choose_article_body(&teaser, None).is_none());
+        assert!(choose_article_body(&teaser, Some("too short")).is_none());
+    }
+
+    #[test]
+    fn accepts_page_fulltext_over_rss_teaser() {
+        let teaser = "teaser ".repeat(80); // ~560 chars
+        let full = "full article body ".repeat(40); // ~720 chars
+        assert!(full.chars().count() >= MIN_FULLTEXT_CHARS);
+        let chosen = choose_article_body(&teaser, Some(&full)).expect("page body");
+        assert_eq!(chosen, full);
+    }
+
+    #[test]
+    fn trusts_long_rss_fulltext_without_page() {
+        let full_rss = "word ".repeat(500); // 2500 chars
+        assert!(full_rss.chars().count() >= TRUST_RSS_FULLTEXT_CHARS);
+        let chosen = choose_article_body(&full_rss, None).expect("rss full text");
+        assert_eq!(chosen, full_rss);
     }
 }

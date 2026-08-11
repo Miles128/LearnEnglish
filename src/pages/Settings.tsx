@@ -17,6 +17,9 @@ const defaultCfg = (): AppConfig => ({
   disabled_feeds: [],
   cefr_level: "B1",
   freq_band: 3000,
+  vocab_placement_done: false,
+  vocab_placement_l: null,
+  vocab_placement_at: null,
 });
 
 export default function Settings() {
@@ -104,6 +107,20 @@ export default function Settings() {
             ))}
           </select>
         </label>
+        <div className="placement-settings">
+          <p className="muted">
+            {cfg.vocab_placement_done
+              ? `上次测验：约 ${Math.round(cfg.vocab_placement_l ?? cfg.freq_band)} 词${
+                  cfg.vocab_placement_at
+                    ? ` · ${new Date(cfg.vocab_placement_at).toLocaleString()}`
+                    : ""
+                }`
+              : "尚未完成词汇量测验。"}
+          </p>
+          <Link className="btn" to="/placement">
+            {cfg.vocab_placement_done ? "重新测验" : "测一下词汇量"}
+          </Link>
+        </div>
       </section>
 
       <section className="settings-section">

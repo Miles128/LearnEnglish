@@ -348,8 +348,8 @@ a {
 
 .para-btn.active {
   opacity: 1;
-  color: var(--accent, #0f5c4c);
-  border-color: var(--accent, #0f5c4c);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .para-block:hover .para-btn,

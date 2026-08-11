@@ -6,6 +6,7 @@ import Home from "./pages/Home";
 import Reader from "./pages/Reader";
 import Vocab from "./pages/Vocab";
 import Settings from "./pages/Settings";
+import Placement from "./pages/Placement";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
@@ -16,6 +17,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
           <Route path="article/:id" element={<Reader />} />
           <Route path="vocab" element={<Vocab />} />
           <Route path="settings" element={<Settings />} />
+          <Route path="placement" element={<Placement />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

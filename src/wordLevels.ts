@@ -285,3 +285,19 @@ function coalesceText(spans: AnnotatedSpan[]): AnnotatedSpan[] {
 export function defaultDifficultyPrefs(): DifficultyPrefs {
   return { cefrLevel: "B1", freqBand: 3000 };
 }
+
+export type LexiconTerm = {
+  term: string;
+  cefr: CefrLevel;
+  rank: number;
+  zh?: string;
+};
+
+/** Snapshot of loaded lexicon (empty if not yet loaded). */
+export function listLexiconTerms(): LexiconTerm[] {
+  const out: LexiconTerm[] = [];
+  for (const [term, e] of lexicon) {
+    out.push({ term, cefr: e.cefr, rank: e.rank, zh: e.zh });
+  }
+  return out;
+}

@@ -213,3 +213,41 @@ fn filter_new_entries_skips_known_urls() {
         ]
     );
 }
+
+#[test]
+fn purge_summary_only_removes_teasers_keeps_fulltext() {
+    let path = temp_dir().join(format!("le-purge-summary-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    let teaser = db::Article {
+        id: "teaser".into(),
+        url: "https://example.com/teaser".into(),
+        title: "Teaser".into(),
+        title_zh: String::new(),
+        source: "T".into(),
+        category: "tech".into(),
+        published_at: None,
+        content_text: "a".repeat(500), // mid-length RSS summary
+        fetched_at: "2020-01-01T00:00:00Z".into(),
+    };
+    let full = db::Article {
+        id: "full".into(),
+        url: "https://example.com/full".into(),
+        title: "Full".into(),
+        title_zh: String::new(),
+        source: "T".into(),
+        category: "tech".into(),
+        published_at: None,
+        content_text: "word ".repeat(500), // ≥ 2000 chars
+        fetched_at: "2020-01-01T00:00:00Z".into(),
+    };
+    db::insert_article_if_new(&conn, &teaser).unwrap();
+    db::insert_article_if_new(&conn, &full).unwrap();
+
+    let removed = feeds::purge_summary_only_articles(&conn).unwrap();
+    assert_eq!(removed, 1);
+    assert!(db::get_article(&conn, "teaser").unwrap().is_none());
+    assert!(db::get_article(&conn, "full").unwrap().is_some());
+
+    let _ = std::fs::remove_file(path);
+}

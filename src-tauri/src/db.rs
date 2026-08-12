@@ -936,6 +936,22 @@ pub fn list_articles(
     Ok(rows)
 }
 
+/// All articles with no LIMIT — used for maintenance purges on refresh.
+pub fn list_all_articles(conn: &Connection) -> Result<Vec<Article>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id,url,title,title_zh,source,category,published_at,content_text,fetched_at
+             FROM articles",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], map_article)
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
 fn map_article(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
     Ok(Article {
         id: row.get(0)?,

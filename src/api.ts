@@ -144,6 +144,8 @@ export const api = {
   translateMissingTitles: () => invoke<number>("translate_missing_titles"),
   importArticleUrl: (url: string) =>
     invoke<Article>("import_article_url", { url }),
+  importArticleFile: (path: string) =>
+    invoke<Article>("import_article_file", { path }),
   getParagraphs: (id: string) => invoke<string[]>("get_paragraphs", { id }),
   listParagraphTranslations: (articleId: string) =>
     invoke<TranslationRow[]>("list_paragraph_translations", {

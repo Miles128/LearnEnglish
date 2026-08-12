@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 use uuid::Uuid;
 
-const MIN_FULLTEXT_CHARS: usize = 400;
+pub(crate) const MIN_FULLTEXT_CHARS: usize = 400;
 /// RSS bodies at or above this length are treated as full-text feeds (no page required).
 /// Shorter bodies are teasers/summaries — page fetch must succeed or the entry is skipped.
 const TRUST_RSS_FULLTEXT_CHARS: usize = 2000;
@@ -421,7 +421,7 @@ fn download_feed_articles(
 
 /// Keep English-only articles for learning. Prefer feed/entry language tags;
 /// fall back to a Latin-vs-other-script heuristic when tags are missing.
-fn is_english_article(language: Option<&str>, title: &str, content: &str) -> bool {
+pub(crate) fn is_english_article(language: Option<&str>, title: &str, content: &str) -> bool {
     if let Some(tag) = language {
         if !is_english_lang_tag(tag) {
             return false;

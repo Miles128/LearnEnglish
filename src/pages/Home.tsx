@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { open } from "@tauri-apps/plugin-dialog";
 import { api, Article, FeedCategory, RefreshResult, VocabItem } from "../api";
 import { estimateKnownPercent, formatKnownPercent } from "../knownPercent";
 import {
@@ -119,6 +120,40 @@ export default function Home() {
     }
   }
 
+  async function onImportFile() {
+    setMessage(null);
+    setError(null);
+    let selected: string | string[] | null;
+    try {
+      selected = await open({
+        multiple: false,
+        filters: [
+          {
+            name: "文档",
+            extensions: ["txt", "pdf", "docx"],
+          },
+        ],
+      });
+    } catch (err) {
+      setError(String(err));
+      return;
+    }
+    if (selected === null) return;
+    const path = Array.isArray(selected) ? selected[0] : selected;
+    if (!path) return;
+
+    setImporting(true);
+    try {
+      const article = await api.importArticleFile(path);
+      setMessage(`已导入：${article.title}`);
+      navigate(`/article/${article.id}`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setImporting(false);
+    }
+  }
+
   return (
     <div className="page">
       <header className="page-header">
@@ -146,6 +181,14 @@ export default function Home() {
         />
         <button className="btn" type="submit" disabled={importing || !importUrl.trim()}>
           {importing ? "导入中…" : "导入"}
+        </button>
+        <button
+          className="btn"
+          type="button"
+          disabled={importing}
+          onClick={() => void onImportFile()}
+        >
+          导入文件
         </button>
       </form>
 

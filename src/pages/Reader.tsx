@@ -430,9 +430,13 @@ export default function Reader() {
 
       <p className="muted source-link">
         原文：{" "}
-        <a href={article.url} target="_blank" rel="noreferrer">
-          {article.url}
-        </a>
+        {article.url.startsWith("file://") ? (
+          <span>本地导入 · {article.title}</span>
+        ) : (
+          <a href={article.url} target="_blank" rel="noreferrer">
+            {article.url}
+          </a>
+        )}
       </p>
 
       {popover && (

@@ -209,105 +209,167 @@ fn list_paragraph_translations(
     db::list_paragraph_translations(&conn, &article_id)
 }
 
+#[derive(Clone, serde::Serialize)]
+struct TranslateProgress {
+    article_id: String,
+    current: usize,
+    total: usize,
+    scope_key: String,
+    translated_text: String,
+    done: bool,
+}
+
 #[tauri::command]
-fn translate_paragraph(
-    state: tauri::State<'_, DbState>,
+async fn translate_paragraph(
+    app: AppHandle,
     article_id: String,
     paragraph_index: usize,
     text: String,
 ) -> Result<TranslationRow, String> {
+    // Blocking LLM HTTP must not run on the UI/main command thread.
     let cfg = config::load_config()?;
-    let scope_key = paragraph_index.to_string();
-    {
-        let conn = state.0.lock().map_err(|e| e.to_string())?;
-        if let Some(existing) = db::get_translation(&conn, &article_id, "paragraph", &scope_key)? {
-            return Ok(existing);
-        }
-    }
-    let translated = vocab::translate_text(&cfg, &text)?;
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::save_translation(
-        &conn,
-        &article_id,
-        "paragraph",
-        &scope_key,
-        &text,
-        &translated,
-        &cfg.model,
-    )
-}
-
-#[tauri::command]
-fn translate_selection(
-    state: tauri::State<'_, DbState>,
-    article_id: String,
-    text: String,
-) -> Result<TranslationRow, String> {
-    let cfg = config::load_config()?;
-    let scope_key = {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut h = DefaultHasher::new();
-        text.hash(&mut h);
-        format!("{:x}", h.finish())
-    };
-    {
-        let conn = state.0.lock().map_err(|e| e.to_string())?;
-        if let Some(existing) = db::get_translation(&conn, &article_id, "selection", &scope_key)? {
-            return Ok(existing);
-        }
-    }
-    let translated = vocab::translate_text(&cfg, &text)?;
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::save_translation(
-        &conn,
-        &article_id,
-        "selection",
-        &scope_key,
-        &text,
-        &translated,
-        &cfg.model,
-    )
-}
-
-#[tauri::command]
-fn translate_full_article(
-    state: tauri::State<'_, DbState>,
-    article_id: String,
-) -> Result<Vec<TranslationRow>, String> {
-    let cfg = config::load_config()?;
-    let paragraphs = {
-        let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let article = db::get_article(&conn, &article_id)?
-            .ok_or_else(|| "article not found".to_string())?;
-        feeds::split_paragraphs(&article.content_text)
-    };
-
-    let mut out = Vec::new();
-    for (i, p) in paragraphs.iter().enumerate() {
-        let scope_key = i.to_string();
-        let existing = {
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle
+            .try_state::<DbState>()
+            .ok_or_else(|| "数据库未就绪".to_string())?;
+        let scope_key = paragraph_index.to_string();
+        {
             let conn = state.0.lock().map_err(|e| e.to_string())?;
-            db::get_translation(&conn, &article_id, "paragraph", &scope_key)?
-        };
-        if let Some(row) = existing {
-            out.push(row);
-            continue;
+            if let Some(existing) =
+                db::get_translation(&conn, &article_id, "paragraph", &scope_key)?
+            {
+                return Ok(existing);
+            }
         }
-        let translated = vocab::translate_text(&cfg, p)?;
+        let translated = vocab::translate_text(&cfg, &text)?;
         let conn = state.0.lock().map_err(|e| e.to_string())?;
-        let row = db::save_translation(
+        db::save_translation(
             &conn,
             &article_id,
             "paragraph",
             &scope_key,
-            p,
+            &text,
             &translated,
             &cfg.model,
-        )?;
-        out.push(row);
-    }
-    Ok(out)
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn translate_selection(
+    app: AppHandle,
+    article_id: String,
+    text: String,
+) -> Result<TranslationRow, String> {
+    let cfg = config::load_config()?;
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle
+            .try_state::<DbState>()
+            .ok_or_else(|| "数据库未就绪".to_string())?;
+        let scope_key = {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut h = DefaultHasher::new();
+            text.hash(&mut h);
+            format!("{:x}", h.finish())
+        };
+        {
+            let conn = state.0.lock().map_err(|e| e.to_string())?;
+            if let Some(existing) =
+                db::get_translation(&conn, &article_id, "selection", &scope_key)?
+            {
+                return Ok(existing);
+            }
+        }
+        let translated = vocab::translate_text(&cfg, &text)?;
+        let conn = state.0.lock().map_err(|e| e.to_string())?;
+        db::save_translation(
+            &conn,
+            &article_id,
+            "selection",
+            &scope_key,
+            &text,
+            &translated,
+            &cfg.model,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn translate_full_article(
+    app: AppHandle,
+    article_id: String,
+) -> Result<Vec<TranslationRow>, String> {
+    let cfg = config::load_config()?;
+    let app_handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle
+            .try_state::<DbState>()
+            .ok_or_else(|| "数据库未就绪".to_string())?;
+        let paragraphs = {
+            let conn = state.0.lock().map_err(|e| e.to_string())?;
+            let article = db::get_article(&conn, &article_id)?
+                .ok_or_else(|| "article not found".to_string())?;
+            feeds::split_paragraphs(&article.content_text)
+        };
+
+        let total = paragraphs.len();
+        let mut out = Vec::new();
+        for (i, p) in paragraphs.iter().enumerate() {
+            let scope_key = i.to_string();
+            let existing = {
+                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                db::get_translation(&conn, &article_id, "paragraph", &scope_key)?
+            };
+            let row = if let Some(row) = existing {
+                row
+            } else {
+                let translated = vocab::translate_text(&cfg, p)?;
+                let conn = state.0.lock().map_err(|e| e.to_string())?;
+                db::save_translation(
+                    &conn,
+                    &article_id,
+                    "paragraph",
+                    &scope_key,
+                    p,
+                    &translated,
+                    &cfg.model,
+                )?
+            };
+            let _ = app_handle.emit(
+                "translate-progress",
+                TranslateProgress {
+                    article_id: article_id.clone(),
+                    current: i + 1,
+                    total,
+                    scope_key: row.scope_key.clone(),
+                    translated_text: row.translated_text.clone(),
+                    done: false,
+                },
+            );
+            out.push(row);
+        }
+        let _ = app_handle.emit(
+            "translate-progress",
+            TranslateProgress {
+                article_id: article_id.clone(),
+                current: total,
+                total,
+                scope_key: String::new(),
+                translated_text: String::new(),
+                done: true,
+            },
+        );
+        Ok(out)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(serde::Deserialize)]

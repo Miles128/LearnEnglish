@@ -174,6 +174,9 @@ pub fn refresh_feeds(
     let mut known_urls = {
         let conn = db.lock().map_err(|e| e.to_string())?;
         result.skipped_non_english += purge_non_english_articles(&conn)?;
+        // Stock cleanup: drop RSS-teaser bodies that would not pass today's ingest rule,
+        // so the same refresh can re-download them as real full text (or skip).
+        result.skipped_short += purge_summary_only_articles(&conn)?;
         db::list_article_urls(&conn)?
     };
 
@@ -472,10 +475,27 @@ fn looks_like_english(title: &str, content: &str) -> bool {
 }
 
 fn purge_non_english_articles(conn: &Connection) -> Result<usize, String> {
-    let existing = db::list_articles(conn, None)?;
+    let existing = db::list_all_articles(conn)?;
     let mut removed = 0usize;
     for article in existing {
         if !is_english_article(None, &article.title, &article.content_text) {
+            db::delete_article(conn, &article.id)?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// True when stored body would be rejected as RSS-only teaser (no trusted page fulltext).
+fn is_summary_only_body(content: &str) -> bool {
+    choose_article_body(content, None).is_none()
+}
+
+pub(crate) fn purge_summary_only_articles(conn: &Connection) -> Result<usize, String> {
+    let existing = db::list_all_articles(conn)?;
+    let mut removed = 0usize;
+    for article in existing {
+        if is_summary_only_body(&article.content_text) {
             db::delete_article(conn, &article.id)?;
             removed += 1;
         }
@@ -769,5 +789,13 @@ mod tests {
         assert!(full_rss.chars().count() >= TRUST_RSS_FULLTEXT_CHARS);
         let chosen = choose_article_body(&full_rss, None).expect("rss full text");
         assert_eq!(chosen, full_rss);
+    }
+
+    #[test]
+    fn summary_only_body_matches_choose_without_page() {
+        let teaser = "a".repeat(500);
+        assert!(is_summary_only_body(&teaser));
+        assert!(!is_summary_only_body(&"word ".repeat(500)));
+        assert!(is_summary_only_body("short"));
     }
 }

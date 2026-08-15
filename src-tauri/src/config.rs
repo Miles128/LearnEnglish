@@ -25,6 +25,18 @@ pub struct AppConfig {
     /// ISO timestamp of the last placement test.
     #[serde(default)]
     pub vocab_placement_at: Option<String>,
+    /// Reader body font preset (serif / palatino / georgia / newyork / songti / sans).
+    #[serde(default = "default_reader_font")]
+    pub reader_font: String,
+    /// Reader body font size in px (16 / 18 / 20 / 22 / 24).
+    #[serde(default = "default_reader_font_size")]
+    pub reader_font_size: u32,
+    /// Reader body line-height (1.5 / 1.65 / 1.75 / 1.9 / 2.1).
+    #[serde(default = "default_reader_line_height")]
+    pub reader_line_height: f64,
+    /// Reader measure preset (narrow / medium / wide / full).
+    #[serde(default = "default_reader_line_width")]
+    pub reader_line_width: String,
 }
 
 fn default_cefr_level() -> String {
@@ -33,6 +45,22 @@ fn default_cefr_level() -> String {
 
 fn default_freq_band() -> u32 {
     3000
+}
+
+fn default_reader_font() -> String {
+    "serif".into()
+}
+
+fn default_reader_font_size() -> u32 {
+    18
+}
+
+fn default_reader_line_height() -> f64 {
+    1.75
+}
+
+fn default_reader_line_width() -> String {
+    "medium".into()
 }
 
 impl Default for AppConfig {
@@ -47,6 +75,10 @@ impl Default for AppConfig {
             vocab_placement_done: false,
             vocab_placement_l: None,
             vocab_placement_at: None,
+            reader_font: default_reader_font(),
+            reader_font_size: default_reader_font_size(),
+            reader_line_height: default_reader_line_height(),
+            reader_line_width: default_reader_line_width(),
         }
     }
 }
@@ -95,4 +127,25 @@ pub fn save_config(cfg: &AppConfig) -> Result<(), String> {
     let raw = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
     fs::write(&path, raw).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_config_gets_reader_defaults() {
+        let raw = r#"{
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "x",
+            "model": "gpt-4o-mini"
+        }"#;
+        let cfg: AppConfig = serde_json::from_str(raw).unwrap();
+        assert_eq!(cfg.reader_font, "serif");
+        assert_eq!(cfg.reader_font_size, 18);
+        assert_eq!(cfg.reader_line_height, 1.75);
+        assert_eq!(cfg.reader_line_width, "medium");
+        assert_eq!(cfg.cefr_level, "B1");
+        assert_eq!(cfg.freq_band, 3000);
+    }
 }

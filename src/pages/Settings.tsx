@@ -1,6 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, AppConfig } from "../api";
+import { api, defaultAppConfig } from "../api";
+import {
+  READER_FONTS,
+  READER_FONT_SIZES,
+  READER_LINE_HEIGHTS,
+  READER_LINE_WIDTHS,
+  normalizeReadingPrefs,
+  readingCssVars,
+  resolveReadingPrefs,
+  type ReaderFontId,
+  type ReaderFontSize,
+  type ReaderLineHeight,
+  type ReaderLineWidthId,
+} from "../readingPrefs";
 import {
   CEFR_LEVELS,
   FREQ_BANDS,
@@ -10,32 +23,25 @@ import {
   type FreqBand,
 } from "../wordLevels";
 
-const defaultCfg = (): AppConfig => ({
-  base_url: "https://api.openai.com/v1",
-  api_key: "",
-  model: "gpt-4o-mini",
-  disabled_feeds: [],
-  cefr_level: "B1",
-  freq_band: 3000,
-  vocab_placement_done: false,
-  vocab_placement_l: null,
-  vocab_placement_at: null,
-});
-
 export default function Settings() {
-  const [cfg, setCfg] = useState<AppConfig>(defaultCfg);
+  const [cfg, setCfg] = useState(defaultAppConfig);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const readingPreview = useMemo(
+    () => resolveReadingPrefs(cfg),
+    [cfg],
+  );
 
   useEffect(() => {
     void (async () => {
       try {
         const loaded = await api.getConfig();
         setCfg({
-          ...defaultCfg(),
+          ...defaultAppConfig(),
           ...loaded,
           cefr_level: isCefrLevel(loaded.cefr_level) ? loaded.cefr_level : "B1",
           freq_band: isFreqBand(loaded.freq_band) ? loaded.freq_band : 3000,
+          ...normalizeReadingPrefs(loaded),
         });
       } catch (e) {
         setError(String(e));
@@ -59,7 +65,7 @@ export default function Settings() {
       <header className="page-header">
         <div>
           <h1>设置</h1>
-          <p className="muted">难度与 LLM（写入本地 config.local.json）</p>
+          <p className="muted">难度、排版与 LLM（写入本地 config.local.json）</p>
         </div>
         <button className="btn primary" onClick={() => void save()}>
           保存
@@ -120,6 +126,92 @@ export default function Settings() {
           <Link className="btn" to="/placement">
             {cfg.vocab_placement_done ? "重新测验" : "测一下词汇量"}
           </Link>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h2>阅读排版</h2>
+        <p className="muted">只作用于阅读页正文。保存后打开文章即可看到效果。</p>
+        <div className="settings-type-grid">
+          <label>
+            字体
+            <select
+              value={cfg.reader_font}
+              onChange={(e) =>
+                setCfg({ ...cfg, reader_font: e.target.value as ReaderFontId })
+              }
+            >
+              {READER_FONTS.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            字号
+            <select
+              value={cfg.reader_font_size}
+              onChange={(e) =>
+                setCfg({
+                  ...cfg,
+                  reader_font_size: Number(e.target.value) as ReaderFontSize,
+                })
+              }
+            >
+              {READER_FONT_SIZES.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            行距
+            <select
+              value={cfg.reader_line_height}
+              onChange={(e) =>
+                setCfg({
+                  ...cfg,
+                  reader_line_height: Number(e.target.value) as ReaderLineHeight,
+                })
+              }
+            >
+              {READER_LINE_HEIGHTS.map((h) => (
+                <option key={h.value} value={h.value}>
+                  {h.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            行宽
+            <select
+              value={cfg.reader_line_width}
+              onChange={(e) =>
+                setCfg({
+                  ...cfg,
+                  reader_line_width: e.target.value as ReaderLineWidthId,
+                })
+              }
+            >
+              {READER_LINE_WIDTHS.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div
+          className={`reader-preview${readingPreview.fullWidth ? " reader-full" : ""}`}
+          style={readingCssVars(readingPreview)}
+        >
+          <p>
+            The best time to plant a tree was twenty years ago. The second best
+            time is now. Reading English news works the same way: a little every
+            day, in a column that does not tire the eye.
+          </p>
         </div>
       </section>
 

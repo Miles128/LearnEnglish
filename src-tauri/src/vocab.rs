@@ -2,6 +2,7 @@ use crate::config::AppConfig;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use ts_rs::TS;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VocabEnrichment {
@@ -108,7 +109,8 @@ No markdown fences."#;
     serde_json::from_str(cleaned).map_err(|e| format!("parse vocab JSON: {e}; raw={raw}"))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct FeedDiscoverCandidate {
     pub name: String,
     pub url: String,

@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
-import { api } from "./api";
 import { shouldForcePlacement } from "./pages/Placement";
+import { useAppConfig } from "./store";
 import "./App.css";
 
 export type RefreshProgress = {
@@ -17,6 +17,7 @@ export default function App() {
   const [progress, setProgress] = useState<RefreshProgress | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
+  const { cfg, ready } = useAppConfig();
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -40,18 +41,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!ready) return;
     if (location.pathname.startsWith("/placement")) return;
-    void (async () => {
-      try {
-        const cfg = await api.getConfig();
-        if (shouldForcePlacement(cfg)) {
-          navigate("/placement", { replace: true });
-        }
-      } catch {
-        // ignore until Tauri ready
-      }
-    })();
-  }, [location.pathname, navigate]);
+    if (shouldForcePlacement(cfg)) {
+      navigate("/placement", { replace: true });
+    }
+  }, [cfg, ready, location.pathname, navigate]);
 
   const showBar = progress != null && progress.phase !== "done";
   const showDoneBriefly = progress?.phase === "done";

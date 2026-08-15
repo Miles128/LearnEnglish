@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, defaultAppConfig, type AppConfig } from "../api";
+import { type AppConfig } from "../api";
+import { useAppConfig } from "../store";
 import {
   L0,
   PLACEMENT_TOTAL,
@@ -21,17 +22,15 @@ type Question = {
   correctIndex: number;
 };
 
-const defaultCfg = defaultAppConfig;
-
 export default function Placement() {
   const navigate = useNavigate();
+  const { cfg, save: saveCfg } = useAppConfig();
   const [phase, setPhase] = useState<Phase>("intro");
   const [pool, setPool] = useState<PoolItem[]>([]);
   const [L, setL] = useState(L0);
   const [n, setN] = useState(0); // completed count
   const [used, setUsed] = useState<Set<string>>(() => new Set());
   const [question, setQuestion] = useState<Question | null>(null);
-  const [cfg, setCfg] = useState<AppConfig>(defaultCfg);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [finalL, setFinalL] = useState<number | null>(null);
@@ -46,8 +45,6 @@ export default function Placement() {
       try {
         await ensureLexiconLoaded();
         setPool(buildPlacementPool());
-        const loaded = await api.getConfig();
-        setCfg({ ...defaultCfg(), ...loaded });
       } catch (e) {
         setError(String(e));
       }
@@ -90,8 +87,7 @@ export default function Placement() {
         vocab_placement_l: Math.round(endL),
         vocab_placement_at: new Date().toISOString(),
       };
-      await api.saveConfig(next);
-      setCfg(next);
+      await saveCfg(next);
       setPhase("result");
     } catch (e) {
       setError(String(e));
@@ -135,8 +131,7 @@ export default function Placement() {
       setError(null);
       try {
         // Persist the skip so the placement prompt never nags again.
-        const next: AppConfig = { ...cfg, vocab_placement_skipped: true };
-        await api.saveConfig(next);
+        await saveCfg({ ...cfg, vocab_placement_skipped: true });
       } catch (e) {
         setError(String(e));
       } finally {

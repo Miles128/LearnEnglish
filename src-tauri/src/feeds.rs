@@ -9,6 +9,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
+use ts_rs::TS;
 use uuid::Uuid;
 
 pub(crate) const MIN_FULLTEXT_CHARS: usize = 400;
@@ -16,7 +17,8 @@ pub(crate) const MIN_FULLTEXT_CHARS: usize = 400;
 /// Shorter bodies are teasers/summaries — page fetch must succeed or the entry is skipped.
 const TRUST_RSS_FULLTEXT_CHARS: usize = 2000;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
 pub struct RefreshResult {
     pub fetched_feeds: usize,
     pub added_or_updated: usize,
@@ -34,7 +36,8 @@ struct DownloadStats {
     skipped_non_english: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
 pub struct RefreshProgress {
     /// download | translate | done
     pub phase: String,
@@ -45,7 +48,8 @@ pub struct RefreshProgress {
     pub percent: u8,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
 pub struct FeedValidation {
     pub ok: bool,
     pub title: Option<String>,
@@ -112,6 +116,7 @@ pub fn validate_feed_url(url: &str) -> FeedValidation {
 }
 
 /// Split candidate URLs into new vs already-known. Returns (new_urls, skipped_count).
+#[cfg(test)]
 pub fn partition_new_urls(candidates: &[String], known: &HashSet<String>) -> (Vec<String>, usize) {
     let mut new_urls = Vec::new();
     let mut skipped = 0usize;

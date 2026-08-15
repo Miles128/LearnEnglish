@@ -10,16 +10,16 @@ import Markdown from "react-markdown";
 import { Link, useParams } from "react-router-dom";
 import { api, Article, TranslationRow } from "../api";
 import {
-  defaultReadingPrefs,
   readingCssVars,
   resolveReadingPrefs,
   type ResolvedReading,
 } from "../readingPrefs";
 import { AnnotatedPara } from "../annotateText";
 import { shouldRenderMarkdown } from "../markdown";
-import { getTts } from "../tts";
+import SelectionPopover, { type Popover } from "../components/SelectionPopover";
+import { useAppConfig, useVocab } from "../store";
+import { useTts } from "../useTts";
 import {
-  defaultDifficultyPrefs,
   ensureLexiconLoaded,
   isCefrLevel,
   isFreqBand,
@@ -27,30 +27,11 @@ import {
   type DifficultyPrefs,
 } from "../wordLevels";
 
-type Popover = {
-  x: number;
-  y: number;
-  text: string;
-  translation?: string;
-  loading?: boolean;
-  error?: string;
-};
-
-type SpeakTarget =
-  | { kind: "article" }
-  | { kind: "paragraph"; index: number }
-  | { kind: "word" };
-
 export default function Reader() {
   const { id } = useParams();
   const [article, setArticle] = useState<Article | null>(null);
   const [paragraphs, setParagraphs] = useState<string[]>([]);
   const [translations, setTranslations] = useState<Record<string, string>>({});
-  const [vocabTerms, setVocabTerms] = useState<string[]>([]);
-  const [prefs, setPrefs] = useState<DifficultyPrefs>(defaultDifficultyPrefs);
-  const [reading, setReading] = useState<ResolvedReading>(() =>
-    resolveReadingPrefs(defaultReadingPrefs()),
-  );
   const [lexReady, setLexReady] = useState(false);
   const [showFullZh, setShowFullZh] = useState(false);
   const [visibleParas, setVisibleParas] = useState<Record<number, boolean>>({});
@@ -59,33 +40,17 @@ export default function Reader() {
   const [error, setError] = useState<string | null>(null);
   const [popover, setPopover] = useState<Popover | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const [speaking, setSpeaking] = useState(false);
-  const [speakTarget, setSpeakTarget] = useState<SpeakTarget | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const clickGuardRef = useRef(false);
 
-  const loadVocabTerms = useCallback(async () => {
-    try {
-      const list = await api.listVocab("learning");
-      setVocabTerms(list.map((v) => v.term));
-    } catch {
-      // vocab highlight is optional if list fails
-    }
-  }, []);
-
-  const loadPrefs = useCallback(async () => {
-    try {
-      const cfg = await api.getConfig();
-      setPrefs({
-        cefrLevel: isCefrLevel(cfg.cefr_level) ? cfg.cefr_level : "B1",
-        freqBand: isFreqBand(cfg.freq_band) ? cfg.freq_band : 3000,
-      });
-      setReading(resolveReadingPrefs(cfg));
-    } catch {
-      setPrefs(defaultDifficultyPrefs());
-      setReading(resolveReadingPrefs(defaultReadingPrefs()));
-    }
-  }, []);
+  const { speaking, speakTarget, startSpeak, stopSpeak } = useTts();
+  const { cfg } = useAppConfig();
+  const { learningTerms: vocabTerms, refreshLearningTerms } = useVocab();
+  const prefs: DifficultyPrefs = {
+    cefrLevel: isCefrLevel(cfg.cefr_level) ? cfg.cefr_level : "B1",
+    freqBand: isFreqBand(cfg.freq_band) ? cfg.freq_band : 3000,
+  };
+  const reading: ResolvedReading = useMemo(() => resolveReadingPrefs(cfg), [cfg]);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -101,11 +66,10 @@ export default function Reader() {
         map[r.scope_key] = r.translated_text;
       });
       setTranslations(map);
-      await Promise.all([loadVocabTerms(), loadPrefs()]);
     } catch (e) {
       setError(String(e));
     }
-  }, [id, loadVocabTerms, loadPrefs]);
+  }, [id]);
 
   useEffect(() => {
     void ensureLexiconLoaded()
@@ -127,22 +91,6 @@ export default function Reader() {
     return () => document.removeEventListener("mousedown", onDocMouseDown);
   }, []);
 
-  useEffect(() => {
-    const tts = getTts();
-    return tts.subscribe((isSpeaking) => {
-      setSpeaking(isSpeaking);
-      if (!isSpeaking) {
-        setSpeakTarget(null);
-      }
-    });
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      getTts().stop();
-    };
-  }, []);
-
   const title = useMemo(() => article?.title ?? "阅读", [article]);
 
   const asMarkdown = useMemo(() => {
@@ -150,16 +98,6 @@ export default function Reader() {
     const body = paragraphs.length > 0 ? paragraphs.join("\n\n") : article.content_text;
     return shouldRenderMarkdown(article.url, body);
   }, [article, paragraphs]);
-
-  function startSpeak(target: SpeakTarget, chunks: string[]) {
-    setSpeakTarget(target);
-    getTts().speakChunks(chunks);
-  }
-
-  function stopSpeak() {
-    getTts().stop();
-    setSpeakTarget(null);
-  }
 
   function speakArticle() {
     if (speaking && speakTarget?.kind === "article") {
@@ -327,7 +265,7 @@ export default function Reader() {
       });
       setToast(`已加入生词库：${popover.text}`);
       setPopover(null);
-      await loadVocabTerms();
+      await refreshLearningTerms();
       setTimeout(() => setToast(null), 2500);
     } catch (e) {
       setError(String(e));
@@ -473,30 +411,14 @@ export default function Reader() {
       </p>
 
       {popover && (
-        <div
-          className="selection-pop"
-          style={{ left: popover.x, top: popover.y + 12 }}
-        >
-          <div className="pop-term">{popover.text}</div>
-          {popover.loading && <div className="muted">翻译中…</div>}
-          {popover.error && <div className="err-inline">{popover.error}</div>}
-          {popover.translation && <div className="pop-zh">{popover.translation}</div>}
-          <div className="pop-actions">
-            <button
-              className="btn small"
-              type="button"
-              onClick={() => speakWord(popover.text)}
-            >
-              {speaking && speakTarget?.kind === "word" ? "停止" : "朗读"}
-            </button>
-            <button className="btn small primary" onClick={() => void addToVocab()}>
-              加入生词库
-            </button>
-            <button className="btn small" onClick={() => setPopover(null)}>
-              关闭
-            </button>
-          </div>
-        </div>
+        <SelectionPopover
+          popover={popover}
+          speaking={speaking}
+          speakTarget={speakTarget}
+          onSpeakWord={speakWord}
+          onAddVocab={() => void addToVocab()}
+          onClose={() => setPopover(null)}
+        />
       )}
     </div>
   );

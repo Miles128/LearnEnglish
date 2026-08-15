@@ -1,20 +1,13 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, Article, FeedCategory, RefreshResult, VocabItem } from "../api";
-import { estimateKnownPercent, formatKnownPercent } from "../knownPercent";
-import {
-  ensureLexiconLoaded,
-  isFreqBand,
-  type FreqBand,
-} from "../wordLevels";
+import { api, Article, FeedCategory, RefreshResult } from "../api";
+import { estimateKnownPercent } from "../knownPercent";
+import { useAppConfig, useVocab } from "../store";
+import { ensureLexiconLoaded, isFreqBand, type FreqBand } from "../wordLevels";
+import ImportRow from "../components/ImportRow";
+import SourceBoard, { type SourceSection } from "../components/SourceBoard";
 import ManageFeedsDrawer from "./ManageFeedsDrawer";
-
-type SourceSection = {
-  source: string;
-  category: string;
-  articles: Article[];
-};
 
 const PAGE_SIZE = 60;
 
@@ -23,8 +16,6 @@ export default function Home() {
   const [category, setCategory] = useState("all");
   const [categories, setCategories] = useState<FeedCategory[]>([]);
   const [articles, setArticles] = useState<Article[]>([]);
-  const [learningTerms, setLearningTerms] = useState<string[]>([]);
-  const [freqBand, setFreqBand] = useState<FreqBand>(3000);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -35,27 +26,27 @@ export default function Home() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const { cfg } = useAppConfig();
+  const { learningTerms } = useVocab();
+  const freqBand: FreqBand = isFreqBand(cfg.freq_band) ? cfg.freq_band : 3000;
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       await ensureLexiconLoaded();
-      const [list, learning, cats, cfg] = await Promise.all([
+      const [list, cats] = await Promise.all([
         api.listArticles(
           category === "all" ? undefined : category,
           PAGE_SIZE,
           0,
         ),
-        api.listVocab("learning").catch(() => [] as VocabItem[]),
         api.listFeedCategories().catch(() => [] as FeedCategory[]),
-        api.getConfig().catch(() => null),
       ]);
       setArticles(list);
       setHasMore(list.length >= PAGE_SIZE);
-      setLearningTerms(learning.map((v) => v.term));
       setCategories(cats);
-      if (cfg && isFreqBand(cfg.freq_band)) setFreqBand(cfg.freq_band);
-      if (cfg?.api_key) {
+      if (cfg.api_key) {
         const missing = list.some((a) => !a.title_zh);
         if (missing) {
           try {
@@ -78,7 +69,7 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, [category]);
+  }, [category, cfg.api_key]);
 
   useEffect(() => {
     void load();
@@ -215,27 +206,13 @@ export default function Home() {
         </div>
       </header>
 
-      <form className="import-row" onSubmit={(e) => void onImport(e)}>
-        <input
-          className="import-input"
-          type="url"
-          placeholder="粘贴公开文章链接导入…"
-          value={importUrl}
-          onChange={(e) => setImportUrl(e.target.value)}
-          disabled={importing}
-        />
-        <button className="btn" type="submit" disabled={importing || !importUrl.trim()}>
-          {importing ? "导入中…" : "导入"}
-        </button>
-        <button
-          className="btn"
-          type="button"
-          disabled={importing}
-          onClick={() => void onImportFile()}
-        >
-          导入文件
-        </button>
-      </form>
+      <ImportRow
+        importing={importing}
+        importUrl={importUrl}
+        onImportUrlChange={setImportUrl}
+        onImport={(e) => void onImport(e)}
+        onImportFile={() => void onImportFile()}
+      />
 
       <div className="tabs">
         {tabCategories.map((c) => (
@@ -261,38 +238,12 @@ export default function Home() {
 
       <div className="source-boards">
         {sections.map((sec) => (
-          <section key={sec.source} className="source-board">
-            <header className="source-board-head">
-              <h2>{sec.source}</h2>
-              <span className="pill">
-                {categories.find((c) => c.id === sec.category)?.label ??
-                  sec.category}
-              </span>
-              <span className="muted">{sec.articles.length} 篇</span>
-            </header>
-            <ul className="article-list">
-              {sec.articles.map((a) => {
-                const pct = knownPctById.get(a.id) ?? null;
-                const pctLabel = formatKnownPercent(pct);
-                return (
-                  <li key={a.id}>
-                    <Link to={`/article/${a.id}`} className="article-row">
-                      {pctLabel && (
-                        <div className="article-row-meta">
-                          <span className="known-pct">{pctLabel}</span>
-                        </div>
-                      )}
-                      <h3 className="article-title-en">{a.title}</h3>
-                      {a.title_zh ? (
-                        <p className="article-title-zh">{a.title_zh}</p>
-                      ) : null}
-                      <p className="snippet">{a.content_text.slice(0, 140)}…</p>
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
+          <SourceBoard
+            key={sec.source}
+            section={sec}
+            categories={categories}
+            knownPctById={knownPctById}
+          />
         ))}
       </div>
 

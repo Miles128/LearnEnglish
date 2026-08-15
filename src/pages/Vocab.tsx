@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, VocabItem } from "../api";
+import { useVocab } from "../store";
 
 type Tab = "learning" | "review" | "mastered";
 
 export default function Vocab() {
+  const { refreshLearningTerms } = useVocab();
   const [tab, setTab] = useState<Tab>("learning");
   const [items, setItems] = useState<VocabItem[]>([]);
   const [due, setDue] = useState<VocabItem[]>([]);
@@ -47,6 +49,7 @@ export default function Vocab() {
     if (!current) return;
     try {
       await api.reviewVocab(current.id, rating);
+      void refreshLearningTerms();
       const rest = due.filter((d) => d.id !== current.id);
       setDue(rest);
       setCurrent(rest[0] ?? null);
@@ -59,16 +62,19 @@ export default function Vocab() {
   async function markMastered(id: string) {
     await api.setVocabStatus(id, "mastered");
     await load();
+    await refreshLearningTerms();
   }
 
   async function restore(id: string) {
     await api.setVocabStatus(id, "learning");
     await load();
+    await refreshLearningTerms();
   }
 
   async function remove(id: string) {
     await api.deleteVocab(id);
     await load();
+    await refreshLearningTerms();
   }
 
   return (

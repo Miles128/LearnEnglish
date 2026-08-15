@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, defaultAppConfig } from "../api";
+import { defaultAppConfig, type AppConfig } from "../api";
+import { normalizeConfig, useAppConfig } from "../store";
 import {
   READER_FONTS,
   READER_FONT_SIZES,
   READER_LINE_HEIGHTS,
   READER_LINE_WIDTHS,
-  normalizeReadingPrefs,
   readingCssVars,
   resolveReadingPrefs,
   type ReaderFontId,
@@ -17,14 +17,15 @@ import {
 import {
   CEFR_LEVELS,
   FREQ_BANDS,
-  isCefrLevel,
-  isFreqBand,
   type CefrLevel,
   type FreqBand,
 } from "../wordLevels";
 
 export default function Settings() {
-  const [cfg, setCfg] = useState(defaultAppConfig);
+  const { cfg: savedCfg, ready, save: saveCfg } = useAppConfig();
+  const [cfg, setCfg] = useState<AppConfig>(() =>
+    normalizeConfig(defaultAppConfig()),
+  );
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const readingPreview = useMemo(
@@ -33,27 +34,14 @@ export default function Settings() {
   );
 
   useEffect(() => {
-    void (async () => {
-      try {
-        const loaded = await api.getConfig();
-        setCfg({
-          ...defaultAppConfig(),
-          ...loaded,
-          cefr_level: isCefrLevel(loaded.cefr_level) ? loaded.cefr_level : "B1",
-          freq_band: isFreqBand(loaded.freq_band) ? loaded.freq_band : 3000,
-          ...normalizeReadingPrefs(loaded),
-        });
-      } catch (e) {
-        setError(String(e));
-      }
-    })();
-  }, []);
+    if (ready) setCfg(normalizeConfig(savedCfg));
+  }, [ready, savedCfg]);
 
   async function save() {
     setMsg(null);
     setError(null);
     try {
-      await api.saveConfig(cfg);
+      await saveCfg(normalizeConfig(cfg));
       setMsg("已保存到 config.local.json");
     } catch (e) {
       setError(String(e));

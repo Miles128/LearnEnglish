@@ -31,7 +31,7 @@ pub fn apply_rating(item: &mut VocabItem, rating: Rating) {
             item.next_review_at = (now + Duration::minutes(10)).to_rfc3339();
         }
         Rating::Hard => {
-            item.consecutive_know = 0;
+            // Gentle reminder: schedule tomorrow, but don't wipe the easy streak.
             item.interval_days = 1.0;
             item.next_review_at = (now + Duration::days(1)).to_rfc3339();
         }
@@ -89,5 +89,26 @@ mod tests {
         assert_eq!(item.interval_days, 14.0);
         assert!(item.consecutive_know >= 3);
         assert_eq!(item.status, "mastered");
+    }
+
+    #[test]
+    fn hard_schedules_tomorrow_without_wiping_streak() {
+        let mut item = sample();
+        apply_rating(&mut item, Rating::Easy);
+        apply_rating(&mut item, Rating::Easy);
+        assert_eq!(item.consecutive_know, 2);
+        apply_rating(&mut item, Rating::Hard);
+        assert_eq!(item.interval_days, 1.0);
+        assert_eq!(item.consecutive_know, 2, "hard keeps the easy streak");
+        assert_eq!(item.status, "learning");
+    }
+
+    #[test]
+    fn again_resets_streak() {
+        let mut item = sample();
+        apply_rating(&mut item, Rating::Easy);
+        apply_rating(&mut item, Rating::Again);
+        assert_eq!(item.consecutive_know, 0);
+        assert_eq!(item.interval_days, 0.0);
     }
 }

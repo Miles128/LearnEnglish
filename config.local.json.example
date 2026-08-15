@@ -8,6 +8,7 @@
   "vocab_placement_done": false,
   "vocab_placement_l": null,
   "vocab_placement_at": null,
+  "vocab_placement_skipped": false,
   "reader_font": "serif",
   "reader_font_size": 18,
   "reader_line_height": 1.75,

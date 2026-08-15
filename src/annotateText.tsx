@@ -1,6 +1,7 @@
 import {
   createElement,
   Fragment,
+  memo,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -35,6 +36,31 @@ export function renderAnnotatedParagraph(
     ...spans.map((s, i) => renderSpan(s, i, onHardClick)),
   );
 }
+
+/**
+ * Memoized per-paragraph annotation so only paragraphs whose text, prefs or
+ * vocab changed re-run the (expensive) word-level annotation pass.
+ * `onHardClick` must be referentially stable (useCallback) to get memo hits.
+ */
+export const AnnotatedPara = memo(function AnnotatedPara({
+  text,
+  prefs,
+  learningTerms,
+  onHardClick,
+}: {
+  text: string;
+  prefs: DifficultyPrefs;
+  learningTerms: string[];
+  onHardClick?: HardWordClick;
+}): ReactNode {
+  return createElement(
+    Fragment,
+    null,
+    ...annotateText(text, prefs, learningTerms).map((s, i) =>
+      renderSpan(s, i, onHardClick),
+    ),
+  );
+});
 
 function renderSpan(
   span: AnnotatedSpan,

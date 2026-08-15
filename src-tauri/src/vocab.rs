@@ -61,6 +61,35 @@ No markdown fences, no commentary."#;
     Ok(out)
 }
 
+/// Translate article paragraphs in batch. Input order must match output order.
+pub fn translate_texts(cfg: &AppConfig, texts: &[String]) -> Result<Vec<String>, String> {
+    if texts.is_empty() {
+        return Ok(vec![]);
+    }
+    ensure_configured(cfg)?;
+    let system = r#"You translate English passages to Simplified Chinese for language learners.
+Given a JSON array of English passages, return ONLY a JSON array of Chinese translations in the same order and length.
+Translate faithfully. No markdown fences, no commentary."#;
+    let payload = serde_json::to_string(texts).map_err(|e| e.to_string())?;
+    let raw = chat(cfg, system, &payload)?;
+    let cleaned = raw
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    let out: Vec<String> = serde_json::from_str(cleaned)
+        .map_err(|e| format!("parse paragraph translations: {e}; raw={raw}"))?;
+    if out.len() != texts.len() {
+        return Err(format!(
+            "paragraph translation count mismatch: got {} expected {}",
+            out.len(),
+            texts.len()
+        ));
+    }
+    Ok(out)
+}
+
 pub fn enrich_vocab(cfg: &AppConfig, term: &str, context: &str) -> Result<VocabEnrichment, String> {
     ensure_configured(cfg)?;
     let system = r#"You help English learners. Given a word/phrase and its context sentence, return ONLY valid JSON with keys:

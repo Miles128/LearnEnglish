@@ -16,6 +16,8 @@ type SourceSection = {
   articles: Article[];
 };
 
+const PAGE_SIZE = 60;
+
 export default function Home() {
   const navigate = useNavigate();
   const [category, setCategory] = useState("all");
@@ -23,7 +25,9 @@ export default function Home() {
   const [articles, setArticles] = useState<Article[]>([]);
   const [learningTerms, setLearningTerms] = useState<string[]>([]);
   const [freqBand, setFreqBand] = useState<FreqBand>(3000);
+  const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [importUrl, setImportUrl] = useState("");
   const [importing, setImporting] = useState(false);
@@ -37,27 +41,36 @@ export default function Home() {
     try {
       await ensureLexiconLoaded();
       const [list, learning, cats, cfg] = await Promise.all([
-        api.listArticles(category === "all" ? undefined : category),
+        api.listArticles(
+          category === "all" ? undefined : category,
+          PAGE_SIZE,
+          0,
+        ),
         api.listVocab("learning").catch(() => [] as VocabItem[]),
         api.listFeedCategories().catch(() => [] as FeedCategory[]),
         api.getConfig().catch(() => null),
       ]);
       setArticles(list);
+      setHasMore(list.length >= PAGE_SIZE);
       setLearningTerms(learning.map((v) => v.term));
       setCategories(cats);
       if (cfg && isFreqBand(cfg.freq_band)) setFreqBand(cfg.freq_band);
-      const missing = list.some((a) => !a.title_zh);
-      if (missing) {
-        try {
-          const n = await api.translateMissingTitles();
-          if (n > 0) {
-            const refreshed = await api.listArticles(
-              category === "all" ? undefined : category,
-            );
-            setArticles(refreshed);
+      if (cfg?.api_key) {
+        const missing = list.some((a) => !a.title_zh);
+        if (missing) {
+          try {
+            const n = await api.translateMissingTitles();
+            if (n > 0) {
+              const refreshed = await api.listArticles(
+                category === "all" ? undefined : category,
+                PAGE_SIZE,
+                0,
+              );
+              setArticles(refreshed);
+            }
+          } catch {
+            // LLM 调用失败时忽略
           }
-        } catch {
-          // LLM 未配置时忽略
         }
       }
     } catch (e) {
@@ -71,6 +84,26 @@ export default function Home() {
     void load();
   }, [load]);
 
+  async function loadMore() {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const next = await api.listArticles(
+        category === "all" ? undefined : category,
+        PAGE_SIZE,
+        articles.length,
+      );
+      const seen = new Set(articles.map((a) => a.id));
+      const merged = articles.concat(next.filter((a) => !seen.has(a.id)));
+      setArticles(merged);
+      setHasMore(next.length >= PAGE_SIZE);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
   const sections = useMemo(() => groupBySource(articles), [articles]);
   const tabCategories = useMemo(() => {
     const tabs = [{ id: "all", label: "全部" }];
@@ -79,6 +112,18 @@ export default function Home() {
     }
     return tabs;
   }, [categories]);
+
+  // Recompute known% only when the inputs change, not on every re-render.
+  const knownPctById = useMemo(() => {
+    const map = new Map<string, number | null>();
+    for (const a of articles) {
+      map.set(
+        a.id,
+        estimateKnownPercent(a.content_text, learningTerms, freqBand),
+      );
+    }
+    return map;
+  }, [articles, learningTerms, freqBand]);
 
   async function onRefresh() {
     setRefreshing(true);
@@ -227,11 +272,7 @@ export default function Home() {
             </header>
             <ul className="article-list">
               {sec.articles.map((a) => {
-                const pct = estimateKnownPercent(
-                  a.content_text,
-                  learningTerms,
-                  freqBand,
-                );
+                const pct = knownPctById.get(a.id) ?? null;
                 const pctLabel = formatKnownPercent(pct);
                 return (
                   <li key={a.id}>
@@ -254,6 +295,19 @@ export default function Home() {
           </section>
         ))}
       </div>
+
+      {hasMore && (
+        <div className="load-more-row">
+          <button
+            type="button"
+            className="btn"
+            onClick={() => void loadMore()}
+            disabled={loadingMore}
+          >
+            {loadingMore ? "加载中…" : "加载更多"}
+          </button>
+        </div>
+      )}
 
       <ManageFeedsDrawer
         open={manageOpen}

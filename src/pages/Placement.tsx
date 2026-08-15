@@ -13,24 +13,6 @@ import {
 import { buildPlacementPool } from "../placement/pool";
 import { ensureLexiconLoaded } from "../wordLevels";
 
-const SKIP_KEY = "shiyan_placement_skip";
-
-export function markPlacementSkippedThisSession() {
-  try {
-    sessionStorage.setItem(SKIP_KEY, "1");
-  } catch {
-    /* ignore */
-  }
-}
-
-export function isPlacementSkippedThisSession(): boolean {
-  try {
-    return sessionStorage.getItem(SKIP_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 type Phase = "intro" | "quiz" | "result";
 
 type Question = {
@@ -149,8 +131,18 @@ export default function Placement() {
   }
 
   function onSkip() {
-    markPlacementSkippedThisSession();
-    navigate("/", { replace: true });
+    void (async () => {
+      setError(null);
+      try {
+        // Persist the skip so the placement prompt never nags again.
+        const next: AppConfig = { ...cfg, vocab_placement_skipped: true };
+        await api.saveConfig(next);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        navigate("/", { replace: true });
+      }
+    })();
   }
 
   if (phase === "intro") {
@@ -250,8 +242,9 @@ export default function Placement() {
 
 export function shouldForcePlacement(cfg: {
   vocab_placement_done?: boolean;
+  vocab_placement_skipped?: boolean;
 }): boolean {
   if (cfg.vocab_placement_done) return false;
-  if (isPlacementSkippedThisSession()) return false;
+  if (cfg.vocab_placement_skipped) return false;
   return true;
 }

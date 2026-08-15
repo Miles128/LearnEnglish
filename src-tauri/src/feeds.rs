@@ -7,7 +7,7 @@ use regex::Regex;
 use reqwest::blocking::Client;
 use rusqlite::Connection;
 use serde::Serialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use uuid::Uuid;
 
@@ -20,6 +20,7 @@ const TRUST_RSS_FULLTEXT_CHARS: usize = 2000;
 pub struct RefreshResult {
     pub fetched_feeds: usize,
     pub added_or_updated: usize,
+    pub updated: usize,
     pub skipped_existing: usize,
     pub skipped_short: usize,
     pub skipped_non_english: usize,
@@ -153,6 +154,7 @@ pub fn refresh_feeds(
     let mut result = RefreshResult {
         fetched_feeds: 0,
         added_or_updated: 0,
+        updated: 0,
         skipped_existing: 0,
         skipped_short: 0,
         skipped_non_english: 0,
@@ -179,6 +181,10 @@ pub fn refresh_feeds(
         result.skipped_short += purge_summary_only_articles(&conn)?;
         db::list_article_urls(&conn)?
     };
+    let known_lengths = {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        db::list_article_content_lengths(&conn)?
+    };
 
     for (idx, feed) in enabled.iter().enumerate() {
         let current = idx + 1;
@@ -193,8 +199,8 @@ pub fn refresh_feeds(
         });
 
         result.fetched_feeds += 1;
-        match download_feed_articles(&client, feed, &known_urls) {
-            Ok((articles, stats)) => {
+        match download_feed_articles(&client, feed, &known_urls, &known_lengths) {
+            Ok((articles, updates, stats)) => {
                 result.skipped_existing += stats.skipped_existing;
                 result.skipped_short += stats.skipped_short;
                 result.skipped_non_english += stats.skipped_non_english;
@@ -205,6 +211,11 @@ pub fn refresh_feeds(
                         result.added_or_updated += 1;
                     } else {
                         result.skipped_existing += 1;
+                    }
+                }
+                for update in &updates {
+                    if db::refresh_article_content(&conn, update)? {
+                        result.updated += 1;
                     }
                 }
             }
@@ -315,7 +326,8 @@ fn download_feed_articles(
     client: &Client,
     feed: &FeedSource,
     known_urls: &HashSet<String>,
-) -> Result<(Vec<Article>, DownloadStats), String> {
+    known_lengths: &HashMap<String, usize>,
+) -> Result<(Vec<Article>, Vec<Article>, DownloadStats), String> {
     let bytes = client
         .get(&feed.url)
         .send()
@@ -328,6 +340,7 @@ fn download_feed_articles(
     let parsed = parser::parse(&bytes[..]).map_err(|e| e.to_string())?;
     let feed_language = parsed.language.clone();
     let mut articles = Vec::new();
+    let mut updates = Vec::new();
     let mut stats = DownloadStats {
         skipped_existing: 0,
         skipped_short: 0,
@@ -353,12 +366,6 @@ fn download_feed_articles(
             continue;
         }
 
-        // Already downloaded — skip HTML parse / re-insert.
-        if known_urls.contains(&url) {
-            stats.skipped_existing += 1;
-            continue;
-        }
-
         let title = entry
             .title
             .map(|t| t.content)
@@ -371,6 +378,36 @@ fn download_feed_articles(
             .unwrap_or_default();
 
         let rss_text = html_to_text(&raw_html);
+
+        // Already downloaded — only upgrade when the RSS body itself is now
+        // trusted full-text AND meaningfully longer than what we stored.
+        // Never page-fetch known URLs again (budget preserved for new ones).
+        if known_urls.contains(&url) {
+            let stored_len = known_lengths.get(&url).copied().unwrap_or(0);
+            if rss_text.chars().count() >= TRUST_RSS_FULLTEXT_CHARS
+                && rss_text.chars().count() > stored_len
+            {
+                updates.push(Article {
+                    id: String::new(), // not used by refresh_article_content
+                    url: url.clone(),
+                    title,
+                    title_zh: String::new(),
+                    source: feed.name.clone(),
+                    category: feed.category.clone(),
+                    published_at: entry
+                        .published
+                        .or(entry.updated)
+                        .map(|d| d.to_rfc3339()),
+                    content_text: rss_text,
+                    fetched_at: now.clone(),
+                    origin: "rss".into(),
+                });
+            } else {
+                stats.skipped_existing += 1;
+            }
+            continue;
+        }
+
         // Full-text RSS can be trusted; teaser/summary feeds must fetch the article page.
         // If anti-crawl / paywall leaves us with only the RSS summary, skip — do not ingest teasers.
         let content_text = if rss_text.chars().count() >= TRUST_RSS_FULLTEXT_CHARS {
@@ -417,9 +454,10 @@ fn download_feed_articles(
             published_at,
             content_text,
             fetched_at: now.clone(),
+            origin: "rss".into(),
         });
     }
-    Ok((articles, stats))
+    Ok((articles, updates, stats))
 }
 
 /// Keep English-only articles for learning. Prefer feed/entry language tags;
@@ -474,10 +512,14 @@ fn looks_like_english(title: &str, content: &str) -> bool {
     (latin as f64) / (letters as f64) >= 0.85
 }
 
-fn purge_non_english_articles(conn: &Connection) -> Result<usize, String> {
+pub(crate) fn purge_non_english_articles(conn: &Connection) -> Result<usize, String> {
     let existing = db::list_all_articles(conn)?;
     let mut removed = 0usize;
     for article in existing {
+        // Never purge user-imported articles; refresh only manages RSS-ingested ones.
+        if article.origin != "rss" {
+            continue;
+        }
         if !is_english_article(None, &article.title, &article.content_text) {
             db::delete_article(conn, &article.id)?;
             removed += 1;
@@ -495,6 +537,10 @@ pub(crate) fn purge_summary_only_articles(conn: &Connection) -> Result<usize, St
     let existing = db::list_all_articles(conn)?;
     let mut removed = 0usize;
     for article in existing {
+        // Only purge RSS-ingested teasers; user URL/file imports are kept as-is.
+        if article.origin != "rss" {
+            continue;
+        }
         if is_summary_only_body(&article.content_text) {
             db::delete_article(conn, &article.id)?;
             removed += 1;
@@ -660,6 +706,7 @@ pub fn import_article_from_url(db: &Mutex<Connection>, url: &str) -> Result<Arti
         published_at: None,
         content_text: extracted.text,
         fetched_at: Utc::now().to_rfc3339(),
+        origin: "url".into(),
     };
 
     let conn = db.lock().map_err(|e| e.to_string())?;

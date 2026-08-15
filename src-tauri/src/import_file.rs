@@ -62,6 +62,7 @@ pub fn import_article_from_file(db: &Mutex<Connection>, path: &str) -> Result<Ar
         published_at: None,
         content_text,
         fetched_at: Utc::now().to_rfc3339(),
+        origin: "file".into(),
     };
 
     let conn = db.lock().map_err(|e| e.to_string())?;

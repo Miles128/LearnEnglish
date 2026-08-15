@@ -36,6 +36,8 @@ export type AppConfig = {
   vocab_placement_l?: number | null;
   /** ISO timestamp of last placement. */
   vocab_placement_at?: string | null;
+  /** User dismissed the placement prompt; don't force it again. */
+  vocab_placement_skipped?: boolean;
 } & ReadingPrefs;
 
 export function defaultAppConfig(): AppConfig {
@@ -49,6 +51,7 @@ export function defaultAppConfig(): AppConfig {
     vocab_placement_done: false,
     vocab_placement_l: null,
     vocab_placement_at: null,
+    vocab_placement_skipped: false,
     ...defaultReadingPrefs(),
   };
 }
@@ -63,6 +66,8 @@ export type Article = {
   published_at: string | null;
   content_text: string;
   fetched_at: string;
+  /** Where the article came from: rss | url | file. */
+  origin: "rss" | "url" | "file" | string;
 };
 
 export type FeedSource = {
@@ -127,14 +132,25 @@ export type RefreshResult = {
   skipped_short: number;
   skipped_non_english: number;
   titles_translated: number;
+  /** Articles whose stored body was upgraded to a fuller fetched copy. */
+  updated: number;
+  errors: string[];
+};
+
+export type FullTranslateResult = {
+  rows: TranslationRow[];
   errors: string[];
 };
 
 export const api = {
   getConfig: () => invoke<AppConfig>("get_config"),
   saveConfig: (cfg: AppConfig) => invoke<void>("save_config_cmd", { cfg }),
-  listArticles: (category?: string) =>
-    invoke<Article[]>("list_articles", { category: category ?? null }),
+  listArticles: (category?: string, limit?: number, offset?: number) =>
+    invoke<Article[]>("list_articles", {
+      category: category ?? null,
+      limit: limit ?? null,
+      offset: offset ?? null,
+    }),
   getArticle: (id: string) => invoke<Article | null>("get_article", { id }),
   listFeeds: () => invoke<FeedSource[]>("list_feeds"),
   setFeedEnabled: (id: string, enabled: boolean) =>
@@ -179,7 +195,7 @@ export const api = {
   translateSelection: (articleId: string, text: string) =>
     invoke<TranslationRow>("translate_selection", { articleId, text }),
   translateFullArticle: (articleId: string) =>
-    invoke<TranslationRow[]>("translate_full_article", { articleId }),
+    invoke<FullTranslateResult>("translate_full_article", { articleId }),
   addVocab: (input: {
     term: string;
     contextSentence: string;

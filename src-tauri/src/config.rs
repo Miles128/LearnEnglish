@@ -25,6 +25,9 @@ pub struct AppConfig {
     /// ISO timestamp of the last placement test.
     #[serde(default)]
     pub vocab_placement_at: Option<String>,
+    /// User dismissed the placement prompt; don't force it again.
+    #[serde(default)]
+    pub vocab_placement_skipped: bool,
     /// Reader body font preset (serif / palatino / georgia / newyork / songti / sans).
     #[serde(default = "default_reader_font")]
     pub reader_font: String,
@@ -75,6 +78,7 @@ impl Default for AppConfig {
             vocab_placement_done: false,
             vocab_placement_l: None,
             vocab_placement_at: None,
+            vocab_placement_skipped: false,
             reader_font: default_reader_font(),
             reader_font_size: default_reader_font_size(),
             reader_line_height: default_reader_line_height(),
@@ -126,6 +130,12 @@ pub fn save_config(cfg: &AppConfig) -> Result<(), String> {
     }
     let raw = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
     fs::write(&path, raw).map_err(|e| e.to_string())?;
+    // Keys live here — lock it down to the owner only.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
     Ok(())
 }
 

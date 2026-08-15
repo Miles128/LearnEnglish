@@ -15,7 +15,7 @@ import {
   resolveReadingPrefs,
   type ResolvedReading,
 } from "../readingPrefs";
-import { renderAnnotatedParagraph } from "../annotateText";
+import { AnnotatedPara } from "../annotateText";
 import { shouldRenderMarkdown } from "../markdown";
 import { getTts } from "../tts";
 import {
@@ -189,42 +189,64 @@ export default function Reader() {
     startSpeak({ kind: "word" }, [text]);
   }
 
-  async function showMeaning(opts: {
-    text: string;
-    x: number;
-    y: number;
-    bundledZh?: string;
-  }) {
-    const { text, x, y, bundledZh } = opts;
-    const fromLexicon = bundledZh || lookupWord(text)?.zh;
-    if (fromLexicon) {
-      setPopover({
-        x,
-        y,
-        text,
-        translation: fromLexicon,
-        loading: false,
-      });
-      return;
-    }
+  const showMeaning = useCallback(
+    async function showMeaning(opts: {
+      text: string;
+      x: number;
+      y: number;
+      bundledZh?: string;
+    }) {
+      const { text, x, y, bundledZh } = opts;
+      const fromLexicon = bundledZh || lookupWord(text)?.zh;
+      if (fromLexicon) {
+        setPopover({
+          x,
+          y,
+          text,
+          translation: fromLexicon,
+          loading: false,
+        });
+        return;
+      }
 
-    setPopover({ x, y, text, loading: true });
-    if (!id) return;
-    try {
-      const row = await api.translateSelection(id, text);
-      setPopover((p) =>
-        p && p.text === text
-          ? { ...p, translation: row.translated_text, loading: false }
-          : p,
-      );
-    } catch (err) {
-      setPopover((p) =>
-        p && p.text === text
-          ? { ...p, error: String(err), loading: false }
-          : p,
-      );
-    }
-  }
+      setPopover({ x, y, text, loading: true });
+      if (!id) return;
+      try {
+        const row = await api.translateSelection(id, text);
+        setPopover((p) =>
+          p && p.text === text
+            ? { ...p, translation: row.translated_text, loading: false }
+            : p,
+        );
+      } catch (err) {
+        setPopover((p) =>
+          p && p.text === text
+            ? { ...p, error: String(err), loading: false }
+            : p,
+        );
+      }
+    },
+    [id],
+  );
+
+  const onHardWordClick = useCallback(
+    function onHardWordClick(info: {
+      term: string;
+      display: string;
+      zh?: string;
+      clientX: number;
+      clientY: number;
+    }) {
+      clickGuardRef.current = true;
+      void showMeaning({
+        text: info.term,
+        x: info.clientX || 80,
+        y: info.clientY || 120,
+        bundledZh: info.zh,
+      });
+    },
+    [showMeaning],
+  );
 
   async function toggleFullTranslation() {
     if (!id) return;
@@ -235,12 +257,15 @@ export default function Reader() {
     setBusyFull(true);
     setError(null);
     try {
-      const rows = await api.translateFullArticle(id);
+      const result = await api.translateFullArticle(id);
       const map: Record<string, string> = { ...translations };
-      rows.forEach((r) => {
+      result.rows.forEach((r) => {
         map[r.scope_key] = r.translated_text;
       });
       setTranslations(map);
+      if (result.errors.length > 0) {
+        setError(`部分段落翻译失败（${result.errors.length} 段），其余译文已就绪。`);
+      }
       setShowFullZh(true);
       const all: Record<number, boolean> = {};
       paragraphs.forEach((_, i) => {
@@ -289,22 +314,6 @@ export default function Reader() {
       return;
     }
     await showMeaning({ text, x: e.clientX, y: e.clientY });
-  }
-
-  function onHardWordClick(info: {
-    term: string;
-    display: string;
-    zh?: string;
-    clientX: number;
-    clientY: number;
-  }) {
-    clickGuardRef.current = true;
-    void showMeaning({
-      text: info.term,
-      x: info.clientX || 80,
-      y: info.clientY || 120,
-      bundledZh: info.zh,
-    });
   }
 
   async function addToVocab() {
@@ -412,14 +421,16 @@ export default function Reader() {
                         ),
                         p: ({ children }) => (
                           <p>
-                            {lexReady && typeof children === "string"
-                              ? renderAnnotatedParagraph(
-                                  children,
-                                  prefs,
-                                  vocabTerms,
-                                  onHardWordClick,
-                                )
-                              : children}
+                            {lexReady && typeof children === "string" ? (
+                              <AnnotatedPara
+                                text={children}
+                                prefs={prefs}
+                                learningTerms={vocabTerms}
+                                onHardClick={onHardWordClick}
+                              />
+                            ) : (
+                              children
+                            )}
                           </p>
                         ),
                       }}
@@ -429,9 +440,16 @@ export default function Reader() {
                   </div>
                 ) : (
                   <p>
-                    {lexReady
-                      ? renderAnnotatedParagraph(p, prefs, vocabTerms, onHardWordClick)
-                      : p}
+                    {lexReady ? (
+                      <AnnotatedPara
+                        text={p}
+                        prefs={prefs}
+                        learningTerms={vocabTerms}
+                        onHardClick={onHardWordClick}
+                      />
+                    ) : (
+                      p
+                    )}
                   </p>
                 )}
                 {(showFullZh || visibleParas[i]) && translations[String(i)] && (

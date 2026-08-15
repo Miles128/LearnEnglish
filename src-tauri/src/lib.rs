@@ -29,9 +29,14 @@ fn save_config_cmd(cfg: AppConfig) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn list_articles(state: tauri::State<'_, DbState>, category: Option<String>) -> Result<Vec<Article>, String> {
+fn list_articles(
+    state: tauri::State<'_, DbState>,
+    category: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<Article>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    db::list_articles(&conn, category.as_deref())
+    db::list_articles(&conn, category.as_deref(), limit, offset)
 }
 
 #[tauri::command]
@@ -301,11 +306,17 @@ async fn translate_selection(
     .map_err(|e| e.to_string())?
 }
 
+#[derive(Clone, serde::Serialize)]
+struct FullTranslateResult {
+    rows: Vec<TranslationRow>,
+    errors: Vec<String>,
+}
+
 #[tauri::command]
 async fn translate_full_article(
     app: AppHandle,
     article_id: String,
-) -> Result<Vec<TranslationRow>, String> {
+) -> Result<FullTranslateResult, String> {
     let cfg = config::load_config()?;
     let app_handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -321,39 +332,62 @@ async fn translate_full_article(
 
         let total = paragraphs.len();
         let mut out = Vec::new();
-        for (i, p) in paragraphs.iter().enumerate() {
-            let scope_key = i.to_string();
-            let existing = {
-                let conn = state.0.lock().map_err(|e| e.to_string())?;
-                db::get_translation(&conn, &article_id, "paragraph", &scope_key)?
-            };
-            let row = if let Some(row) = existing {
-                row
-            } else {
-                let translated = vocab::translate_text(&cfg, p)?;
-                let conn = state.0.lock().map_err(|e| e.to_string())?;
-                db::save_translation(
-                    &conn,
-                    &article_id,
-                    "paragraph",
-                    &scope_key,
-                    p,
-                    &translated,
-                    &cfg.model,
-                )?
-            };
-            let _ = app_handle.emit(
-                "translate-progress",
-                TranslateProgress {
-                    article_id: article_id.clone(),
-                    current: i + 1,
-                    total,
-                    scope_key: row.scope_key.clone(),
-                    translated_text: row.translated_text.clone(),
-                    done: false,
-                },
-            );
-            out.push(row);
+        let mut errors = Vec::new();
+
+        for chunk_start in (0..total).step_by(8) {
+            let indices: Vec<usize> =
+                (chunk_start..(chunk_start + 8).min(total)).collect();
+            let mut missing: Vec<usize> = Vec::new();
+            let mut missing_texts: Vec<String> = Vec::new();
+            for &i in &indices {
+                let scope_key = i.to_string();
+                let existing = {
+                    let conn = state.0.lock().map_err(|e| e.to_string())?;
+                    db::get_translation(&conn, &article_id, "paragraph", &scope_key)?
+                };
+                match existing {
+                    Some(row) => out.push(row),
+                    None => {
+                        missing.push(i);
+                        missing_texts.push(paragraphs[i].clone());
+                    }
+                }
+            }
+            if missing_texts.is_empty() {
+                continue;
+            }
+            match vocab::translate_texts(&cfg, &missing_texts) {
+                Ok(translated) => {
+                    for (i, text) in missing.iter().zip(translated.iter()) {
+                        let scope_key = i.to_string();
+                        let row = {
+                            let conn = state.0.lock().map_err(|e| e.to_string())?;
+                            db::save_translation(
+                                &conn,
+                                &article_id,
+                                "paragraph",
+                                &scope_key,
+                                &paragraphs[*i],
+                                text,
+                                &cfg.model,
+                            )?
+                        };
+                        let _ = app_handle.emit(
+                            "translate-progress",
+                            TranslateProgress {
+                                article_id: article_id.clone(),
+                                current: *i + 1,
+                                total,
+                                scope_key: row.scope_key.clone(),
+                                translated_text: row.translated_text.clone(),
+                                done: false,
+                            },
+                        );
+                        out.push(row);
+                    }
+                }
+                Err(e) => errors.push(e),
+            }
         }
         let _ = app_handle.emit(
             "translate-progress",
@@ -366,7 +400,7 @@ async fn translate_full_article(
                 done: true,
             },
         );
-        Ok(out)
+        Ok(FullTranslateResult { rows: out, errors })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -385,23 +419,79 @@ struct AddVocabInput {
 #[tauri::command]
 fn add_vocab(state: tauri::State<'_, DbState>, input: AddVocabInput) -> Result<VocabItem, String> {
     let cfg = config::load_config()?;
-    let enrichment: VocabEnrichment = if input.definition_zh.is_some()
+    let term = input.term.trim().to_string();
+    if term.is_empty() {
+        return Err("词条不能为空".into());
+    }
+    let definition_zh = input.definition_zh.clone().unwrap_or_default();
+    let word_type = input.word_type.clone().unwrap_or_default();
+    let collocations = input.collocations.clone().unwrap_or_default();
+    let explicit = input.definition_zh.is_some()
         && input.word_type.is_some()
-        && input.collocations.is_some()
-    {
+        && input.collocations.is_some();
+    let mut enrichment = if explicit {
         VocabEnrichment {
-            definition_zh: input.definition_zh.unwrap_or_default(),
-            word_type: input.word_type.unwrap_or_else(|| "phrase".into()),
-            collocations: input.collocations.unwrap_or_default(),
+            definition_zh: definition_zh.clone(),
+            word_type: if word_type.is_empty() {
+                "phrase".into()
+            } else {
+                word_type.clone()
+            },
+            collocations,
         }
     } else {
-        vocab::enrich_vocab(&cfg, &input.term, &input.context_sentence)?
+        match vocab::enrich_vocab(&cfg, &term, &input.context_sentence) {
+            Ok(e) => e,
+            // LLM unavailable (no key / network): degrade to whatever we already know
+            // so adding a word never hard-fails on enrichment.
+            Err(_) => VocabEnrichment {
+                definition_zh: definition_zh.clone(),
+                word_type: if word_type.is_empty() {
+                    "phrase".into()
+                } else {
+                    word_type.clone()
+                },
+                collocations: collocations.clone(),
+            },
+        }
     };
+    if enrichment.definition_zh.is_empty() {
+        enrichment.definition_zh = definition_zh.clone();
+    }
+    if enrichment.word_type.is_empty() {
+        enrichment.word_type = "phrase".into();
+    }
 
     let now = Utc::now().to_rfc3339();
+    let conn = state.0.lock().map_err(|e| e.to_string())?;
+
+    // Dedup by term: merge new info into the existing entry instead of duplicating.
+    if let Some(mut existing) = db::get_vocab_by_term(&conn, &term)? {
+        if existing.definition_zh.is_empty() {
+            existing.definition_zh = enrichment.definition_zh.clone();
+        }
+        if existing.word_type.is_empty() {
+            existing.word_type = enrichment.word_type.clone();
+        }
+        for c in &enrichment.collocations {
+            let c = c.trim();
+            if !c.is_empty() && !existing.collocations.contains(&c.to_string()) {
+                existing.collocations.push(c.to_string());
+            }
+        }
+        if existing.context_sentence.is_empty() {
+            existing.context_sentence = input.context_sentence.clone();
+        }
+        if existing.article_id.is_none() {
+            existing.article_id = input.article_id.clone();
+        }
+        db::update_vocab_meta(&conn, &existing)?;
+        return Ok(existing);
+    }
+
     let item = VocabItem {
         id: Uuid::new_v4().to_string(),
-        term: input.term.trim().to_string(),
+        term,
         definition_zh: enrichment.definition_zh,
         word_type: enrichment.word_type,
         collocations: enrichment.collocations,
@@ -414,7 +504,6 @@ fn add_vocab(state: tauri::State<'_, DbState>, input: AddVocabInput) -> Result<V
         next_review_at: now.clone(),
         created_at: now,
     };
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
     db::insert_vocab(&conn, &item)?;
     Ok(item)
 }

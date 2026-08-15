@@ -19,6 +19,13 @@ pub struct Article {
     pub published_at: Option<String>,
     pub content_text: String,
     pub fetched_at: String,
+    /// rss = auto-ingested; url / file = user-imported (never purged by refresh).
+    #[serde(default = "default_article_origin")]
+    pub origin: String,
+}
+
+fn default_article_origin() -> String {
+    "rss".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,6 +88,7 @@ pub fn db_path(app_data: PathBuf) -> PathBuf {
 
 pub fn open_db(path: PathBuf) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
+    let _ = conn.pragma_update(None, "journal_mode", "WAL");
     conn.execute_batch(
         r#"
         PRAGMA foreign_keys = ON;
@@ -93,7 +101,8 @@ pub fn open_db(path: PathBuf) -> Result<Connection, String> {
             category TEXT NOT NULL,
             published_at TEXT,
             content_text TEXT NOT NULL,
-            fetched_at TEXT NOT NULL
+            fetched_at TEXT NOT NULL,
+            origin TEXT NOT NULL DEFAULT 'rss'
         );
         CREATE TABLE IF NOT EXISTS feed_sources (
             id TEXT PRIMARY KEY,
@@ -138,6 +147,8 @@ pub fn open_db(path: PathBuf) -> Result<Connection, String> {
         CREATE INDEX IF NOT EXISTS idx_articles_category ON articles(category);
         CREATE INDEX IF NOT EXISTS idx_vocab_status ON vocab(status);
         CREATE INDEX IF NOT EXISTS idx_vocab_next ON vocab(next_review_at);
+        CREATE INDEX IF NOT EXISTS idx_translations_article ON translations(article_id);
+        CREATE INDEX IF NOT EXISTS idx_vocab_article ON vocab(article_id);
         "#,
     )
     .map_err(|e| e.to_string())?;
@@ -152,6 +163,10 @@ pub fn open_db(path: PathBuf) -> Result<Connection, String> {
     );
     let _ = conn.execute(
         "ALTER TABLE feed_sources ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE articles ADD COLUMN origin TEXT NOT NULL DEFAULT 'rss'",
         [],
     );
     seed_feed_categories(&conn)?;
@@ -905,44 +920,41 @@ pub fn curated_feeds() -> Vec<FeedSource> {
     ]
 }
 
+const ARTICLE_COLS: &str =
+    "id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin";
+
 pub fn list_articles(
     conn: &Connection,
     category: Option<&str>,
+    limit: Option<i64>,
+    offset: Option<i64>,
 ) -> Result<Vec<Article>, String> {
-    let mut sql = String::from(
-        "SELECT id,url,title,title_zh,source,category,published_at,content_text,fetched_at FROM articles",
-    );
-    let mut params_vec: Vec<String> = vec![];
+    let mut sql = format!("SELECT {ARTICLE_COLS} FROM articles");
+    let mut params: Vec<rusqlite::types::Value> = vec![];
     if let Some(cat) = category {
         if cat != "all" {
-            sql.push_str(" WHERE category=?1");
-            params_vec.push(cat.to_string());
+            sql.push_str(" WHERE category=?");
+            params.push(rusqlite::types::Value::Text(cat.to_string()));
         }
     }
-    sql.push_str(" ORDER BY source ASC, fetched_at DESC, published_at DESC LIMIT 400");
+    sql.push_str(" ORDER BY source ASC, fetched_at DESC, published_at DESC");
+    sql.push_str(" LIMIT ? OFFSET ?");
+    params.push(rusqlite::types::Value::Integer(limit.unwrap_or(400)));
+    params.push(rusqlite::types::Value::Integer(offset.unwrap_or(0)));
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
-    let rows = if params_vec.is_empty() {
-        stmt.query_map([], map_article)
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?
-    } else {
-        stmt.query_map(params![params_vec[0]], map_article)
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?
-    };
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(params.iter()), map_article)
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     Ok(rows)
 }
 
 /// All articles with no LIMIT — used for maintenance purges on refresh.
 pub fn list_all_articles(conn: &Connection) -> Result<Vec<Article>, String> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id,url,title,title_zh,source,category,published_at,content_text,fetched_at
-             FROM articles",
-        )
+        .prepare(&format!("SELECT {ARTICLE_COLS} FROM articles"))
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], map_article)
@@ -963,12 +975,13 @@ fn map_article(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
         published_at: row.get(6)?,
         content_text: row.get(7)?,
         fetched_at: row.get(8)?,
+        origin: row.get(9)?,
     })
 }
 
 pub fn get_article(conn: &Connection, id: &str) -> Result<Option<Article>, String> {
     conn.query_row(
-        "SELECT id,url,title,title_zh,source,category,published_at,content_text,fetched_at FROM articles WHERE id=?1",
+        &format!("SELECT {ARTICLE_COLS} FROM articles WHERE id=?1"),
         params![id],
         map_article,
     )
@@ -978,7 +991,7 @@ pub fn get_article(conn: &Connection, id: &str) -> Result<Option<Article>, Strin
 
 pub fn get_article_by_url(conn: &Connection, url: &str) -> Result<Option<Article>, String> {
     conn.query_row(
-        "SELECT id,url,title,title_zh,source,category,published_at,content_text,fetched_at FROM articles WHERE url=?1",
+        &format!("SELECT {ARTICLE_COLS} FROM articles WHERE url=?1"),
         params![url],
         map_article,
     )
@@ -998,13 +1011,28 @@ pub fn list_article_urls(conn: &Connection) -> Result<std::collections::HashSet<
     Ok(rows)
 }
 
+/// url → stored body length in bytes (used to refresh stale RSS bodies).
+pub fn list_article_content_lengths(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<String, usize>, String> {
+    let mut stmt = conn
+        .prepare("SELECT url, LENGTH(content_text) FROM articles")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize)))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<std::collections::HashMap<_, _>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
 /// Insert only when `url` is new. Returns `true` if inserted, `false` if already present.
 /// Idempotent: never overwrites existing content / translations.
 pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, String> {
     let changed = conn
         .execute(
-            "INSERT INTO articles (id,url,title,title_zh,source,category,published_at,content_text,fetched_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+            "INSERT INTO articles (id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
              ON CONFLICT(url) DO NOTHING",
             params![
                 a.id,
@@ -1015,8 +1043,22 @@ pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, Str
                 a.category,
                 a.published_at,
                 a.content_text,
-                a.fetched_at
+                a.fetched_at,
+                a.origin
             ],
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(changed > 0)
+}
+
+/// Refresh an existing RSS article when a longer full-text body is available.
+/// Keeps id / url / title_zh / source / category / published_at / origin intact.
+pub fn refresh_article_content(conn: &Connection, a: &Article) -> Result<bool, String> {
+    let changed = conn
+        .execute(
+            "UPDATE articles SET title=?1, content_text=?2, fetched_at=?3
+             WHERE id=?4 AND content_text <> ?2",
+            params![a.title, a.content_text, a.fetched_at, a.id],
         )
         .map_err(|e| e.to_string())?;
     Ok(changed > 0)
@@ -1034,6 +1076,12 @@ pub fn delete_article(conn: &Connection, id: &str) -> Result<(), String> {
         params![id],
     )
     .map_err(|e| e.to_string())?;
+    // Keep learned words, just detach them from the removed article.
+    conn.execute(
+        "UPDATE vocab SET article_id=NULL WHERE article_id=?1",
+        params![id],
+    )
+    .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM articles WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
     Ok(())
@@ -1042,7 +1090,7 @@ pub fn delete_article(conn: &Connection, id: &str) -> Result<(), String> {
 pub fn articles_missing_title_zh(conn: &Connection, limit: usize) -> Result<Vec<Article>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id,url,title,title_zh,source,category,published_at,content_text,fetched_at
+            "SELECT id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin
              FROM articles
              WHERE IFNULL(title_zh,'') = ''
              ORDER BY fetched_at DESC
@@ -1432,6 +1480,33 @@ pub fn get_vocab(conn: &Connection, id: &str) -> Result<Option<VocabItem>, Strin
     conn.query_row(&sql, params![id], map_vocab)
         .optional()
         .map_err(|e| e.to_string())
+}
+
+/// Case-insensitive lookup by term (oldest row wins).
+pub fn get_vocab_by_term(conn: &Connection, term: &str) -> Result<Option<VocabItem>, String> {
+    let sql = format!("{VOCAB_SELECT} WHERE lower(term)=lower(?1) ORDER BY created_at ASC LIMIT 1");
+    conn.query_row(&sql, params![term.trim()], map_vocab)
+        .optional()
+        .map_err(|e| e.to_string())
+}
+
+/// Update learner-facing fields when an existing term is re-added.
+pub fn update_vocab_meta(conn: &Connection, item: &VocabItem) -> Result<(), String> {
+    let collocations_json =
+        serde_json::to_string(&item.collocations).map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE vocab SET definition_zh=?1, word_type=?2, collocations_json=?3, context_sentence=?4, article_id=?5 WHERE id=?6",
+        params![
+            item.definition_zh,
+            item.word_type,
+            collocations_json,
+            item.context_sentence,
+            item.article_id,
+            item.id
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 pub fn update_vocab_review(conn: &Connection, item: &VocabItem) -> Result<(), String> {

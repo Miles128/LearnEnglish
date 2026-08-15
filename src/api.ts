@@ -1,4 +1,8 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import {
+  defaultReadingPrefs,
+  type ReadingPrefs,
+} from "./readingPrefs";
 
 function isTauri(): boolean {
   return (
@@ -32,7 +36,22 @@ export type AppConfig = {
   vocab_placement_l?: number | null;
   /** ISO timestamp of last placement. */
   vocab_placement_at?: string | null;
-};
+} & ReadingPrefs;
+
+export function defaultAppConfig(): AppConfig {
+  return {
+    base_url: "https://api.openai.com/v1",
+    api_key: "",
+    model: "gpt-4o-mini",
+    disabled_feeds: [],
+    cefr_level: "B1",
+    freq_band: 3000,
+    vocab_placement_done: false,
+    vocab_placement_l: null,
+    vocab_placement_at: null,
+    ...defaultReadingPrefs(),
+  };
+}
 
 export type Article = {
   id: string;

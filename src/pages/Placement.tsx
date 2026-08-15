@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, AppConfig } from "../api";
+import { api, defaultAppConfig, type AppConfig } from "../api";
 import {
   L0,
   PLACEMENT_TOTAL,
@@ -39,17 +39,7 @@ type Question = {
   correctIndex: number;
 };
 
-const defaultCfg = (): AppConfig => ({
-  base_url: "https://api.openai.com/v1",
-  api_key: "",
-  model: "gpt-4o-mini",
-  disabled_feeds: [],
-  cefr_level: "B1",
-  freq_band: 3000,
-  vocab_placement_done: false,
-  vocab_placement_l: null,
-  vocab_placement_at: null,
-});
+const defaultCfg = defaultAppConfig;
 
 export default function Placement() {
   const navigate = useNavigate();

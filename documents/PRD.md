@@ -76,9 +76,11 @@
 
 ## 7. 设置
 
-`config.local.json`（gitignore）：`base_url` / `api_key` / `model` / `cefr_level` / `freq_band`。示例见 `config.local.json.example`。
+`config.local.json`（gitignore）：`base_url` / `api_key` / `model` / `cefr_level` / `freq_band` / 阅读排版（`reader_font` / `reader_font_size` / `reader_line_height` / `reader_line_width`）。示例见 `config.local.json.example`。
 
 默认难度：CEFR **B1** + 词频 **3k**。
+
+默认排版：衬线 Iowan、18px、行距 1.75、行宽适中（约 68 字符）。
 
 ## 8. 技术约束
 
@@ -104,7 +106,7 @@
 - [ ] 学习中的生词在正文中有高亮，点击可查看释义
 - [ ] 列表/阅读页显示「约认识 N%」
 - [ ] 可粘贴公开 URL 或导入本地 txt/pdf/docx 全文（付费墙 / 扫描 PDF 跳过）
-- [ ] 设置可改 CEFR / 词频并写入 `config.local.json`
+- [ ] 设置可改 CEFR / 词频 / 阅读排版（字体、字号、行距、行宽）并写入 `config.local.json`
 - [ ] `pnpm test` 与 `cargo test` 通过
 
 ## 11. 成功标准（个人）

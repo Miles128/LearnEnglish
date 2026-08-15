@@ -9,6 +9,12 @@ import {
 import Markdown from "react-markdown";
 import { Link, useParams } from "react-router-dom";
 import { api, Article, TranslationRow } from "../api";
+import {
+  defaultReadingPrefs,
+  readingCssVars,
+  resolveReadingPrefs,
+  type ResolvedReading,
+} from "../readingPrefs";
 import { renderAnnotatedParagraph } from "../annotateText";
 import { shouldRenderMarkdown } from "../markdown";
 import { getTts } from "../tts";
@@ -42,6 +48,9 @@ export default function Reader() {
   const [translations, setTranslations] = useState<Record<string, string>>({});
   const [vocabTerms, setVocabTerms] = useState<string[]>([]);
   const [prefs, setPrefs] = useState<DifficultyPrefs>(defaultDifficultyPrefs);
+  const [reading, setReading] = useState<ResolvedReading>(() =>
+    resolveReadingPrefs(defaultReadingPrefs()),
+  );
   const [lexReady, setLexReady] = useState(false);
   const [showFullZh, setShowFullZh] = useState(false);
   const [visibleParas, setVisibleParas] = useState<Record<number, boolean>>({});
@@ -71,8 +80,10 @@ export default function Reader() {
         cefrLevel: isCefrLevel(cfg.cefr_level) ? cfg.cefr_level : "B1",
         freqBand: isFreqBand(cfg.freq_band) ? cfg.freq_band : 3000,
       });
+      setReading(resolveReadingPrefs(cfg));
     } catch {
       setPrefs(defaultDifficultyPrefs());
+      setReading(resolveReadingPrefs(defaultReadingPrefs()));
     }
   }, []);
 
@@ -328,7 +339,11 @@ export default function Reader() {
   const articleSpeaking = speaking && speakTarget?.kind === "article";
 
   return (
-    <div className="page reader" ref={rootRef}>
+    <div
+      className={`page reader${reading.fullWidth ? " reader-full" : ""}`}
+      ref={rootRef}
+      style={readingCssVars(reading)}
+    >
       <header className="page-header">
         <div>
           <Link to="/" className="back">

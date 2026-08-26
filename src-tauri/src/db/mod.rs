@@ -68,6 +68,9 @@ pub struct Article {
     /// rss = auto-ingested; url / file = user-imported (never purged by refresh).
     #[serde(default = "default_article_origin")]
     pub origin: String,
+    /// LLM-generated Simplified Chinese blurb, at most 50 characters.
+    #[serde(default)]
+    pub summary_zh: String,
 }
 
 fn default_article_origin() -> String {
@@ -223,7 +226,7 @@ const LEGACY_COLUMN_ADDITIONS: &[&str] = &[
 /// Version-gated migrations. To add one: raise `LATEST_VERSION` and apply its
 /// DDL inside `migrate` when `stored < N`. Stamp each version with its own
 /// number (never `LATEST_VERSION`) so later steps are not skipped.
-const LATEST_VERSION: i64 = 3;
+const LATEST_VERSION: i64 = 4;
 
 fn migrate(conn: &Connection) -> Result<(), String> {
     let mut stored: i64 = conn
@@ -265,6 +268,21 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         conn.pragma_update(None, "user_version", 3)
             .map_err(|e| e.to_string())?;
         stored = 3;
+    }
+
+    if stored < 4 {
+        if let Err(e) = conn.execute(
+            "ALTER TABLE articles ADD COLUMN summary_zh TEXT NOT NULL DEFAULT ''",
+            [],
+        ) {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                return Err(msg);
+            }
+        }
+        conn.pragma_update(None, "user_version", 4)
+            .map_err(|e| e.to_string())?;
+        stored = 4;
     }
 
     if stored < LATEST_VERSION {

@@ -64,6 +64,7 @@ pub fn import_article_from_file(db: &DbState, path: &str) -> Result<Article, Str
         content_text,
         fetched_at: Utc::now().to_rfc3339(),
         origin: "file".into(),
+        summary_zh: String::new(),
     };
 
     let conn = db.lock_write()?;

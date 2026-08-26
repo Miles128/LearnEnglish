@@ -4,4 +4,8 @@ export type Article = { id: string, url: string, title: string, title_zh: string
 /**
  * rss = auto-ingested; url / file = user-imported (never purged by refresh).
  */
-origin: string, };
+origin: string, 
+/**
+ * LLM-generated Simplified Chinese blurb, at most 50 characters.
+ */
+summary_zh: string, };

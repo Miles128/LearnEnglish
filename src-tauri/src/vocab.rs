@@ -119,6 +119,68 @@ Translate faithfully. No markdown fences, no commentary."#;
     Ok(out)
 }
 
+pub const CARD_SUMMARY_MAX_CHARS: usize = 50;
+const CARD_EXCERPT_CHARS: usize = 400;
+
+/// Truncate to at most `max_chars` Unicode scalars, then trim.
+pub fn clip_zh(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect::<String>().trim().to_string()
+}
+
+#[derive(Serialize)]
+pub struct ArticleCardIn {
+    pub title: String,
+    pub excerpt: String,
+}
+
+#[derive(Deserialize, Default)]
+pub struct ArticleCardOut {
+    #[serde(default)]
+    pub title_zh: String,
+    #[serde(default)]
+    pub summary_zh: String,
+}
+
+pub fn card_from_article(title: &str, content_text: &str) -> ArticleCardIn {
+    ArticleCardIn {
+        title: title.to_string(),
+        excerpt: clip_zh(content_text, CARD_EXCERPT_CHARS),
+    }
+}
+
+/// Batch: Chinese title + ≤50-char Chinese summary. Input order = output order.
+pub fn translate_article_cards(
+    cfg: &AppConfig,
+    cards: &[ArticleCardIn],
+) -> Result<Vec<ArticleCardOut>, String> {
+    if cards.is_empty() {
+        return Ok(vec![]);
+    }
+    ensure_configured(cfg)?;
+    let system = r#"You write Simplified Chinese metadata for English articles for language learners.
+Given a JSON array of objects {title, excerpt}, return ONLY a JSON array of the same length.
+Each item must be {"title_zh":"<Chinese title>","summary_zh":"<Chinese synopsis>"}.
+summary_zh must be a faithful one-sentence synopsis of the excerpt, at most 50 Chinese characters (no ellipsis padding, no quotes).
+No markdown fences, no commentary."#;
+    let payload = serde_json::to_string(cards).map_err(|e| e.to_string())?;
+    let out: Vec<ArticleCardOut> = chat_json(cfg, system, &payload, "article cards")?;
+    if out.len() != cards.len() {
+        return Err(format!(
+            "article card count mismatch: got {} expected {}",
+            out.len(),
+            cards.len()
+        ));
+    }
+    Ok(out
+        .into_iter()
+        .map(|mut c| {
+            c.title_zh = c.title_zh.trim().to_string();
+            c.summary_zh = clip_zh(&c.summary_zh, CARD_SUMMARY_MAX_CHARS);
+            c
+        })
+        .collect())
+}
+
 pub fn enrich_vocab(cfg: &AppConfig, term: &str, context: &str) -> Result<VocabEnrichment, String> {
     ensure_configured(cfg)?;
     let system = r#"You help English learners. Given a word/phrase and its context sentence, return ONLY valid JSON with keys:
@@ -308,4 +370,18 @@ fn chat(cfg: &AppConfig, system: &str, user: &str) -> Result<String, String> {
         .first()
         .and_then(|c| c.message.content.clone())
         .ok_or_else(|| "LLM returned empty content".into())
+}
+
+#[cfg(test)]
+mod clip_tests {
+    use super::clip_zh;
+
+    #[test]
+    fn clip_zh_counts_unicode_scalars() {
+        assert_eq!(clip_zh("abcdefghij", 5), "abcde");
+        assert_eq!(clip_zh("一二三四五六七八九十", 5), "一二三四五");
+        assert_eq!(clip_zh("  短简介  ", 50), "短简介");
+        let long: String = "字".repeat(80);
+        assert_eq!(clip_zh(&long, 50).chars().count(), 50);
+    }
 }

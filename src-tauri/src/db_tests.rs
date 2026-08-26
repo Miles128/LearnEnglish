@@ -15,6 +15,7 @@ fn sample_article(id: &str) -> db::Article {
         content_text: "word ".repeat(100),
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
     }
 }
 
@@ -56,6 +57,7 @@ fn db_seeds_feeds_and_stores_article() {
         content_text: "word ".repeat(100),
         fetched_at: chrono::Utc::now().to_rfc3339(),
         origin: "rss".into(),
+        summary_zh: String::new(),
     };
     db::upsert_article(&conn, &article).unwrap();
     let list = db::list_articles(&conn, Some("tech"), None, None).unwrap();
@@ -153,6 +155,7 @@ fn insert_article_if_new_is_idempotent() {
         content_text: "original content that should stay".into(),
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
     };
     assert!(db::insert_article_if_new(&conn, &first).unwrap());
 
@@ -167,6 +170,7 @@ fn insert_article_if_new_is_idempotent() {
         content_text: "should not overwrite".into(),
         fetched_at: "2024-06-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
     };
     assert!(!db::insert_article_if_new(&conn, &second).unwrap());
 
@@ -197,6 +201,7 @@ fn list_article_urls_supports_incremental_skip() {
         content_text: "x".repeat(50),
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
     };
     db::insert_article_if_new(&conn, &a).unwrap();
     let urls = db::list_article_urls(&conn).unwrap();
@@ -249,6 +254,7 @@ fn purge_summary_only_removes_teasers_keeps_fulltext() {
         content_text: "a".repeat(500), // mid-length RSS summary
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
     };
     let full = db::Article {
         id: "full".into(),
@@ -261,6 +267,7 @@ fn purge_summary_only_removes_teasers_keeps_fulltext() {
         content_text: "word ".repeat(500), // ≥ 2000 chars
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
     };
     db::insert_article_if_new(&conn, &teaser).unwrap();
     db::insert_article_if_new(&conn, &full).unwrap();
@@ -293,6 +300,7 @@ fn purge_never_touches_user_imported_articles() {
             content_text: "a".repeat(500), // would be purged if origin were rss
             fetched_at: "2020-01-01T00:00:00Z".into(),
             origin: origin.into(),
+            summary_zh: String::new(),
         };
         db::insert_article_if_new(&conn, &a).unwrap();
     }
@@ -326,8 +334,10 @@ fn refresh_article_content_updates_longer_body() {
         content_text: "short body".into(),
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
     };
     db::insert_article_if_new(&conn, &a).unwrap();
+    db::set_article_summary_zh(&conn, "r1", "旧简介").unwrap();
 
     let longer = "word ".repeat(500);
     // The refresh path builds the update struct with an empty id; matching must
@@ -343,6 +353,7 @@ fn refresh_article_content_updates_longer_body() {
         content_text: longer.clone(),
         fetched_at: "2024-01-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
     };
     let changed = db::refresh_article_content(&conn, &update).unwrap();
     assert!(changed);
@@ -350,6 +361,7 @@ fn refresh_article_content_updates_longer_body() {
     assert_eq!(stored.title, "New Title");
     assert_eq!(stored.content_text, longer);
     assert_eq!(stored.title_zh, "旧题", "title_zh must be preserved");
+    assert_eq!(stored.summary_zh, "", "stale summary cleared on body refresh");
     assert_eq!(stored.origin, "rss");
 
     // Idempotent: same body is a no-op.
@@ -375,6 +387,7 @@ fn list_articles_paginates() {
             content_text: "x".repeat(50),
             fetched_at: format!("2020-01-0{}T00:00:00Z", i + 1),
             origin: "rss".into(),
+        summary_zh: String::new(),
         };
         db::insert_article_if_new(&conn, &a).unwrap();
     }
@@ -636,5 +649,46 @@ fn article_view_loads_paragraphs_and_translations() {
     assert!(crate::commands::articles::load_article_view(&conn, "missing")
         .unwrap()
         .is_none());
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn schema_adds_summary_zh_column() {
+    let path = temp_dir().join(format!("le-summary-col-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    let has: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('articles') WHERE name='summary_zh'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(has, 1, "articles.summary_zh should exist after migrate");
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 4);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn summary_zh_roundtrips_and_missing_query() {
+    let path = temp_dir().join(format!("le-summary-zh-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    let mut a = sample_article("s1");
+    a.title_zh = "已有译题".into();
+    a.summary_zh = String::new();
+    db::insert_article_if_new(&conn, &a).unwrap();
+
+    let missing = db::articles_missing_card_zh(&conn, 40).unwrap();
+    assert_eq!(missing.len(), 1, "empty summary still needs a card fill");
+    assert_eq!(missing[0].id, "s1");
+
+    db::set_article_summary_zh(&conn, "s1", "这是一条不超过五十字的中文简介").unwrap();
+    let stored = db::get_article(&conn, "s1").unwrap().expect("exists");
+    assert_eq!(stored.title_zh, "已有译题");
+    assert_eq!(stored.summary_zh, "这是一条不超过五十字的中文简介");
+    assert!(db::articles_missing_card_zh(&conn, 40).unwrap().is_empty());
+
     let _ = std::fs::remove_file(path);
 }

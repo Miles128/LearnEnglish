@@ -46,7 +46,7 @@ export default function Home() {
       setArticles(list);
       setHasMore(list.length >= PAGE_SIZE);
       setCategories(cats);
-      // Note: missing title_zh is filled by the refresh pipeline
+      // Note: missing title_zh / summary_zh is filled by the refresh pipeline
       // (feeds::fill_missing_title_translations), never on page load.
     } catch (e) {
       setError(String(e));
@@ -110,7 +110,7 @@ export default function Home() {
       setMessage(
         `新增 ${result.added_or_updated}` +
           (result.skipped_existing ? ` · 已有 ${result.skipped_existing}` : "") +
-          (result.titles_translated ? ` · 译题 ${result.titles_translated}` : "") +
+          (result.titles_translated ? ` · 译题/简介 ${result.titles_translated}` : "") +
           (result.errors.length ? ` · ${result.errors.length} 个问题` : ""),
       );
       await load();

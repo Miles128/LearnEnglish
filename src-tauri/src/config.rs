@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct AppConfig {
     pub base_url: String,
     pub api_key: String,
@@ -87,6 +89,9 @@ impl Default for AppConfig {
     }
 }
 
+/// Packaged-app data dir. Must match `identifier` in tauri.conf.json.
+const BUNDLE_ID_DIR: &str = "com.sihai.learnenglish";
+
 pub fn config_path() -> PathBuf {
     if let Ok(p) = std::env::var("LEARNENGLISH_CONFIG") {
         return PathBuf::from(p);
@@ -102,10 +107,11 @@ pub fn config_path() -> PathBuf {
             return c;
         }
     }
-    // Packaged app fallback: ~/Library/Application Support/com.sihai.learnenglish/
+    // Packaged app fallback: ~/Library/Application Support/<BUNDLE_ID_DIR>/
     if let Some(home) = std::env::var_os("HOME") {
         let dir = PathBuf::from(home)
-            .join("Library/Application Support/com.sihai.learnenglish");
+            .join("Library/Application Support")
+            .join(BUNDLE_ID_DIR);
         let _ = fs::create_dir_all(&dir);
         return dir.join("config.local.json");
     }
@@ -122,13 +128,16 @@ pub fn load_config() -> Result<AppConfig, String> {
 }
 
 pub fn save_config(cfg: &AppConfig) -> Result<(), String> {
+    let mut cfg = cfg.clone();
+    // Legacy field: enablement lives on feed_sources.enabled only.
+    cfg.disabled_feeds.clear();
     let path = config_path();
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
     }
-    let raw = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
+    let raw = serde_json::to_string_pretty(&cfg).map_err(|e| e.to_string())?;
     fs::write(&path, raw).map_err(|e| e.to_string())?;
     // Keys live here — lock it down to the owner only.
     #[cfg(unix)]
@@ -157,5 +166,18 @@ mod tests {
         assert_eq!(cfg.reader_line_width, "medium");
         assert_eq!(cfg.cefr_level, "B1");
         assert_eq!(cfg.freq_band, 3000);
+        assert!(cfg.disabled_feeds.is_empty());
+    }
+
+    #[test]
+    fn legacy_disabled_feeds_still_deserialize() {
+        let raw = r#"{
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "x",
+            "model": "gpt-4o-mini",
+            "disabled_feeds": ["vox"]
+        }"#;
+        let cfg: AppConfig = serde_json::from_str(raw).unwrap();
+        assert_eq!(cfg.disabled_feeds, vec!["vox"]);
     }
 }

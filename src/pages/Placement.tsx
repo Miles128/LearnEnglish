@@ -234,12 +234,3 @@ export default function Placement() {
     </div>
   );
 }
-
-export function shouldForcePlacement(cfg: {
-  vocab_placement_done?: boolean;
-  vocab_placement_skipped?: boolean;
-}): boolean {
-  if (cfg.vocab_placement_done) return false;
-  if (cfg.vocab_placement_skipped) return false;
-  return true;
-}

@@ -60,21 +60,33 @@ export default function Vocab() {
   }
 
   async function markMastered(id: string) {
-    await api.setVocabStatus(id, "mastered");
-    await load();
-    await refreshLearningTerms();
+    try {
+      await api.setVocabStatus(id, "mastered");
+      await load();
+      await refreshLearningTerms();
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   async function restore(id: string) {
-    await api.setVocabStatus(id, "learning");
-    await load();
-    await refreshLearningTerms();
+    try {
+      await api.setVocabStatus(id, "learning");
+      await load();
+      await refreshLearningTerms();
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   async function remove(id: string) {
-    await api.deleteVocab(id);
-    await load();
-    await refreshLearningTerms();
+    try {
+      await api.deleteVocab(id);
+      await load();
+      await refreshLearningTerms();
+    } catch (e) {
+      setError(String(e));
+    }
   }
 
   return (
@@ -158,7 +170,12 @@ export default function Vocab() {
           {current && (
             <>
               <p className="muted">剩余 {due.length} 张</p>
-              <div className="flashcard" onClick={() => setFlipped((f) => !f)}>
+              <button
+                type="button"
+                className="flashcard"
+                aria-pressed={flipped}
+                onClick={() => setFlipped((f) => !f)}
+              >
                 <div className="flash-term">{current.term}</div>
                 <p className="context">“{current.context_sentence}”</p>
                 {flipped ? (
@@ -172,9 +189,9 @@ export default function Vocab() {
                     )}
                   </div>
                 ) : (
-                  <p className="muted tip">点击卡片查看释义</p>
+                  <p className="muted tip">点击或按 Enter 查看释义</p>
                 )}
-              </div>
+              </button>
               <div className="rate-row">
                 <button className="btn" onClick={() => void rate("again")}>
                   不认识

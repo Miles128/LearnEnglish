@@ -151,3 +151,15 @@ pub fn delete_vocab(conn: &Connection, id: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     Ok(())
 }
+
+/// Keep the oldest row per case-insensitive term so a unique index can be added.
+pub fn collapse_duplicate_vocab_terms(conn: &Connection) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM vocab WHERE rowid NOT IN (
+            SELECT MIN(rowid) FROM vocab GROUP BY lower(term)
+        )",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}

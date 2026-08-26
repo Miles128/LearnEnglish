@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import type { Article, FeedCategory } from "../api";
+import { categoryLabel } from "../readerUtils";
 import { formatKnownPercent } from "../knownPercent";
 
 export type SourceSection = {
@@ -22,8 +23,7 @@ export default function SourceBoard({ section, categories, knownPctById }: Props
       <header className="source-board-head">
         <h2>{section.source}</h2>
         <span className="pill">
-          {categories.find((c) => c.id === section.category)?.label ??
-            section.category}
+          {categoryLabel(section.category, categories)}
         </span>
         <span className="muted">{section.articles.length} 篇</span>
       </header>

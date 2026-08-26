@@ -30,6 +30,9 @@ export default function SelectionPopover({
   return (
     <div
       className="selection-pop"
+      role="dialog"
+      aria-modal="true"
+      aria-label={popover.text}
       style={{ left: popover.x, top: popover.y + 12 }}
     >
       <div className="pop-term">{popover.text}</div>

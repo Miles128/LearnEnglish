@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Article,
+  ArticleView,
   FullTranslateResult,
   TranslationRow,
 } from "./types";
@@ -12,16 +13,12 @@ export const apiArticles = {
       limit: limit ?? null,
       offset: offset ?? null,
     }),
-  getArticle: (id: string) => invoke<Article | null>("get_article", { id }),
+  getArticleView: (id: string) =>
+    invoke<ArticleView | null>("get_article_view", { id }),
   importArticleUrl: (url: string) =>
     invoke<Article>("import_article_url", { url }),
   importArticleFile: (path: string) =>
     invoke<Article>("import_article_file", { path }),
-  getParagraphs: (id: string) => invoke<string[]>("get_paragraphs", { id }),
-  listParagraphTranslations: (articleId: string) =>
-    invoke<TranslationRow[]>("list_paragraph_translations", {
-      articleId,
-    }),
   translateParagraph: (
     articleId: string,
     paragraphIndex: number,

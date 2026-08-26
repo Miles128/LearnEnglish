@@ -5,14 +5,6 @@ use serde::{Serialize, Serializer};
 pub enum AppError {
     #[error("{0}")]
     Msg(String),
-    #[error("数据库错误：{0}")]
-    Db(#[from] rusqlite::Error),
-    #[error("网络请求失败：{0}")]
-    Reqwest(#[from] reqwest::Error),
-    #[error("链接格式不正确：{0}")]
-    Url(#[from] url::ParseError),
-    #[error("IO 错误：{0}")]
-    Io(#[from] std::io::Error),
     #[error("数据源状态被占用，请稍后重试")]
     Locked,
 }
@@ -35,9 +27,30 @@ impl From<&str> for AppError {
     }
 }
 
-/// Acquire the shared DB connection, mapping a poisoned lock to `AppError::Locked`.
-pub fn lock_db(
-    state: &crate::db::DbState,
-) -> Result<std::sync::MutexGuard<'_, rusqlite::Connection>, AppError> {
-    state.0.lock().map_err(|_| AppError::Locked)
+impl From<AppError> for String {
+    fn from(e: AppError) -> Self {
+        e.to_string()
+    }
+}
+
+/// Unwrap `spawn_blocking(...).await` (join error + inner error).
+pub fn flatten_blocking<T, E, J>(joined: Result<Result<T, E>, J>) -> Result<T, AppError>
+where
+    E: Into<AppError>,
+    J: std::fmt::Display,
+{
+    joined
+        .map_err(|e| AppError::from(e.to_string()))?
+        .map_err(Into::into)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn locked_serializes_as_display_string() {
+        let json = serde_json::to_string(&AppError::Locked).unwrap();
+        assert_eq!(json, "\"数据源状态被占用，请稍后重试\"");
+    }
 }

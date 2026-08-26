@@ -1,5 +1,5 @@
-use crate::error::AppError;
 use crate::config::{self, AppConfig};
+use crate::error::AppError;
 
 #[tauri::command]
 pub fn get_config() -> Result<AppConfig, AppError> {

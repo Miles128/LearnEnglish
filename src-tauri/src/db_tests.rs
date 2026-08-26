@@ -3,6 +3,21 @@ use crate::feeds;
 use std::env::temp_dir;
 use uuid::Uuid;
 
+fn sample_article(id: &str) -> db::Article {
+    db::Article {
+        id: id.into(),
+        url: format!("https://example.com/{id}"),
+        title: id.into(),
+        title_zh: String::new(),
+        source: "Test".into(),
+        category: "tech".into(),
+        published_at: None,
+        content_text: "word ".repeat(100),
+        fetched_at: "2020-01-01T00:00:00Z".into(),
+        origin: "rss".into(),
+    }
+}
+
 #[test]
 fn db_seeds_feeds_and_stores_article() {
     let path = temp_dir().join(format!("le-test-{}.db", Uuid::new_v4()));
@@ -286,7 +301,12 @@ fn purge_never_touches_user_imported_articles() {
     assert_eq!(removed_short, 0, "imported short bodies must survive");
     let removed_lang = feeds::purge_non_english_articles(&conn).unwrap();
     assert_eq!(removed_lang, 0, "imported articles must survive language purge");
-    assert_eq!(db::list_all_articles(&conn).unwrap().len(), 2);
+    assert_eq!(
+        db::list_articles(&conn, None, Some(100), Some(0))
+            .unwrap()
+            .len(),
+        2
+    );
 
     let _ = std::fs::remove_file(path);
 }
@@ -295,7 +315,7 @@ fn purge_never_touches_user_imported_articles() {
 fn refresh_article_content_updates_longer_body() {
     let path = temp_dir().join(format!("le-refresh-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");
-    let mut a = db::Article {
+    let a = db::Article {
         id: "r1".into(),
         url: "https://example.com/refresh".into(),
         title: "Old".into(),
@@ -310,10 +330,21 @@ fn refresh_article_content_updates_longer_body() {
     db::insert_article_if_new(&conn, &a).unwrap();
 
     let longer = "word ".repeat(500);
-    a.title = "New Title".into();
-    a.content_text = longer.clone();
-    a.fetched_at = "2024-01-01T00:00:00Z".into();
-    let changed = db::refresh_article_content(&conn, &a).unwrap();
+    // The refresh path builds the update struct with an empty id; matching must
+    // be by url, so a bogus id still upgrades the stored row.
+    let update = db::Article {
+        id: String::new(),
+        url: "https://example.com/refresh".into(),
+        title: "New Title".into(),
+        title_zh: String::new(),
+        source: "T".into(),
+        category: "tech".into(),
+        published_at: None,
+        content_text: longer.clone(),
+        fetched_at: "2024-01-01T00:00:00Z".into(),
+        origin: "rss".into(),
+    };
+    let changed = db::refresh_article_content(&conn, &update).unwrap();
     assert!(changed);
     let stored = db::get_article(&conn, "r1").unwrap().expect("exists");
     assert_eq!(stored.title, "New Title");
@@ -322,7 +353,7 @@ fn refresh_article_content_updates_longer_body() {
     assert_eq!(stored.origin, "rss");
 
     // Idempotent: same body is a no-op.
-    let changed_again = db::refresh_article_content(&conn, &a).unwrap();
+    let changed_again = db::refresh_article_content(&conn, &update).unwrap();
     assert!(!changed_again);
 
     let _ = std::fs::remove_file(path);
@@ -384,6 +415,8 @@ fn vocab_dedup_by_term_and_delete_article_detaches() {
         next_review_at: "2020-01-01T00:00:00Z".into(),
         created_at: "2020-01-01T00:00:00Z".into(),
     };
+    db::upsert_article(&conn, &sample_article("a1")).unwrap();
+    db::upsert_article(&conn, &sample_article("a2")).unwrap();
     db::insert_vocab(&conn, &item).unwrap();
 
     // Case-insensitive lookup re-adding the same term returns the same row.
@@ -405,5 +438,203 @@ fn vocab_dedup_by_term_and_delete_article_detaches() {
     let detached = db::get_vocab(&conn, "v1").unwrap().expect("still exists");
     assert_eq!(detached.article_id, None);
 
+    let _ = std::fs::remove_file(path);
+}
+
+fn sample_vocab(id: &str, term: &str, created_at: &str) -> db::VocabItem {
+    db::VocabItem {
+        id: id.into(),
+        term: term.into(),
+        definition_zh: String::new(),
+        word_type: "noun".into(),
+        collocations: vec![],
+        context_sentence: String::new(),
+        article_id: None,
+        status: "learning".into(),
+        interval_days: 0.0,
+        reps: 0,
+        consecutive_know: 0,
+        next_review_at: created_at.into(),
+        created_at: created_at.into(),
+    }
+}
+
+#[test]
+fn collapse_duplicate_vocab_keeps_oldest_row() {
+    let path = temp_dir().join(format!("le-vocab-dup-{}.db", Uuid::new_v4()));
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE vocab (
+            id TEXT PRIMARY KEY,
+            term TEXT NOT NULL,
+            definition_zh TEXT NOT NULL,
+            word_type TEXT NOT NULL,
+            collocations_json TEXT NOT NULL DEFAULT '[]',
+            context_sentence TEXT NOT NULL DEFAULT '',
+            article_id TEXT,
+            status TEXT NOT NULL DEFAULT 'learning',
+            interval_days REAL NOT NULL DEFAULT 0,
+            reps INTEGER NOT NULL DEFAULT 0,
+            consecutive_know INTEGER NOT NULL DEFAULT 0,
+            next_review_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )",
+    )
+    .unwrap();
+    db::insert_vocab(&conn, &sample_vocab("old", "Hello", "2020-01-01T00:00:00Z")).unwrap();
+    db::insert_vocab(&conn, &sample_vocab("new", "hello", "2021-01-01T00:00:00Z")).unwrap();
+    db::collapse_duplicate_vocab_terms(&conn).unwrap();
+    let rows = db::list_vocab(&conn, None).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "old");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn vocab_term_unique_index_rejects_case_insensitive_dup() {
+    let path = temp_dir().join(format!("le-vocab-uniq-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    db::insert_vocab(&conn, &sample_vocab("v1", "Focus", "2020-01-01T00:00:00Z")).unwrap();
+    let err = db::insert_vocab(&conn, &sample_vocab("v2", "focus", "2020-01-02T00:00:00Z"))
+        .expect_err("duplicate term");
+    assert!(
+        err.to_lowercase().contains("unique"),
+        "expected unique violation, got {err}"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn add_or_merge_vocab_reuses_existing_term() {
+    let dir = temp_dir().join(format!("le-vocab-merge-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = db::DbState::open(db::db_path(dir.clone())).unwrap();
+    let cfg = crate::config::AppConfig::default();
+    let first = crate::vocab::add_or_merge_vocab(
+        &state,
+        &cfg,
+        crate::vocab::AddVocabInput {
+            term: "serendipity".into(),
+            context_sentence: "A happy serendipity.".into(),
+            article_id: None,
+            definition_zh: Some("意外发现".into()),
+            word_type: Some("noun".into()),
+            collocations: Some(vec![]),
+        },
+    )
+    .unwrap();
+    let second = crate::vocab::add_or_merge_vocab(
+        &state,
+        &cfg,
+        crate::vocab::AddVocabInput {
+            term: "Serendipity".into(),
+            context_sentence: String::new(),
+            article_id: None,
+            definition_zh: Some("意外发现".into()),
+            word_type: Some("noun".into()),
+            collocations: Some(vec!["pure serendipity".into()]),
+        },
+    )
+    .unwrap();
+    assert_eq!(first.id, second.id);
+    assert!(second.collocations.contains(&"pure serendipity".to_string()));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn apply_legacy_disabled_feeds_sets_enabled_false() {
+    let path = temp_dir().join(format!("le-disabled-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    let some = db::list_feeds(&conn).unwrap().into_iter().next().expect("seed");
+    assert!(some.enabled);
+    db::apply_legacy_disabled_feeds(&conn, &[some.id.clone()]).unwrap();
+    let after = db::list_feeds(&conn)
+        .unwrap()
+        .into_iter()
+        .find(|f| f.id == some.id)
+        .unwrap();
+    assert!(!after.enabled);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn article_foreign_keys_cascade_and_reject_orphans() {
+    let path = temp_dir().join(format!("le-fk-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    db::upsert_article(&conn, &sample_article("a1")).unwrap();
+    db::save_translation(&conn, "a1", "paragraph", "0", "Hello", "你好", "test").unwrap();
+    db::insert_vocab(
+        &conn,
+        &db::VocabItem {
+            article_id: Some("a1".into()),
+            ..sample_vocab("v1", "hello", "2020-01-01T00:00:00Z")
+        },
+    )
+    .unwrap();
+
+    let trans_fks: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM pragma_foreign_key_list('translations')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let vocab_fks: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM pragma_foreign_key_list('vocab')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(trans_fks >= 1, "translations should reference articles");
+    assert!(vocab_fks >= 1, "vocab should reference articles");
+
+    let err = db::save_translation(&conn, "missing", "paragraph", "0", "x", "y", "test")
+        .expect_err("orphan translation");
+    assert!(
+        err.to_lowercase().contains("foreign key"),
+        "expected FK failure, got {err}"
+    );
+
+    conn.execute("DELETE FROM articles WHERE id='a1'", [])
+        .unwrap();
+    let remaining: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM translations WHERE article_id='a1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(remaining, 0, "translations should cascade-delete");
+    let detached = db::get_vocab(&conn, "v1").unwrap().expect("vocab kept");
+    assert_eq!(detached.article_id, None);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn article_view_loads_paragraphs_and_translations() {
+    let path = temp_dir().join(format!("le-view-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    db::upsert_article(&conn, &sample_article("a1")).unwrap();
+    conn.execute(
+        "UPDATE articles SET content_text = ?1 WHERE id = 'a1'",
+        ["First para.\n\nSecond para."],
+    )
+    .unwrap();
+    db::save_translation(&conn, "a1", "paragraph", "0", "First para.", "第一段", "test")
+        .unwrap();
+
+    let view = crate::commands::articles::load_article_view(&conn, "a1")
+        .unwrap()
+        .expect("present");
+    assert_eq!(view.article.id, "a1");
+    assert_eq!(view.paragraphs, vec!["First para.", "Second para."]);
+    assert_eq!(view.translations.len(), 1);
+    assert_eq!(view.translations[0].translated_text, "第一段");
+    assert!(crate::commands::articles::load_article_view(&conn, "missing")
+        .unwrap()
+        .is_none());
     let _ = std::fs::remove_file(path);
 }

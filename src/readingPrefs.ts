@@ -83,6 +83,17 @@ export type ResolvedReading = {
   fullWidth: boolean;
 };
 
+/**
+ * Loose input shape for persisted values: ts-rs-generated `AppConfig` carries
+ * these as plain `string` / `number`; the guards below do the narrowing.
+ */
+export type RawReadingInput = {
+  reader_font?: string;
+  reader_font_size?: number;
+  reader_line_height?: number;
+  reader_line_width?: string;
+};
+
 const FONT_IDS = new Set<string>(READER_FONTS.map((f) => f.id));
 const FONT_SIZES = new Set<number>(READER_FONT_SIZES.map((s) => s.value));
 const LINE_HEIGHTS = new Set<number>(READER_LINE_HEIGHTS.map((h) => h.value));
@@ -114,7 +125,7 @@ export function isReaderLineWidthId(v: unknown): v is ReaderLineWidthId {
 }
 
 export function normalizeReadingPrefs(
-  raw: Partial<ReadingPrefs> | null | undefined,
+  raw?: Partial<RawReadingInput> | null,
 ): ReadingPrefs {
   const fallback = defaultReadingPrefs();
   return {
@@ -134,7 +145,7 @@ export function normalizeReadingPrefs(
 }
 
 export function resolveReadingPrefs(
-  raw: Partial<ReadingPrefs> | null | undefined,
+  raw?: Partial<RawReadingInput> | null,
 ): ResolvedReading {
   const prefs = normalizeReadingPrefs(raw);
   const font = READER_FONTS.find((f) => f.id === prefs.reader_font) ?? READER_FONTS[0];

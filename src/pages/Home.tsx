@@ -7,7 +7,7 @@ import { useAppConfig, useVocab } from "../store";
 import { ensureLexiconLoaded, isFreqBand, type FreqBand } from "../wordLevels";
 import ImportRow from "../components/ImportRow";
 import SourceBoard, { type SourceSection } from "../components/SourceBoard";
-import ManageFeedsDrawer from "./ManageFeedsDrawer";
+import ManageFeedsDrawer from "../components/ManageFeedsDrawer";
 
 const PAGE_SIZE = 60;
 
@@ -46,30 +46,14 @@ export default function Home() {
       setArticles(list);
       setHasMore(list.length >= PAGE_SIZE);
       setCategories(cats);
-      if (cfg.api_key) {
-        const missing = list.some((a) => !a.title_zh);
-        if (missing) {
-          try {
-            const n = await api.translateMissingTitles();
-            if (n > 0) {
-              const refreshed = await api.listArticles(
-                category === "all" ? undefined : category,
-                PAGE_SIZE,
-                0,
-              );
-              setArticles(refreshed);
-            }
-          } catch {
-            // LLM 调用失败时忽略
-          }
-        }
-      }
+      // Note: missing title_zh is filled by the refresh pipeline
+      // (feeds::fill_missing_title_translations), never on page load.
     } catch (e) {
       setError(String(e));
     } finally {
       setLoading(false);
     }
-  }, [category, cfg.api_key]);
+  }, [category]);
 
   useEffect(() => {
     void load();

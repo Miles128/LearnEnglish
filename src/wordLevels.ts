@@ -1,4 +1,10 @@
-/** CEFR ordered from easiest to hardest. */
+/**
+ * Attribution for `src/data/word-levels.json`:
+ * CEFR-J Vocabulary Profile 1.5, FrequencyWords (OpenSubtitles 2018),
+ * ECDICT first sense. Format: [term, cefr, rank] or [term, cefr, rank, zh]
+ *
+ * CEFR ordered from easiest to hardest.
+ */
 export const CEFR_LEVELS = ["A1", "A2", "B1", "B2", "C1", "C2"] as const;
 export type CefrLevel = (typeof CEFR_LEVELS)[number];
 

@@ -10,7 +10,6 @@ mod vocab;
 #[cfg(test)]
 mod db_tests;
 
-use std::sync::Mutex;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -23,16 +22,25 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .map_err(|e| e.to_string())?;
-            let path = db::db_path(dir);
-            let conn = db::open_db(path)?;
-            app.manage(db::DbState(Mutex::new(conn)));
+            let state = db::DbState::open(db::db_path(dir))?;
+            {
+                let mut cfg = config::load_config()?;
+                if !cfg.disabled_feeds.is_empty() {
+                    let conn = state.lock_write().map_err(|e| e.to_string())?;
+                    db::apply_legacy_disabled_feeds(&conn, &cfg.disabled_feeds)?;
+                    drop(conn);
+                    cfg.disabled_feeds.clear();
+                    config::save_config(&cfg)?;
+                }
+            }
+            app.manage(state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::config::get_config,
             commands::config::save_config_cmd,
             commands::articles::list_articles,
-            commands::articles::get_article,
+            commands::articles::get_article_view,
             commands::feeds::list_feeds,
             commands::feeds::set_feed_enabled,
             commands::feeds::list_feed_categories,
@@ -44,8 +52,6 @@ pub fn run() {
             commands::articles::translate_missing_titles,
             commands::articles::import_article_url,
             commands::articles::import_article_file,
-            commands::articles::get_paragraphs,
-            commands::articles::list_paragraph_translations,
             commands::articles::translate_paragraph,
             commands::articles::translate_selection,
             commands::articles::translate_full_article,

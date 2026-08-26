@@ -58,10 +58,10 @@ export const READER_LINE_HEIGHTS = [
 export type ReaderLineHeight = (typeof READER_LINE_HEIGHTS)[number]["value"];
 
 export const READER_LINE_WIDTHS = [
-  { id: "narrow", label: "窄", measure: "58ch" },
-  { id: "medium", label: "适中", measure: "68ch" },
-  { id: "wide", label: "宽", measure: "80ch" },
-  { id: "full", label: "全宽", measure: "none" },
+  { id: "narrow", label: "窄", measure: "42rem" },
+  { id: "medium", label: "适中", measure: "52rem" },
+  { id: "wide", label: "宽", measure: "64rem" },
+  { id: "full", label: "全宽", measure: "100%" },
 ] as const;
 
 export type ReaderLineWidthId = (typeof READER_LINE_WIDTHS)[number]["id"];

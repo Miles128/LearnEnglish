@@ -41,17 +41,17 @@ describe("normalizeReadingPrefs", () => {
 });
 
 describe("resolveReadingPrefs", () => {
-  it("maps medium width to 68ch", () => {
+  it("maps medium width to the original 52rem adaptive cap", () => {
     const resolved = resolveReadingPrefs(defaultReadingPrefs());
-    expect(resolved.measure).toBe("68ch");
+    expect(resolved.measure).toBe("52rem");
     expect(resolved.fullWidth).toBe(false);
     expect(resolved.fontSizePx).toBe(18);
     expect(resolved.lineHeight).toBe(1.75);
   });
 
-  it("maps full width to none", () => {
+  it("maps full width to 100% so the column tracks the window", () => {
     const resolved = resolveReadingPrefs({ reader_line_width: "full" });
-    expect(resolved.measure).toBe("none");
+    expect(resolved.measure).toBe("100%");
     expect(resolved.fullWidth).toBe(true);
   });
 

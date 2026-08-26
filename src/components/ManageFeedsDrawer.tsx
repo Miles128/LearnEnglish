@@ -2,16 +2,13 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import {
   api,
   FeedCategory,
-  FeedDiscoverCandidate,
   FeedSource,
-  FeedValidation,
 } from "../api";
-
-type DiscoverRow = FeedDiscoverCandidate & {
-  validation?: FeedValidation;
-  validating?: boolean;
-  subscribed?: boolean;
-};
+import { useEscapeKey } from "../useEscapeKey";
+import FeedDiscoverSection, {
+  type DiscoverRow,
+} from "./FeedDiscoverSection";
+import { categoryLabel } from "../readerUtils";
 
 type Props = {
   open: boolean;
@@ -49,6 +46,8 @@ export default function ManageFeedsDrawer({ open, onClose }: Props) {
   useEffect(() => {
     if (open) void load();
   }, [open, load]);
+
+  useEscapeKey(open, onClose);
 
   const filteredFeeds = useMemo(() => {
     if (categoryId === "all") return feeds;
@@ -107,7 +106,6 @@ export default function ManageFeedsDrawer({ open, onClose }: Props) {
       }));
       setCandidates(rows);
       setMessage(`找到 ${rows.length} 个候选，正在校验…`);
-      // validate sequentially to avoid hammering
       for (let i = 0; i < rows.length; i++) {
         setCandidates((prev) =>
           prev.map((r, idx) => (idx === i ? { ...r, validating: true } : r)),
@@ -289,69 +287,16 @@ export default function ManageFeedsDrawer({ open, onClose }: Props) {
             ))}
           </ul>
         </section>
-
-        <section className="feeds-drawer-section">
-          <div className="feeds-section-head">
-            <h3>
-              按分类发现
-              <span className="muted">
-                {" "}
-                ·{" "}
-                {categories.find((c) => c.id === discoverCategoryId)?.label ??
-                  discoverCategoryId}
-              </span>
-            </h3>
-            <button
-              type="button"
-              className="btn primary"
-              onClick={() => void onDiscover()}
-              disabled={discovering}
-            >
-              {discovering ? "搜索中…" : "用 AI 搜索推荐源"}
-            </button>
-          </div>
-          <ul className="discover-list">
-            {candidates.map((c) => {
-              const ok = c.validation?.ok;
-              const status = c.validating
-                ? "校验中…"
-                : c.validation
-                  ? ok
-                    ? `可用 · ${c.validation.entry_count} 条`
-                    : c.validation.error ?? "不可用"
-                  : "待校验";
-              return (
-                <li key={c.url} className="discover-row">
-                  <div>
-                    <strong>{c.name}</strong>
-                    {c.description ? (
-                      <p className="muted discover-desc">{c.description}</p>
-                    ) : null}
-                    <p className="feed-url muted">{c.url}</p>
-                    <p className={ok ? "muted" : "banner err inline-status"}>
-                      {status}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    className="btn"
-                    disabled={c.subscribed || c.validating || ok === false}
-                    onClick={() => void onSubscribeCandidate(c)}
-                  >
-                    {c.subscribed ? "已订阅" : "订阅"}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-
+        <FeedDiscoverSection
+          categoryLabel={categoryLabel(discoverCategoryId, categories)}
+          discovering={discovering}
+          candidates={candidates}
+          onDiscover={() => void onDiscover()}
+          onSubscribe={(row) => void onSubscribeCandidate(row)}
+        />
         <section className="feeds-drawer-section">
           <h3>粘贴 RSS 订阅</h3>
-          <form
-            className="feeds-paste"
-            onSubmit={(e) => void onPasteSubscribe(e)}
-          >
+          <form className="feeds-paste" onSubmit={(e) => void onPasteSubscribe(e)}>
             <input
               value={pasteName}
               onChange={(e) => setPasteName(e.target.value)}

@@ -1,12 +1,12 @@
-use crate::error::{lock_db, AppError};
+use crate::error::AppError;
 use crate::db::{self, DbState, FeedCategory, FeedSource};
 use crate::feeds::{self, FeedValidation, RefreshProgress, RefreshResult};
 use crate::vocab::{self, FeedDiscoverCandidate};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
 
 #[tauri::command]
 pub fn list_feeds(state: tauri::State<'_, DbState>) -> Result<Vec<FeedSource>, AppError> {
-    let conn = lock_db(&state)?;
+    let conn = state.lock_read()?;
     Ok(db::list_feeds(&conn)?)
 }
 
@@ -16,7 +16,7 @@ pub fn set_feed_enabled(
     id: String,
     enabled: bool,
 ) -> Result<(), AppError> {
-    let conn = lock_db(&state)?;
+    let conn = state.lock_write()?;
     Ok(db::set_feed_enabled(&conn, &id, enabled)?)
 }
 
@@ -24,7 +24,7 @@ pub fn set_feed_enabled(
 pub fn list_feed_categories(
     state: tauri::State<'_, DbState>,
 ) -> Result<Vec<FeedCategory>, AppError> {
-    let conn = lock_db(&state)?;
+    let conn = state.lock_read()?;
     Ok(db::list_feed_categories(&conn)?)
 }
 
@@ -33,7 +33,7 @@ pub fn add_feed_category(
     state: tauri::State<'_, DbState>,
     label: String,
 ) -> Result<FeedCategory, AppError> {
-    let conn = lock_db(&state)?;
+    let conn = state.lock_write()?;
     Ok(db::add_feed_category(&conn, &label)?)
 }
 
@@ -50,7 +50,7 @@ pub fn subscribe_feed(
     state: tauri::State<'_, DbState>,
     input: SubscribeFeedInput,
 ) -> Result<FeedSource, AppError> {
-    let conn = lock_db(&state)?;
+    let conn = state.lock_write()?;
     Ok(db::subscribe_feed(
         &conn,
         &input.name,
@@ -62,11 +62,7 @@ pub fn subscribe_feed(
 
 #[tauri::command]
 pub async fn validate_feed(url: String) -> Result<FeedValidation, AppError> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<FeedValidation, AppError> {
-        Ok(feeds::validate_feed_url(&url))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    crate::commands::spawn_blocking_err(move || Ok(feeds::validate_feed_url(&url))).await
 }
 
 #[tauri::command]
@@ -75,25 +71,19 @@ pub async fn discover_feeds(
     category_id: String,
 ) -> Result<Vec<FeedDiscoverCandidate>, AppError> {
     let cfg = crate::config::load_config()?;
-    let app_handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<FeedDiscoverCandidate>, AppError> {
-        let state = app_handle
-            .try_state::<DbState>()
-            .ok_or_else(|| "数据库未就绪".to_string())?;
-        let conn = lock_db(&state)?;
-        let cat = db::get_feed_category(&conn, &category_id)?
-            .ok_or_else(|| format!("未知分类：{category_id}"))?;
-        drop(conn);
+    crate::commands::spawn_db(app, move |state| {
+        let cat = {
+            let conn = state.lock_read()?;
+            db::get_feed_category(&conn, &category_id)?
+        };
+        let cat = cat.ok_or_else(|| format!("未知分类：{category_id}"))?;
         Ok(vocab::discover_rss_feeds(&cfg, &cat.id, &cat.label)?)
     })
     .await
-    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub async fn refresh_feeds(app: AppHandle) -> Result<RefreshResult, AppError> {
-    // Sync commands run on the UI main thread — blocking HTTP there freezes the window.
-    // Offload to a blocking pool so the UI can paint progress events.
     let _ = app.emit(
         "refresh-progress",
         RefreshProgress {
@@ -106,15 +96,11 @@ pub async fn refresh_feeds(app: AppHandle) -> Result<RefreshResult, AppError> {
     );
 
     let cfg = crate::config::load_config()?;
-    let app_handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<RefreshResult, AppError> {
-        let state = app_handle
-            .try_state::<DbState>()
-            .ok_or_else(|| "数据库未就绪".to_string())?;
-        Ok(feeds::refresh_feeds(&state.0, &cfg, |progress: RefreshProgress| {
-            let _ = app_handle.emit("refresh-progress", &progress);
+    let emit_app = app.clone();
+    crate::commands::spawn_db(app, move |state| {
+        Ok(feeds::refresh_feeds(state, &cfg, |progress: RefreshProgress| {
+            let _ = emit_app.emit("refresh-progress", &progress);
         })?)
     })
     .await
-    .map_err(|e| e.to_string())?
 }

@@ -11,6 +11,15 @@ export type PoolItem = {
   zh: string;
 };
 
+export function shouldForcePlacement(cfg: {
+  vocab_placement_done?: boolean;
+  vocab_placement_skipped?: boolean;
+}): boolean {
+  if (cfg.vocab_placement_done) return false;
+  if (cfg.vocab_placement_skipped) return false;
+  return true;
+}
+
 export function clampL(L: number): number {
   return Math.max(L_MIN, Math.min(L_MAX, L));
 }

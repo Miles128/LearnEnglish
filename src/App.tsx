@@ -1,23 +1,16 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
-import { shouldForcePlacement } from "./pages/Placement";
+import { shouldForcePlacement } from "./placement/engine";
 import { useAppConfig } from "./store";
+import { type RefreshProgress } from "./api";
 import "./App.css";
-
-export type RefreshProgress = {
-  phase: "download" | "translate" | "done" | string;
-  current: number;
-  total: number;
-  label: string;
-  percent: number;
-};
 
 export default function App() {
   const [progress, setProgress] = useState<RefreshProgress | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
-  const { cfg, ready } = useAppConfig();
+  const { cfg, ready, loadError, refresh } = useAppConfig();
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -41,12 +34,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || loadError) return;
     if (location.pathname.startsWith("/placement")) return;
     if (shouldForcePlacement(cfg)) {
       navigate("/placement", { replace: true });
     }
-  }, [cfg, ready, location.pathname, navigate]);
+  }, [cfg, ready, loadError, location.pathname, navigate]);
 
   const showBar = progress != null && progress.phase !== "done";
   const showDoneBriefly = progress?.phase === "done";
@@ -67,6 +60,14 @@ export default function App() {
         </nav>
       </aside>
       <main className="main">
+        {loadError && (
+          <div className="banner err with-action" role="status">
+            <span>配置加载失败：{loadError}</span>
+            <button type="button" className="btn small" onClick={() => void refresh()}>
+              重试
+            </button>
+          </div>
+        )}
         <Outlet />
       </main>
 

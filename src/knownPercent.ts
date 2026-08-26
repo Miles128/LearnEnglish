@@ -5,6 +5,14 @@ import type { FreqBand } from "./wordLevels";
 
 const WORD_RE = /[A-Za-z][A-Za-z'-]*/g;
 
+/**
+ * Cap on how much of an article is sampled for the estimate. The list page
+ * computes this synchronously for every visible article; full bodies can be
+ * 30k+ chars, so sampling keeps the main-thread cost bounded with negligible
+ * accuracy loss for the displayed percentage.
+ */
+const MAX_SAMPLE_CHARS = 6000;
+
 export function tokenizeWords(text: string): string[] {
   const out: string[] = [];
   const re = new RegExp(WORD_RE.source, "g");
@@ -22,10 +30,14 @@ export function tokenizeWords(text: string): string[] {
  * Requires lexicon loaded for accurate band checks.
  */
 export function estimateKnownPercent(
-  content: string,
+  rawContent: string,
   learningTerms: string[],
   freqBand: FreqBand,
 ): number | null {
+  const content =
+    rawContent.length > MAX_SAMPLE_CHARS
+      ? rawContent.slice(0, MAX_SAMPLE_CHARS)
+      : rawContent;
   const tokens = tokenizeWords(content);
   if (tokens.length < 40) return null;
 

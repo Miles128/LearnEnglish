@@ -1,18 +1,19 @@
 //! Import local `.txt` / `.pdf` / `.docx` files as articles.
 
-use crate::db::{self, Article};
+use crate::db::{self, Article, DbState};
 use crate::feeds::{self, MIN_FULLTEXT_CHARS};
 use chrono::Utc;
 use regex::Regex;
-use rusqlite::Connection;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::LazyLock;
 use uuid::Uuid;
 
 const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
 
-pub fn import_article_from_file(db: &Mutex<Connection>, path: &str) -> Result<Article, String> {
+static RE_BLANK_RUN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").unwrap());
+
+pub fn import_article_from_file(db: &DbState, path: &str) -> Result<Article, String> {
     let path = PathBuf::from(path.trim());
     if path.as_os_str().is_empty() {
         return Err("未选择文件".into());
@@ -65,7 +66,7 @@ pub fn import_article_from_file(db: &Mutex<Connection>, path: &str) -> Result<Ar
         origin: "file".into(),
     };
 
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.lock_write()?;
     let inserted = db::insert_article_if_new(&conn, &article)?;
     if inserted {
         return Ok(article);
@@ -88,8 +89,7 @@ fn normalize_whitespace(text: &str) -> String {
         .map(|l| l.trim_end())
         .collect::<Vec<_>>()
         .join("\n");
-    let re = Regex::new(r"\n{3,}").unwrap();
-    re.replace_all(collapsed.trim(), "\n\n").into_owned()
+    RE_BLANK_RUN.replace_all(collapsed.trim(), "\n\n").into_owned()
 }
 
 fn extract_txt(bytes: &[u8]) -> Result<String, String> {
@@ -233,8 +233,7 @@ mod tests {
         f.write_all(body.as_bytes()).unwrap();
 
         let db_path = dir.join("t.sqlite");
-        let conn = db::open_db(db_path).unwrap();
-        let db = Mutex::new(conn);
+        let db = db::DbState::open(db_path).unwrap();
 
         let article = import_article_from_file(&db, path.to_str().unwrap()).unwrap();
         assert_eq!(article.title, "sample essay");
@@ -253,8 +252,7 @@ mod tests {
         let path = dir.join("tiny.txt");
         std::fs::write(&path, b"hi").unwrap();
         let db_path = dir.join("t.sqlite");
-        let conn = db::open_db(db_path).unwrap();
-        let db = Mutex::new(conn);
+        let db = db::DbState::open(db_path).unwrap();
         let err = import_article_from_file(&db, path.to_str().unwrap()).unwrap_err();
         assert!(err.contains("太短"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);

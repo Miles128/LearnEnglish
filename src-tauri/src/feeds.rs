@@ -1,5 +1,5 @@
 use crate::config::AppConfig;
-use crate::db::{self, Article, FeedSource};
+use crate::db::{self, Article, DbState, FeedSource};
 use crate::vocab;
 use chrono::Utc;
 use feed_rs::parser;
@@ -8,7 +8,7 @@ use reqwest::blocking::Client;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::LazyLock;
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -16,6 +16,24 @@ pub(crate) const MIN_FULLTEXT_CHARS: usize = 400;
 /// RSS bodies at or above this length are treated as full-text feeds (no page required).
 /// Shorter bodies are teasers/summaries — page fetch must succeed or the entry is skipped.
 const TRUST_RSS_FULLTEXT_CHARS: usize = 2000;
+
+const HTTP_USER_AGENT: &str = "Shiyan/0.1 (+local; educational)";
+
+/// Shared blocking client so connections pool across feeds/pages instead of
+/// being rebuilt per request.
+static HTTP: LazyLock<Client> = LazyLock::new(|| {
+    Client::builder()
+        .user_agent(HTTP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("build reqwest client")
+});
+
+static RE_TAG_STRIP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
+static RE_TRAILING_WS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[ \t]+\n").unwrap());
+static RE_BLANK_RUN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").unwrap());
+static RE_HTML_TITLE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<title[^>]*>(.*?)</title>").unwrap());
 
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
@@ -68,22 +86,7 @@ pub fn validate_feed_url(url: &str) -> FeedValidation {
             error: Some("URL 必须以 http(s) 开头".into()),
         };
     }
-    let client = match Client::builder()
-        .user_agent("LearnEnglish/0.1 (+local; educational)")
-        .timeout(std::time::Duration::from_secs(25))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            return FeedValidation {
-                ok: false,
-                title: None,
-                entry_count: 0,
-                error: Some(e.to_string()),
-            };
-        }
-    };
-    match client.get(url).send().and_then(|r| r.error_for_status()) {
+    match HTTP.get(url).send().and_then(|r| r.error_for_status()) {
         Ok(resp) => match resp.bytes() {
             Ok(bytes) => match parser::parse(&bytes[..]) {
                 Ok(parsed) => FeedValidation {
@@ -130,26 +133,21 @@ pub fn partition_new_urls(candidates: &[String], known: &HashSet<String>) -> (Ve
     (new_urls, skipped)
 }
 
+pub(crate) fn select_enabled_feeds(feeds: Vec<FeedSource>) -> Vec<FeedSource> {
+    feeds.into_iter().filter(|f| f.enabled).collect()
+}
+
 pub fn refresh_feeds(
-    db: &Mutex<Connection>,
+    db: &DbState,
     cfg: &AppConfig,
     mut on_progress: impl FnMut(RefreshProgress),
 ) -> Result<RefreshResult, String> {
-    let client = Client::builder()
-        .user_agent("LearnEnglish/0.1 (+local; educational)")
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
-
     let feeds = {
-        let conn = db.lock().map_err(|e| e.to_string())?;
+        let conn = db.lock_read()?;
         db::list_feeds(&conn)?
     };
 
-    let enabled: Vec<FeedSource> = feeds
-        .into_iter()
-        .filter(|f| f.enabled && !cfg.disabled_feeds.contains(&f.id))
-        .collect();
+    let enabled: Vec<FeedSource> = select_enabled_feeds(feeds);
 
     let download_total = enabled.len();
     // Reserve ~80% of the bar for downloads, ~20% for title translation.
@@ -179,7 +177,8 @@ pub fn refresh_feeds(
     }
 
     let mut known_urls = {
-        let conn = db.lock().map_err(|e| e.to_string())?;
+        // Purges are writes; they run on the write connection.
+        let conn = db.lock_write()?;
         result.skipped_non_english += purge_non_english_articles(&conn)?;
         // Stock cleanup: drop RSS-teaser bodies that would not pass today's ingest rule,
         // so the same refresh can re-download them as real full text (or skip).
@@ -187,7 +186,7 @@ pub fn refresh_feeds(
         db::list_article_urls(&conn)?
     };
     let known_lengths = {
-        let conn = db.lock().map_err(|e| e.to_string())?;
+        let conn = db.lock_read()?;
         db::list_article_content_lengths(&conn)?
     };
 
@@ -204,12 +203,12 @@ pub fn refresh_feeds(
         });
 
         result.fetched_feeds += 1;
-        match download_feed_articles(&client, feed, &known_urls, &known_lengths) {
+        match download_feed_articles(&HTTP, feed, &known_urls, &known_lengths) {
             Ok((articles, updates, stats)) => {
                 result.skipped_existing += stats.skipped_existing;
                 result.skipped_short += stats.skipped_short;
                 result.skipped_non_english += stats.skipped_non_english;
-                let conn = db.lock().map_err(|e| e.to_string())?;
+                let conn = db.lock_write()?;
                 for article in &articles {
                     if db::insert_article_if_new(&conn, article)? {
                         known_urls.insert(article.url.clone());
@@ -280,7 +279,7 @@ pub fn refresh_feeds(
 }
 
 pub fn fill_missing_title_translations(
-    db: &Mutex<Connection>,
+    db: &DbState,
     cfg: &AppConfig,
     limit: usize,
 ) -> Result<usize, String> {
@@ -288,13 +287,13 @@ pub fn fill_missing_title_translations(
 }
 
 fn fill_missing_title_translations_with_progress(
-    db: &Mutex<Connection>,
+    db: &DbState,
     cfg: &AppConfig,
     limit: usize,
     mut on_progress: impl FnMut(usize, usize),
 ) -> Result<usize, String> {
     let missing = {
-        let conn = db.lock().map_err(|e| e.to_string())?;
+        let conn = db.lock_read()?;
         db::articles_missing_title_zh(&conn, limit)?
     };
     if missing.is_empty() {
@@ -308,9 +307,15 @@ fn fill_missing_title_translations_with_progress(
 
     for chunk in missing.chunks(8) {
         let titles: Vec<String> = chunk.iter().map(|a| a.title.clone()).collect();
-        let translated = vocab::translate_titles(cfg, &titles)?;
+        let translated = vocab::translate_titles(cfg, &titles).map_err(|e| {
+            format!(
+                "标题翻译（第 {}–{} 条）：{e}",
+                done + 1,
+                done + titles.len()
+            )
+        })?;
         {
-            let conn = db.lock().map_err(|e| e.to_string())?;
+            let conn = db.lock_write()?;
             for (article, zh) in chunk.iter().zip(translated.into_iter()) {
                 let zh = zh.trim().to_string();
                 if zh.is_empty() {
@@ -518,15 +523,13 @@ fn looks_like_english(title: &str, content: &str) -> bool {
 }
 
 pub(crate) fn purge_non_english_articles(conn: &Connection) -> Result<usize, String> {
-    let existing = db::list_all_articles(conn)?;
+    // Only (id, title, body sample) rows for rss articles — enough signal for the
+    // heuristic without loading every full body into memory.
+    let existing = db::list_rss_language_samples(conn, 1200)?;
     let mut removed = 0usize;
-    for article in existing {
-        // Never purge user-imported articles; refresh only manages RSS-ingested ones.
-        if article.origin != "rss" {
-            continue;
-        }
-        if !is_english_article(None, &article.title, &article.content_text) {
-            db::delete_article(conn, &article.id)?;
+    for (id, title, sample) in existing {
+        if !is_english_article(None, &title, &sample) {
+            db::delete_article(conn, &id)?;
             removed += 1;
         }
     }
@@ -539,13 +542,12 @@ fn is_summary_only_body(content: &str) -> bool {
 }
 
 pub(crate) fn purge_summary_only_articles(conn: &Connection) -> Result<usize, String> {
-    let existing = db::list_all_articles(conn)?;
+    // SQL prefilter: teaser bodies are < TRUST_RSS_FULLTEXT_CHARS chars; bytes are
+    // always >= chars, so this bound can only over-select. Exact check below.
+    let byte_bound = (TRUST_RSS_FULLTEXT_CHARS * 4) as i64;
+    let candidates = db::list_rss_teaser_candidates(conn, byte_bound)?;
     let mut removed = 0usize;
-    for article in existing {
-        // Only purge RSS-ingested teasers; user URL/file imports are kept as-is.
-        if article.origin != "rss" {
-            continue;
-        }
+    for article in candidates {
         if is_summary_only_body(&article.content_text) {
             db::delete_article(conn, &article.id)?;
             removed += 1;
@@ -555,20 +557,15 @@ pub(crate) fn purge_summary_only_articles(conn: &Connection) -> Result<usize, St
 }
 
 fn html_to_text(html: &str) -> String {
-    let stripped = html2text::from_read(html.as_bytes(), 100).unwrap_or_else(|_| {
-        let re = Regex::new(r"<[^>]+>").unwrap();
-        re.replace_all(html, " ").to_string()
-    });
-    let re_ws = Regex::new(r"[ \t]+\n").unwrap();
-    let re_blank = Regex::new(r"\n{3,}").unwrap();
-    let s = re_ws.replace_all(&stripped, "\n");
-    let s = re_blank.replace_all(&s, "\n\n");
+    let stripped = html2text::from_read(html.as_bytes(), 100)
+        .unwrap_or_else(|_| RE_TAG_STRIP.replace_all(html, " ").to_string());
+    let s = RE_TRAILING_WS.replace_all(&stripped, "\n");
+    let s = RE_BLANK_RUN.replace_all(&s, "\n\n");
     s.trim().to_string()
 }
 
 fn title_from_html(html: &str) -> Option<String> {
-    let re = Regex::new(r"(?is)<title[^>]*>(.*?)</title>").ok()?;
-    let caps = re.captures(html)?;
+    let caps = RE_HTML_TITLE.captures(html)?;
     let raw = caps.get(1)?.as_str();
     let decoded = html_to_text(raw);
     let mut title = decoded.lines().next().unwrap_or("").trim().to_string();
@@ -670,7 +667,7 @@ fn fetch_article_page(client: &Client, url: &str) -> Result<String, String> {
 }
 
 /// Import one public article URL into the local library.
-pub fn import_article_from_url(db: &Mutex<Connection>, url: &str) -> Result<Article, String> {
+pub fn import_article_from_url(db: &DbState, url: &str) -> Result<Article, String> {
     let url = url.trim();
     if url.is_empty() {
         return Err("请输入文章链接".into());
@@ -681,19 +678,13 @@ pub fn import_article_from_url(db: &Mutex<Connection>, url: &str) -> Result<Arti
     }
 
     {
-        let conn = db.lock().map_err(|e| e.to_string())?;
+        let conn = db.lock_read()?;
         if let Some(existing) = db::get_article_by_url(&conn, url)? {
             return Ok(existing);
         }
     }
 
-    let client = Client::builder()
-        .user_agent("Shiyan/0.1 (+local; educational)")
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let extracted = extract_article_page(&client, url)?;
+    let extracted = extract_article_page(&HTTP, url)?;
     if looks_like_paywall(&extracted.text) {
         return Err("疑似付费墙，已跳过".into());
     }
@@ -714,11 +705,13 @@ pub fn import_article_from_url(db: &Mutex<Connection>, url: &str) -> Result<Arti
         origin: "url".into(),
     };
 
-    let conn = db.lock().map_err(|e| e.to_string())?;
+    let conn = db.lock_write()?;
     let inserted = db::insert_article_if_new(&conn, &article)?;
     if inserted {
         return Ok(article);
     }
+    drop(conn);
+    let conn = db.lock_read()?;
     db::get_article_by_url(&conn, url)?
         .ok_or_else(|| "导入失败：文章未写入".into())
 }
@@ -763,6 +756,28 @@ pub fn split_paragraphs(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dummy_feed(id: &str, enabled: bool) -> FeedSource {
+        FeedSource {
+            id: id.into(),
+            name: id.into(),
+            category: "world".into(),
+            url: format!("https://example.com/{id}"),
+            enabled,
+            origin: "curated".into(),
+            description: String::new(),
+        }
+    }
+
+    #[test]
+    fn select_enabled_uses_db_flag_only() {
+        let enabled = select_enabled_feeds(vec![
+            dummy_feed("on", true),
+            dummy_feed("off", false),
+        ]);
+        assert_eq!(enabled.len(), 1);
+        assert_eq!(enabled[0].id, "on");
+    }
 
     #[test]
     fn english_lang_tags() {

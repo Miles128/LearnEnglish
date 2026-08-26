@@ -5,10 +5,11 @@ import {
   useRef,
   useState,
   type MouseEvent,
+  type ReactNode,
 } from "react";
-import Markdown from "react-markdown";
 import { Link, useParams } from "react-router-dom";
-import { api, Article, TranslationRow } from "../api";
+import { listen } from "@tauri-apps/api/event";
+import { api, type FeedCategory, type TranslateProgress } from "../api";
 import {
   readingCssVars,
   resolveReadingPrefs,
@@ -17,8 +18,17 @@ import {
 import { AnnotatedPara } from "../annotateText";
 import { shouldRenderMarkdown } from "../markdown";
 import SelectionPopover, { type Popover } from "../components/SelectionPopover";
+import ReaderParagraph from "../components/ReaderParagraph";
 import { useAppConfig, useVocab } from "../store";
+import { useArticle } from "../useArticle";
 import { useTts } from "../useTts";
+import { useEscapeKey } from "../useEscapeKey";
+import {
+  applyTranslateProgress,
+  categoryLabel,
+  findContext,
+  translateProgressLabel,
+} from "../readerUtils";
 import {
   ensureLexiconLoaded,
   isCefrLevel,
@@ -29,57 +39,66 @@ import {
 
 export default function Reader() {
   const { id } = useParams();
-  const [article, setArticle] = useState<Article | null>(null);
-  const [paragraphs, setParagraphs] = useState<string[]>([]);
-  const [translations, setTranslations] = useState<Record<string, string>>({});
+  const {
+    article,
+    paragraphs,
+    translations,
+    setTranslations,
+    error,
+    setError,
+    view,
+  } = useArticle(id);
   const [lexReady, setLexReady] = useState(false);
   const [showFullZh, setShowFullZh] = useState(false);
   const [visibleParas, setVisibleParas] = useState<Record<number, boolean>>({});
   const [busyFull, setBusyFull] = useState(false);
+  const [fullProgress, setFullProgress] = useState<TranslateProgress | null>(null);
   const [busyPara, setBusyPara] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [popover, setPopover] = useState<Popover | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [categories, setCategories] = useState<FeedCategory[]>([]);
   const rootRef = useRef<HTMLDivElement>(null);
   const clickGuardRef = useRef(false);
 
   const { speaking, speakTarget, startSpeak, stopSpeak } = useTts();
   const { cfg } = useAppConfig();
   const { learningTerms: vocabTerms, refreshLearningTerms } = useVocab();
-  const prefs: DifficultyPrefs = {
-    cefrLevel: isCefrLevel(cfg.cefr_level) ? cfg.cefr_level : "B1",
-    freqBand: isFreqBand(cfg.freq_band) ? cfg.freq_band : 3000,
-  };
+  const prefs: DifficultyPrefs = useMemo(
+    () => ({
+      cefrLevel: isCefrLevel(cfg.cefr_level) ? cfg.cefr_level : "B1",
+      freqBand: isFreqBand(cfg.freq_band) ? cfg.freq_band : 3000,
+    }),
+    [cfg.cefr_level, cfg.freq_band],
+  );
   const reading: ResolvedReading = useMemo(() => resolveReadingPrefs(cfg), [cfg]);
-
-  const load = useCallback(async () => {
-    if (!id) return;
-    setError(null);
-    try {
-      const a = await api.getArticle(id);
-      setArticle(a);
-      const paras = await api.getParagraphs(id);
-      setParagraphs(paras);
-      const rows = await api.listParagraphTranslations(id);
-      const map: Record<string, string> = {};
-      rows.forEach((r: TranslationRow) => {
-        map[r.scope_key] = r.translated_text;
-      });
-      setTranslations(map);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [id]);
+  const closePopover = useCallback(() => setPopover(null), []);
+  useEscapeKey(popover != null, closePopover);
 
   useEffect(() => {
     void ensureLexiconLoaded()
       .then(() => setLexReady(true))
       .catch(() => setLexReady(true));
+    void api.listFeedCategories().then(setCategories).catch(() => undefined);
   }, []);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!id) return;
+    let unlisten: (() => void) | undefined;
+    void listen<TranslateProgress>("translate-progress", (event) => {
+      const next = event.payload;
+      if (next.article_id !== id) return;
+      setTranslations((map) => applyTranslateProgress(map, next));
+      if (next.done) {
+        setFullProgress(null);
+        return;
+      }
+      setFullProgress(next);
+      setShowFullZh(true);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    return () => unlisten?.();
+  }, [id, setTranslations]);
 
   useEffect(() => {
     function onDocMouseDown(e: globalThis.MouseEvent) {
@@ -186,6 +205,29 @@ export default function Reader() {
     [showMeaning],
   );
 
+  const annotateChildren = useCallback(
+    (children: ReactNode): ReactNode => {
+      if (!lexReady) return children;
+      const annotate = (text: string, key?: number) => (
+        <AnnotatedPara
+          key={key}
+          text={text}
+          prefs={prefs}
+          learningTerms={vocabTerms}
+          onHardClick={onHardWordClick}
+        />
+      );
+      if (typeof children === "string") return annotate(children);
+      if (Array.isArray(children)) {
+        return children.map((child, i) =>
+          typeof child === "string" ? annotate(child, i) : child,
+        );
+      }
+      return children;
+    },
+    [lexReady, prefs, vocabTerms, onHardWordClick],
+  );
+
   async function toggleFullTranslation() {
     if (!id) return;
     if (showFullZh) {
@@ -272,13 +314,19 @@ export default function Reader() {
     }
   }
 
-  if (!article) {
+  if (view !== "ready" || !article) {
     return (
       <div className="page">
         <Link to="/" className="back">
           ← 返回
         </Link>
-        {error ? <p className="banner err">{error}</p> : <p className="muted">加载中…</p>}
+        {view === "error" && error ? (
+          <p className="banner err">{error}</p>
+        ) : view === "missing" ? (
+          <p className="muted">找不到这篇文章。</p>
+        ) : (
+          <p className="muted">加载中…</p>
+        )}
       </div>
     );
   }
@@ -299,8 +347,8 @@ export default function Reader() {
           <h1>{title}</h1>
           {article.title_zh && <p className="article-title-zh">{article.title_zh}</p>}
           <p className="muted">
-            {article.source} · {labelCategory(article.category)} · 难度 {prefs.cefrLevel} /{" "}
-            {prefs.freqBand / 1000}k
+            {article.source} · {categoryLabel(article.category, categories)} · 难度{" "}
+            {prefs.cefrLevel} / {prefs.freqBand / 1000}k
           </p>
         </div>
         <div className="page-header-actions">
@@ -313,8 +361,12 @@ export default function Reader() {
           >
             {articleSpeaking ? "停止朗读" : "朗读全文"}
           </button>
-          <button className="btn" onClick={toggleFullTranslation} disabled={busyFull}>
-            {busyFull ? "…" : showFullZh ? "隐藏译文" : "全文翻译"}
+          <button className="btn" onClick={() => void toggleFullTranslation()} disabled={busyFull}>
+            {busyFull
+              ? (translateProgressLabel(fullProgress) ?? "…")
+              : showFullZh
+                ? "隐藏译文"
+                : "全文翻译"}
           </button>
         </div>
       </header>
@@ -323,80 +375,23 @@ export default function Reader() {
       {toast && <p className="banner ok">{toast}</p>}
 
       <article className="article-body" onMouseUp={onMouseUp}>
-        {paragraphs.map((p, i) => {
-          const paraSpeaking =
-            speaking && speakTarget?.kind === "paragraph" && speakTarget.index === i;
-          return (
-            <div key={i} className="para-block">
-              <div className="para-gutter">
-                <button
-                  className="para-btn"
-                  type="button"
-                  title="翻译本段"
-                  onClick={() => void translatePara(i)}
-                  disabled={busyPara === i}
-                >
-                  {busyPara === i ? "…" : visibleParas[i] ? "隐" : "译"}
-                </button>
-                <button
-                  className={`para-btn${paraSpeaking ? " active" : ""}`}
-                  type="button"
-                  title={paraSpeaking ? "停止朗读" : "朗读本段"}
-                  onClick={() => speakParagraph(i)}
-                >
-                  {paraSpeaking ? "停" : "读"}
-                </button>
-              </div>
-              <div className="para-content">
-                {asMarkdown ? (
-                  <div className="md-preview">
-                    <Markdown
-                      components={{
-                        a: ({ href, children }) => (
-                          <a href={href} target="_blank" rel="noreferrer">
-                            {children}
-                          </a>
-                        ),
-                        p: ({ children }) => (
-                          <p>
-                            {lexReady && typeof children === "string" ? (
-                              <AnnotatedPara
-                                text={children}
-                                prefs={prefs}
-                                learningTerms={vocabTerms}
-                                onHardClick={onHardWordClick}
-                              />
-                            ) : (
-                              children
-                            )}
-                          </p>
-                        ),
-                      }}
-                    >
-                      {p}
-                    </Markdown>
-                  </div>
-                ) : (
-                  <p>
-                    {lexReady ? (
-                      <AnnotatedPara
-                        text={p}
-                        prefs={prefs}
-                        learningTerms={vocabTerms}
-                        onHardClick={onHardWordClick}
-                      />
-                    ) : (
-                      p
-                    )}
-                  </p>
-                )}
-                {(showFullZh || visibleParas[i]) && translations[String(i)] && (
-                  <p className="zh">{translations[String(i)]}</p>
-                )}
-              </div>
-            </div>
-          );
-        })}
+        {paragraphs.map((p, i) => (
+          <ReaderParagraph
+            key={i}
+            text={p}
+            asMarkdown={asMarkdown}
+            annotateChildren={annotateChildren}
+            zhVisible={!!((showFullZh || visibleParas[i]) && translations[String(i)])}
+            zhText={translations[String(i)]}
+            translating={busyPara === i}
+            visiblePara={!!visibleParas[i]}
+            paraSpeaking={
+              !!(speaking && speakTarget?.kind === "paragraph" && speakTarget.index === i)
+            }
+            onTranslate={() => void translatePara(i)}
+            onSpeak={() => speakParagraph(i)}
+          />
+        ))}
       </article>
 
       <p className="muted source-link">
@@ -417,25 +412,9 @@ export default function Reader() {
           speakTarget={speakTarget}
           onSpeakWord={speakWord}
           onAddVocab={() => void addToVocab()}
-          onClose={() => setPopover(null)}
+          onClose={closePopover}
         />
       )}
     </div>
   );
-}
-
-function findContext(paragraphs: string[], term: string): string {
-  const lower = term.toLowerCase();
-  const hit = paragraphs.find((p) => p.toLowerCase().includes(lower));
-  return hit ?? term;
-}
-
-function labelCategory(c: string) {
-  const map: Record<string, string> = {
-    tech: "科技",
-    finance: "财经",
-    world: "国际",
-    other: "其他",
-  };
-  return map[c] ?? c;
 }

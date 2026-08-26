@@ -20,7 +20,7 @@ pub fn list_articles(
     }
     sql.push_str(" ORDER BY source ASC, fetched_at DESC, published_at DESC");
     sql.push_str(" LIMIT ? OFFSET ?");
-    params.push(rusqlite::types::Value::Integer(limit.unwrap_or(400)));
+    params.push(rusqlite::types::Value::Integer(limit.unwrap_or(60)));
     params.push(rusqlite::types::Value::Integer(offset.unwrap_or(0)));
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
@@ -32,13 +32,38 @@ pub fn list_articles(
     Ok(rows)
 }
 
-/// All articles with no LIMIT — used for maintenance purges on refresh.
-pub fn list_all_articles(conn: &Connection) -> Result<Vec<Article>, String> {
+/// RSS articles whose stored body length (bytes) is below `max_bytes` — the
+/// candidate set for summary-only purges without loading every full body.
+pub fn list_rss_teaser_candidates(
+    conn: &Connection,
+    max_bytes: i64,
+) -> Result<Vec<Article>, String> {
     let mut stmt = conn
-        .prepare(&format!("SELECT {ARTICLE_COLS} FROM articles"))
+        .prepare(&format!(
+            "SELECT {ARTICLE_COLS} FROM articles WHERE origin='rss' AND LENGTH(content_text) < ?1"
+        ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([], map_article)
+        .query_map(params![max_bytes], map_article)
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+/// `(id, title, first `sample_chars` chars of body)` for rss articles.
+/// Enough signal for the English heuristic without full-body scans.
+pub fn list_rss_language_samples(
+    conn: &Connection,
+    sample_chars: i32,
+) -> Result<Vec<(String, String, String)>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, title, SUBSTR(content_text, 1, ?1) FROM articles WHERE origin='rss'")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![sample_chars], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
@@ -133,13 +158,15 @@ pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, Str
 }
 
 /// Refresh an existing RSS article when a longer full-text body is available.
+/// Matches by URL: callers may build the update struct with an empty/fresh id
+/// (the RSS refresh path does exactly that).
 /// Keeps id / url / title_zh / source / category / published_at / origin intact.
 pub fn refresh_article_content(conn: &Connection, a: &Article) -> Result<bool, String> {
     let changed = conn
         .execute(
             "UPDATE articles SET title=?1, content_text=?2, fetched_at=?3
-             WHERE id=?4 AND content_text <> ?2",
-            params![a.title, a.content_text, a.fetched_at, a.id],
+             WHERE url=?4 AND content_text <> ?2",
+            params![a.title, a.content_text, a.fetched_at, a.url],
         )
         .map_err(|e| e.to_string())?;
     Ok(changed > 0)
@@ -153,17 +180,7 @@ pub fn upsert_article(conn: &Connection, a: &Article) -> Result<(), String> {
 }
 
 pub fn delete_article(conn: &Connection, id: &str) -> Result<(), String> {
-    conn.execute(
-        "DELETE FROM translations WHERE article_id=?1",
-        params![id],
-    )
-    .map_err(|e| e.to_string())?;
-    // Keep learned words, just detach them from the removed article.
-    conn.execute(
-        "UPDATE vocab SET article_id=NULL WHERE article_id=?1",
-        params![id],
-    )
-    .map_err(|e| e.to_string())?;
+    // translations CASCADE; vocab.article_id SET NULL (schema v3).
     conn.execute("DELETE FROM articles WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
     Ok(())

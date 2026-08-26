@@ -241,6 +241,14 @@ a {
   color: var(--danger);
 }
 
+.banner.with-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 16px 28px 0;
+}
+
 .article-list {
   list-style: none;
   padding: 0;
@@ -671,6 +679,14 @@ mark.vocab-hit:hover {
   min-height: 220px;
   box-shadow: var(--shadow);
   cursor: pointer;
+}
+
+button.flashcard {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
 }
 
 .flash-term {

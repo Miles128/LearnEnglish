@@ -1,8 +1,20 @@
 use crate::config::AppConfig;
+use crate::db::{self, DbState, VocabItem};
+use chrono::Utc;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::LazyLock;
 use ts_rs::TS;
+use uuid::Uuid;
+
+/// Shared LLM HTTP client — one connection pool instead of a new client per call.
+static CHAT_CLIENT: LazyLock<Client> = LazyLock::new(|| {
+    Client::builder()
+        .timeout(std::time::Duration::from_secs(90))
+        .build()
+        .expect("build reqwest client")
+});
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VocabEnrichment {
@@ -33,6 +45,38 @@ pub fn translate_text(cfg: &AppConfig, text: &str) -> Result<String, String> {
     chat(cfg, system, &user)
 }
 
+fn strip_fences(raw: &str) -> &str {
+    raw.trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim()
+}
+
+const JSON_REMINDER: &str =
+    "\n\nREMINDER: Reply with ONLY valid JSON in the exact shape requested. No markdown fences, no commentary.";
+
+/// Chat → parse JSON, with one stricter-instruction retry on parse failure.
+/// Models occasionally wrap JSON in prose/fences despite instructions; the
+/// single retry recovers most of those without burning extra calls up front.
+fn chat_json<T: for<'de> Deserialize<'de>>(
+    cfg: &AppConfig,
+    system: &str,
+    user: &str,
+    label: &str,
+) -> Result<T, String> {
+    let raw = chat(cfg, system, user)?;
+    match serde_json::from_str(strip_fences(&raw)) {
+        Ok(v) => Ok(v),
+        Err(first_err) => {
+            let raw2 = chat(cfg, system, &format!("{user}{JSON_REMINDER}"))
+                .map_err(|e| format!("{label}: first attempt failed to parse ({first_err}); retry request failed: {e}"))?;
+            serde_json::from_str(strip_fences(&raw2))
+                .map_err(|e| format!("parse {label}: {first_err}; retry also failed: {e}; raw={raw2}"))
+        }
+    }
+}
+
 /// Translate article titles in batch. Input order must match output order.
 pub fn translate_titles(cfg: &AppConfig, titles: &[String]) -> Result<Vec<String>, String> {
     if titles.is_empty() {
@@ -43,15 +87,7 @@ pub fn translate_titles(cfg: &AppConfig, titles: &[String]) -> Result<Vec<String
 Given a JSON array of English titles, return ONLY a JSON array of Chinese titles in the same order and length.
 No markdown fences, no commentary."#;
     let payload = serde_json::to_string(titles).map_err(|e| e.to_string())?;
-    let raw = chat(cfg, system, &payload)?;
-    let cleaned = raw
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-    let out: Vec<String> = serde_json::from_str(cleaned)
-        .map_err(|e| format!("parse title translations: {e}; raw={raw}"))?;
+    let out: Vec<String> = chat_json(cfg, system, &payload, "title translations")?;
     if out.len() != titles.len() {
         return Err(format!(
             "title translation count mismatch: got {} expected {}",
@@ -72,15 +108,7 @@ pub fn translate_texts(cfg: &AppConfig, texts: &[String]) -> Result<Vec<String>,
 Given a JSON array of English passages, return ONLY a JSON array of Chinese translations in the same order and length.
 Translate faithfully. No markdown fences, no commentary."#;
     let payload = serde_json::to_string(texts).map_err(|e| e.to_string())?;
-    let raw = chat(cfg, system, &payload)?;
-    let cleaned = raw
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-    let out: Vec<String> = serde_json::from_str(cleaned)
-        .map_err(|e| format!("parse paragraph translations: {e}; raw={raw}"))?;
+    let out: Vec<String> = chat_json(cfg, system, &payload, "paragraph translations")?;
     if out.len() != texts.len() {
         return Err(format!(
             "paragraph translation count mismatch: got {} expected {}",
@@ -99,14 +127,109 @@ word_type (string, e.g. noun / verb / adjective / phrase / idiom / usage),
 collocations (array of 2-5 short common collocations or usage patterns in English).
 No markdown fences."#;
     let user = format!("Term: {term}\nContext: {context}");
-    let raw = chat(cfg, system, &user)?;
-    let cleaned = raw
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-    serde_json::from_str(cleaned).map_err(|e| format!("parse vocab JSON: {e}; raw={raw}"))
+    chat_json(cfg, system, &user, "vocab JSON")
+}
+
+#[derive(serde::Deserialize)]
+pub struct AddVocabInput {
+    pub term: String,
+    pub context_sentence: String,
+    pub article_id: Option<String>,
+    pub definition_zh: Option<String>,
+    pub word_type: Option<String>,
+    pub collocations: Option<Vec<String>>,
+}
+
+/// Enrich (optional) and insert-or-merge a vocab row. LLM failure degrades to given fields.
+pub fn add_or_merge_vocab(
+    db: &DbState,
+    cfg: &AppConfig,
+    input: AddVocabInput,
+) -> Result<VocabItem, String> {
+    let term = input.term.trim().to_string();
+    if term.is_empty() {
+        return Err("词条不能为空".into());
+    }
+    let definition_zh = input.definition_zh.clone().unwrap_or_default();
+    let word_type = input.word_type.clone().unwrap_or_default();
+    let collocations = input.collocations.clone().unwrap_or_default();
+    let explicit = input.definition_zh.is_some()
+        && input.word_type.is_some()
+        && input.collocations.is_some();
+    let mut enrichment = if explicit {
+        VocabEnrichment {
+            definition_zh: definition_zh.clone(),
+            word_type: if word_type.is_empty() {
+                "phrase".into()
+            } else {
+                word_type.clone()
+            },
+            collocations,
+        }
+    } else {
+        match enrich_vocab(cfg, &term, &input.context_sentence) {
+            Ok(e) => e,
+            Err(_) => VocabEnrichment {
+                definition_zh: definition_zh.clone(),
+                word_type: if word_type.is_empty() {
+                    "phrase".into()
+                } else {
+                    word_type.clone()
+                },
+                collocations: collocations.clone(),
+            },
+        }
+    };
+    if enrichment.definition_zh.is_empty() {
+        enrichment.definition_zh = definition_zh.clone();
+    }
+    if enrichment.word_type.is_empty() {
+        enrichment.word_type = "phrase".into();
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let conn = db.lock_write().map_err(|e| e.to_string())?;
+
+    if let Some(mut existing) = db::get_vocab_by_term(&conn, &term)? {
+        if existing.definition_zh.is_empty() {
+            existing.definition_zh = enrichment.definition_zh.clone();
+        }
+        if existing.word_type.is_empty() {
+            existing.word_type = enrichment.word_type.clone();
+        }
+        for c in &enrichment.collocations {
+            let c = c.trim();
+            if !c.is_empty() && !existing.collocations.contains(&c.to_string()) {
+                existing.collocations.push(c.to_string());
+            }
+        }
+        if existing.context_sentence.is_empty() {
+            existing.context_sentence = input.context_sentence.clone();
+        }
+        if existing.article_id.is_none() {
+            existing.article_id = input.article_id.clone();
+        }
+        db::update_vocab_meta(&conn, &existing)?;
+        return Ok(existing);
+    }
+
+    let item = VocabItem {
+        id: Uuid::new_v4().to_string(),
+        term,
+        definition_zh: enrichment.definition_zh,
+        word_type: enrichment.word_type,
+        collocations: enrichment.collocations,
+        context_sentence: input.context_sentence,
+        article_id: input.article_id,
+        status: "learning".into(),
+        interval_days: 0.0,
+        reps: 0,
+        consecutive_know: 0,
+        next_review_at: now.clone(),
+        created_at: now,
+    };
+    db::insert_vocab(&conn, &item)?;
+    Ok(item)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -136,15 +259,8 @@ URLs must look like real feed endpoints (often ending in /feed, /rss, .xml)."#;
     let user = format!(
         "Category id: {category_id}\nCategory label: {category_label}\nRecommend English RSS feeds for this category."
     );
-    let raw = chat(cfg, system, &user)?;
-    let cleaned = raw
-        .trim()
-        .trim_start_matches("```json")
-        .trim_start_matches("```")
-        .trim_end_matches("```")
-        .trim();
-    let mut out: Vec<FeedDiscoverCandidate> = serde_json::from_str(cleaned)
-        .map_err(|e| format!("parse discover JSON: {e}; raw={raw}"))?;
+    let mut out: Vec<FeedDiscoverCandidate> =
+        chat_json(cfg, system, &user, "discover JSON")?;
     out.retain(|c| {
         let u = c.url.trim();
         (u.starts_with("https://") || u.starts_with("http://")) && !c.name.trim().is_empty()
@@ -166,11 +282,6 @@ fn ensure_configured(cfg: &AppConfig) -> Result<(), String> {
 }
 
 fn chat(cfg: &AppConfig, system: &str, user: &str) -> Result<String, String> {
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(90))
-        .build()
-        .map_err(|e| e.to_string())?;
-
     let base = cfg.base_url.trim_end_matches('/');
     let url = format!("{base}/chat/completions");
     let body = json!({
@@ -182,7 +293,7 @@ fn chat(cfg: &AppConfig, system: &str, user: &str) -> Result<String, String> {
         ]
     });
 
-    let resp = client
+    let resp = CHAT_CLIENT
         .post(&url)
         .bearer_auth(&cfg.api_key)
         .json(&body)

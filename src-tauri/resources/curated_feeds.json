@@ -1,0 +1,674 @@
+[
+  {
+    "id": "mit-technology-review",
+    "name": "MIT Technology Review",
+    "category": "tech",
+    "url": "https://www.technologyreview.com/feed/"
+  },
+  {
+    "id": "mit-tr-ai",
+    "name": "MIT TR · Artificial Intelligence",
+    "category": "tech",
+    "url": "https://www.technologyreview.com/topic/artificial-intelligence/feed"
+  },
+  {
+    "id": "the-verge",
+    "name": "The Verge",
+    "category": "tech",
+    "url": "https://www.theverge.com/rss/index.xml"
+  },
+  {
+    "id": "arstechnica",
+    "name": "Ars Technica",
+    "category": "tech",
+    "url": "https://feeds.arstechnica.com/arstechnica/index"
+  },
+  {
+    "id": "conversation-ai",
+    "name": "The Conversation · AI",
+    "category": "tech",
+    "url": "https://theconversation.com/us/topics/artificial-intelligence-ai-90/articles.atom"
+  },
+  {
+    "id": "platformer",
+    "name": "Platformer",
+    "category": "tech",
+    "url": "https://www.platformer.news/feed"
+  },
+  {
+    "id": "last-week-in-ai",
+    "name": "Last Week in AI",
+    "category": "tech",
+    "url": "https://lastweekin.ai/feed"
+  },
+  {
+    "id": "one-useful-thing",
+    "name": "One Useful Thing",
+    "category": "tech",
+    "url": "https://www.oneusefulthing.org/feed"
+  },
+  {
+    "id": "benedict-evans",
+    "name": "Benedict Evans",
+    "category": "tech",
+    "url": "https://www.ben-evans.com/benedictevans?format=rss"
+  },
+  {
+    "id": "stratechery",
+    "name": "Stratechery",
+    "category": "tech",
+    "url": "https://stratechery.com/feed/"
+  },
+  {
+    "id": "daring-fireball",
+    "name": "Daring Fireball",
+    "category": "tech",
+    "url": "https://daringfireball.net/feeds/main"
+  },
+  {
+    "id": "four-oh-four-media",
+    "name": "404 Media",
+    "category": "tech",
+    "url": "https://www.404media.co/feed/"
+  },
+  {
+    "id": "guardian-tech",
+    "name": "The Guardian · Technology",
+    "category": "tech",
+    "url": "https://www.theguardian.com/technology/rss"
+  },
+  {
+    "id": "simon-willison",
+    "name": "Simon Willison",
+    "category": "tech",
+    "url": "https://simonwillison.net/atom/entries/"
+  },
+  {
+    "id": "understanding-ai",
+    "name": "Understanding AI",
+    "category": "tech",
+    "url": "https://www.understandingai.org/feed"
+  },
+  {
+    "id": "karpathy",
+    "name": "Andrej Karpathy",
+    "category": "tech",
+    "url": "https://karpathy.github.io/feed.xml"
+  },
+  {
+    "id": "lilian-weng",
+    "name": "Lilian Weng · Lil'Log",
+    "category": "tech",
+    "url": "https://lilianweng.github.io/index.xml"
+  },
+  {
+    "id": "jay-alammar",
+    "name": "Jay Alammar",
+    "category": "tech",
+    "url": "https://jalammar.github.io/feed.xml"
+  },
+  {
+    "id": "colah",
+    "name": "colah's blog",
+    "category": "tech",
+    "url": "https://colah.github.io/rss.xml"
+  },
+  {
+    "id": "sam-altman",
+    "name": "Sam Altman",
+    "category": "tech",
+    "url": "https://blog.samaltman.com/posts.atom"
+  },
+  {
+    "id": "latent-space",
+    "name": "Latent Space",
+    "category": "tech",
+    "url": "https://www.latent.space/feed"
+  },
+  {
+    "id": "chinatalk",
+    "name": "ChinaTalk",
+    "category": "tech",
+    "url": "https://www.chinatalk.media/feed"
+  },
+  {
+    "id": "the-diff",
+    "name": "The Diff",
+    "category": "tech",
+    "url": "https://www.thediff.co/feed"
+  },
+  {
+    "id": "pragmatic-engineer",
+    "name": "The Pragmatic Engineer",
+    "category": "tech",
+    "url": "https://newsletter.pragmaticengineer.com/feed"
+  },
+  {
+    "id": "balaji",
+    "name": "Balaji",
+    "category": "tech",
+    "url": "https://balajis.com/feed"
+  },
+  {
+    "id": "conversation-business",
+    "name": "The Conversation · Business",
+    "category": "finance",
+    "url": "https://theconversation.com/us/business/articles.atom"
+  },
+  {
+    "id": "lennys-newsletter",
+    "name": "Lenny's Newsletter",
+    "category": "finance",
+    "url": "https://www.lennysnewsletter.com/feed"
+  },
+  {
+    "id": "not-boring",
+    "name": "Not Boring",
+    "category": "finance",
+    "url": "https://www.notboring.co/feed"
+  },
+  {
+    "id": "commoncog",
+    "name": "Commoncog",
+    "category": "finance",
+    "url": "https://commoncog.com/blog/rss/"
+  },
+  {
+    "id": "noahpinion",
+    "name": "Noahpinion",
+    "category": "finance",
+    "url": "https://www.noahpinion.blog/feed"
+  },
+  {
+    "id": "damodaran",
+    "name": "Aswath Damodaran · Musings on Markets",
+    "category": "finance",
+    "url": "https://aswathdamodaran.blogspot.com/feeds/posts/default"
+  },
+  {
+    "id": "of-dollars-and-data",
+    "name": "Of Dollars And Data",
+    "category": "finance",
+    "url": "https://ofdollarsanddata.com/feed/"
+  },
+  {
+    "id": "a-wealth-of-common-sense",
+    "name": "A Wealth of Common Sense",
+    "category": "finance",
+    "url": "https://awealthofcommonsense.com/feed/"
+  },
+  {
+    "id": "collaborative-fund",
+    "name": "Collaborative Fund",
+    "category": "finance",
+    "url": "https://collabfund.com/feed"
+  },
+  {
+    "id": "calculated-risk",
+    "name": "Calculated Risk",
+    "category": "finance",
+    "url": "https://www.calculatedriskblog.com/feeds/posts/default"
+  },
+  {
+    "id": "avc",
+    "name": "AVC · Fred Wilson",
+    "category": "finance",
+    "url": "https://avc.com/feed/"
+  },
+  {
+    "id": "big-picture",
+    "name": "The Big Picture",
+    "category": "finance",
+    "url": "https://ritholtz.com/feed/"
+  },
+  {
+    "id": "marginal-revolution",
+    "name": "Marginal Revolution",
+    "category": "finance",
+    "url": "https://marginalrevolution.com/feed"
+  },
+  {
+    "id": "abnormal-returns",
+    "name": "Abnormal Returns",
+    "category": "finance",
+    "url": "https://www.abnormalreturns.com/feed/"
+  },
+  {
+    "id": "guardian-world",
+    "name": "The Guardian · World",
+    "category": "world",
+    "url": "https://www.theguardian.com/world/rss"
+  },
+  {
+    "id": "guardian-international",
+    "name": "The Guardian · International",
+    "category": "world",
+    "url": "https://www.theguardian.com/international/rss"
+  },
+  {
+    "id": "bbc-world",
+    "name": "BBC News · World",
+    "category": "world",
+    "url": "https://feeds.bbci.co.uk/news/world/rss.xml"
+  },
+  {
+    "id": "aljazeera",
+    "name": "Al Jazeera English",
+    "category": "world",
+    "url": "https://www.aljazeera.com/xml/rss/all.xml"
+  },
+  {
+    "id": "dw-english",
+    "name": "Deutsche Welle",
+    "category": "world",
+    "url": "https://rss.dw.com/rdf/rss-en-all"
+  },
+  {
+    "id": "npr-news",
+    "name": "NPR News",
+    "category": "world",
+    "url": "https://feeds.npr.org/1001/rss.xml"
+  },
+  {
+    "id": "france24",
+    "name": "France 24 English",
+    "category": "world",
+    "url": "https://www.france24.com/en/rss"
+  },
+  {
+    "id": "globe-world",
+    "name": "The Globe and Mail · World",
+    "category": "world",
+    "url": "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/world/"
+  },
+  {
+    "id": "globe-canada",
+    "name": "The Globe and Mail · Canada",
+    "category": "world",
+    "url": "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/canada/"
+  },
+  {
+    "id": "globe-opinion",
+    "name": "The Globe and Mail · Opinion",
+    "category": "world",
+    "url": "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/opinion/"
+  },
+  {
+    "id": "un-news",
+    "name": "UN News",
+    "category": "world",
+    "url": "https://news.un.org/feed/subscribe/en/news/all/rss.xml"
+  },
+  {
+    "id": "vox",
+    "name": "Vox",
+    "category": "world",
+    "url": "https://www.vox.com/rss/index.xml"
+  },
+  {
+    "id": "the-atlantic",
+    "name": "The Atlantic",
+    "category": "world",
+    "url": "https://www.theatlantic.com/feed/all/"
+  },
+  {
+    "id": "the-intercept",
+    "name": "The Intercept",
+    "category": "world",
+    "url": "https://theintercept.com/feed/?rss"
+  },
+  {
+    "id": "democracy-now",
+    "name": "Democracy Now!",
+    "category": "world",
+    "url": "https://www.democracynow.org/democracynow.rss"
+  },
+  {
+    "id": "scmp",
+    "name": "South China Morning Post",
+    "category": "world",
+    "url": "https://www.scmp.com/rss/91/feed"
+  },
+  {
+    "id": "conversation-us",
+    "name": "The Conversation US",
+    "category": "world",
+    "url": "https://theconversation.com/us/articles.atom"
+  },
+  {
+    "id": "conversation-world",
+    "name": "The Conversation · World",
+    "category": "world",
+    "url": "https://theconversation.com/us/world/articles.atom"
+  },
+  {
+    "id": "propublica",
+    "name": "ProPublica",
+    "category": "world",
+    "url": "https://www.propublica.org/feeds/propublica/main"
+  },
+  {
+    "id": "who-news",
+    "name": "WHO News",
+    "category": "world",
+    "url": "https://www.who.int/rss-feeds/news-english.xml"
+  },
+  {
+    "id": "slow-boring",
+    "name": "Slow Boring",
+    "category": "world",
+    "url": "https://www.slowboring.com/feed"
+  },
+  {
+    "id": "politico",
+    "name": "Politico",
+    "category": "world",
+    "url": "https://rss.politico.com/politics-news.xml"
+  },
+  {
+    "id": "the-hill",
+    "name": "The Hill",
+    "category": "world",
+    "url": "https://thehill.com/news/feed/"
+  },
+  {
+    "id": "npr-politics",
+    "name": "NPR Politics",
+    "category": "world",
+    "url": "https://feeds.npr.org/1014/rss.xml"
+  },
+  {
+    "id": "bbc-politics",
+    "name": "BBC News · Politics",
+    "category": "world",
+    "url": "https://feeds.bbci.co.uk/news/politics/rss.xml"
+  },
+  {
+    "id": "guardian-politics",
+    "name": "The Guardian · Politics",
+    "category": "world",
+    "url": "https://www.theguardian.com/politics/rss"
+  },
+  {
+    "id": "conversation-politics",
+    "name": "The Conversation · Politics",
+    "category": "world",
+    "url": "https://theconversation.com/us/politics/articles.atom"
+  },
+  {
+    "id": "pbs-newshour",
+    "name": "PBS NewsHour",
+    "category": "world",
+    "url": "https://www.pbs.org/newshour/feeds/rss/headlines"
+  },
+  {
+    "id": "cnn-world",
+    "name": "CNN · World",
+    "category": "world",
+    "url": "http://rss.cnn.com/rss/edition_world.rss"
+  },
+  {
+    "id": "time-magazine",
+    "name": "TIME",
+    "category": "world",
+    "url": "https://time.com/feed/"
+  },
+  {
+    "id": "independent-world",
+    "name": "The Independent · World",
+    "category": "world",
+    "url": "https://www.independent.co.uk/news/world/rss"
+  },
+  {
+    "id": "project-syndicate",
+    "name": "Project Syndicate",
+    "category": "world",
+    "url": "https://www.project-syndicate.org/rss"
+  },
+  {
+    "id": "foreign-policy",
+    "name": "Foreign Policy",
+    "category": "world",
+    "url": "https://foreignpolicy.com/feed/"
+  },
+  {
+    "id": "mother-jones",
+    "name": "Mother Jones",
+    "category": "world",
+    "url": "https://www.motherjones.com/feed/"
+  },
+  {
+    "id": "reason",
+    "name": "Reason",
+    "category": "world",
+    "url": "https://reason.com/feed/"
+  },
+  {
+    "id": "jacobin",
+    "name": "Jacobin",
+    "category": "world",
+    "url": "https://jacobin.com/feed/"
+  },
+  {
+    "id": "national-review",
+    "name": "National Review",
+    "category": "world",
+    "url": "https://www.nationalreview.com/feed/"
+  },
+  {
+    "id": "the-bulwark",
+    "name": "The Bulwark",
+    "category": "world",
+    "url": "https://www.thebulwark.com/feed/"
+  },
+  {
+    "id": "persuasion",
+    "name": "Persuasion",
+    "category": "world",
+    "url": "https://www.persuasion.community/feed"
+  },
+  {
+    "id": "the-dispatch",
+    "name": "The Dispatch",
+    "category": "world",
+    "url": "https://thedispatch.com/feed/"
+  },
+  {
+    "id": "harpers",
+    "name": "Harper's Magazine",
+    "category": "world",
+    "url": "https://harpers.org/feed/"
+  },
+  {
+    "id": "nasa",
+    "name": "NASA Breaking News",
+    "category": "other",
+    "url": "https://www.nasa.gov/rss/dyn/breaking_news.rss"
+  },
+  {
+    "id": "space-com",
+    "name": "Space.com",
+    "category": "other",
+    "url": "https://www.space.com/feeds/all"
+  },
+  {
+    "id": "quanta",
+    "name": "Quanta Magazine",
+    "category": "other",
+    "url": "https://www.quantamagazine.org/feed/"
+  },
+  {
+    "id": "live-science",
+    "name": "Live Science",
+    "category": "other",
+    "url": "https://www.livescience.com/feeds/all"
+  },
+  {
+    "id": "conversation-science",
+    "name": "The Conversation · Science",
+    "category": "other",
+    "url": "https://theconversation.com/us/science/articles.atom"
+  },
+  {
+    "id": "atlas-obscura",
+    "name": "Atlas Obscura",
+    "category": "other",
+    "url": "https://www.atlasobscura.com/feeds/latest"
+  },
+  {
+    "id": "longreads",
+    "name": "Longreads",
+    "category": "other",
+    "url": "https://longreads.com/feed/"
+  },
+  {
+    "id": "literary-hub",
+    "name": "Literary Hub",
+    "category": "other",
+    "url": "https://lithub.com/feed/"
+  },
+  {
+    "id": "noema",
+    "name": "Noema Magazine",
+    "category": "other",
+    "url": "https://www.noemamag.com/feed/"
+  },
+  {
+    "id": "paris-review",
+    "name": "The Paris Review",
+    "category": "other",
+    "url": "https://www.theparisreview.org/blog/feed/"
+  },
+  {
+    "id": "wait-but-why",
+    "name": "Wait But Why",
+    "category": "other",
+    "url": "https://waitbutwhy.com/feed"
+  },
+  {
+    "id": "the-marginalian",
+    "name": "The Marginalian",
+    "category": "other",
+    "url": "https://www.themarginalian.org/feed/"
+  },
+  {
+    "id": "farnam-street",
+    "name": "Farnam Street",
+    "category": "other",
+    "url": "https://fs.blog/feed/"
+  },
+  {
+    "id": "seth-godin",
+    "name": "Seth's Blog",
+    "category": "other",
+    "url": "https://seths.blog/feed/"
+  },
+  {
+    "id": "james-clear",
+    "name": "James Clear",
+    "category": "other",
+    "url": "https://jamesclear.com/feed"
+  },
+  {
+    "id": "cal-newport",
+    "name": "Cal Newport",
+    "category": "other",
+    "url": "https://www.calnewport.com/blog/feed/"
+  },
+  {
+    "id": "mark-manson",
+    "name": "Mark Manson",
+    "category": "other",
+    "url": "https://markmanson.net/feed"
+  },
+  {
+    "id": "ted-ideas",
+    "name": "TED Ideas",
+    "category": "other",
+    "url": "https://ideas.ted.com/feed/"
+  },
+  {
+    "id": "open-culture",
+    "name": "Open Culture",
+    "category": "other",
+    "url": "https://www.openculture.com/feed"
+  },
+  {
+    "id": "three-quarks-daily",
+    "name": "3 Quarks Daily",
+    "category": "other",
+    "url": "https://3quarksdaily.com/feed"
+  },
+  {
+    "id": "paul-graham",
+    "name": "Paul Graham Essays",
+    "category": "other",
+    "url": "https://raw.githubusercontent.com/Olshansk/pgessays-rss/main/feed.xml"
+  },
+  {
+    "id": "idle-words",
+    "name": "Idle Words",
+    "category": "other",
+    "url": "https://idlewords.com/index.xml"
+  },
+  {
+    "id": "derek-sivers",
+    "name": "Derek Sivers",
+    "category": "other",
+    "url": "https://sivers.org/en.atom"
+  },
+  {
+    "id": "astral-codex-ten",
+    "name": "Astral Codex Ten",
+    "category": "other",
+    "url": "https://www.astralcodexten.com/feed"
+  },
+  {
+    "id": "dynomight",
+    "name": "Dynomight",
+    "category": "other",
+    "url": "https://dynomight.net/feed.xml"
+  },
+  {
+    "id": "melting-asphalt",
+    "name": "Melting Asphalt",
+    "category": "other",
+    "url": "https://meltingasphalt.com/feed/"
+  },
+  {
+    "id": "kevin-kelly",
+    "name": "Kevin Kelly · The Technium",
+    "category": "other",
+    "url": "https://kk.org/thetechnium/feed/"
+  },
+  {
+    "id": "craig-mod",
+    "name": "Craig Mod",
+    "category": "other",
+    "url": "https://craigmod.com/index.xml"
+  },
+  {
+    "id": "austin-kleon",
+    "name": "Austin Kleon",
+    "category": "other",
+    "url": "https://austinkleon.com/feed/"
+  },
+  {
+    "id": "naval",
+    "name": "Naval",
+    "category": "other",
+    "url": "https://nav.al/feed"
+  },
+  {
+    "id": "neil-gaiman",
+    "name": "Neil Gaiman's Journal",
+    "category": "other",
+    "url": "https://journal.neilgaiman.com/feeds/posts/default"
+  },
+  {
+    "id": "anil-dash",
+    "name": "Anil Dash",
+    "category": "other",
+    "url": "https://www.anildash.com/feed.xml"
+  }
+]

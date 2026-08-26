@@ -22,11 +22,32 @@ export function normalizeConfig(raw: AppConfig): AppConfig {
   };
 }
 
+export type ConfigLoadAttempt =
+  | { ok: true; loaded: AppConfig }
+  | { ok: false; message: string };
+
+/** First get_config attempt always yields `ready`, so the app is never stuck on a silent failure. */
+export function applyConfigLoadResult(
+  previous: AppConfig,
+  result: ConfigLoadAttempt,
+): { cfg: AppConfig; ready: true; loadError: string | null } {
+  if (result.ok) {
+    return {
+      cfg: normalizeConfig(result.loaded),
+      ready: true,
+      loadError: null,
+    };
+  }
+  return { cfg: previous, ready: true, loadError: result.message };
+}
+
 type AppConfigState = {
   /** Current config. Starts as defaults; becomes the loaded file once `ready`. */
   cfg: AppConfig;
-  /** True after the first successful `get_config` round-trip. */
+  /** True after the first `get_config` attempt, success or failure. */
   ready: boolean;
+  /** Set when the last load failed; cleared on success or save. */
+  loadError: string | null;
   save: (next: AppConfig) => Promise<void>;
   refresh: () => Promise<void>;
 };
@@ -36,14 +57,25 @@ const AppConfigContext = createContext<AppConfigState | null>(null);
 export function AppConfigProvider({ children }: { children: ReactNode }) {
   const [cfg, setCfg] = useState<AppConfig>(() => defaultAppConfig());
   const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
       const loaded = await api.getConfig();
-      setCfg(normalizeConfig(loaded));
-      setReady(true);
-    } catch {
-      // Tauri may not be ready yet; stay on defaults and leave `ready` false.
+      const next = applyConfigLoadResult(defaultAppConfig(), {
+        ok: true,
+        loaded,
+      });
+      setCfg(next.cfg);
+      setReady(next.ready);
+      setLoadError(next.loadError);
+    } catch (e) {
+      const next = applyConfigLoadResult(defaultAppConfig(), {
+        ok: false,
+        message: String(e),
+      });
+      setReady(next.ready);
+      setLoadError(next.loadError);
     }
   }, []);
 
@@ -51,6 +83,7 @@ export function AppConfigProvider({ children }: { children: ReactNode }) {
     await api.saveConfig(next);
     setCfg(normalizeConfig(next));
     setReady(true);
+    setLoadError(null);
   }, []);
 
   useEffect(() => {
@@ -58,8 +91,8 @@ export function AppConfigProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   const value = useMemo(
-    () => ({ cfg, ready, save, refresh }),
-    [cfg, ready, save, refresh],
+    () => ({ cfg, ready, loadError, save, refresh }),
+    [cfg, ready, loadError, save, refresh],
   );
   return (
     <AppConfigContext.Provider value={value}>

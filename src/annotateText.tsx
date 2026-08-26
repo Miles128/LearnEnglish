@@ -21,23 +21,6 @@ export type HardWordClick = (info: {
 }) => void;
 
 /**
- * Render paragraph text with difficulty underlines + learning-vocab marks.
- */
-export function renderAnnotatedParagraph(
-  text: string,
-  prefs: DifficultyPrefs,
-  learningTerms: string[],
-  onHardClick?: HardWordClick,
-): ReactNode {
-  const spans = annotateText(text, prefs, learningTerms);
-  return createElement(
-    Fragment,
-    null,
-    ...spans.map((s, i) => renderSpan(s, i, onHardClick)),
-  );
-}
-
-/**
  * Memoized per-paragraph annotation so only paragraphs whose text, prefs or
  * vocab changed re-run the (expensive) word-level annotation pass.
  * `onHardClick` must be referentially stable (useCallback) to get memo hits.
@@ -97,42 +80,33 @@ function renderSpan(
     });
   };
 
-  // Hard words: clickable underline span. Learning-only: mark.
-  if (span.hard) {
-    return createElement(
-      "span",
-      {
-        key: `t-${key}`,
-        className: classNames,
-        title,
-        role: "button",
-        tabIndex: 0,
-        onClick,
-        onKeyDown: (e: KeyboardEvent) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onHardClick?.({
-              term: span.term,
-              display: span.text,
-              zh: span.zh,
-              clientX: 0,
-              clientY: 0,
-            });
-          }
-        },
-      },
-      span.text,
-    );
-  }
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    onHardClick?.({
+      term: span.term,
+      display: span.text,
+      zh: span.zh,
+      clientX: 0,
+      clientY: 0,
+    });
+  };
 
+  const interactive = {
+    key: `t-${key}`,
+    title,
+    role: "button" as const,
+    tabIndex: 0,
+    onClick,
+    onKeyDown,
+  };
+
+  if (span.hard) {
+    return createElement("span", { ...interactive, className: classNames }, span.text);
+  }
   return createElement(
     "mark",
-    {
-      key: `t-${key}`,
-      className: classNames || "vocab-hit",
-      title,
-      onClick,
-    },
+    { ...interactive, className: classNames || "vocab-hit" },
     span.text,
   );
 }

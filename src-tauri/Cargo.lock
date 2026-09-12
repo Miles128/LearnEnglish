@@ -2294,7 +2294,6 @@ dependencies = [
  "chrono",
  "feed-rs",
  "html2text",
- "once_cell",
  "pdf-extract",
  "readability",
  "regex",

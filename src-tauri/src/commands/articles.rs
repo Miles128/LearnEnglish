@@ -250,15 +250,6 @@ pub async fn translate_full_article(
 }
 
 #[tauri::command]
-pub async fn translate_missing_titles(app: AppHandle) -> Result<usize, AppError> {
-    let cfg = crate::config::load_config()?;
-    crate::commands::spawn_db(app, move |state| {
-        Ok(feeds::fill_missing_title_translations(state, &cfg, 40)?)
-    })
-    .await
-}
-
-#[tauri::command]
 pub async fn import_article_url(app: AppHandle, url: String) -> Result<Article, AppError> {
     crate::commands::spawn_db(app, move |state| {
         Ok(feeds::import_article_from_url(state, &url)?)

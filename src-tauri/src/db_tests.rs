@@ -336,6 +336,39 @@ fn purge_never_touches_user_imported_articles() {
 }
 
 #[test]
+fn collect_non_english_ids_does_not_delete() {
+    let path = temp_dir().join(format!("le-collect-zh-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    let zh = db::Article {
+        id: "zh1".into(),
+        url: "https://example.com/zh".into(),
+        title: "如何学习 Rust 编程语言入门指南".into(),
+        title_zh: String::new(),
+        source: "T".into(),
+        category: "tech".into(),
+        published_at: None,
+        content_text: "今天我们来讨论如何高效学习一门新的编程语言。首先需要理解基本概念，然后通过大量练习巩固知识。"
+            .repeat(5),
+        fetched_at: "2020-01-01T00:00:00Z".into(),
+        origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
+    };
+    db::insert_article_if_new(&conn, &zh).unwrap();
+
+    let ids = feeds::collect_non_english_rss_ids(&conn).unwrap();
+    assert_eq!(ids, vec!["zh1".to_string()]);
+    assert!(db::get_article(&conn, "zh1").unwrap().is_some());
+
+    let removed = feeds::delete_articles(&conn, &ids).unwrap();
+    assert_eq!(removed, 1);
+    assert!(db::get_article(&conn, "zh1").unwrap().is_none());
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn refresh_article_content_updates_longer_body() {
     let path = temp_dir().join(format!("le-refresh-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");
@@ -387,6 +420,88 @@ fn refresh_article_content_updates_longer_body() {
     // Idempotent: same body is a no-op.
     let changed_again = db::refresh_article_content(&conn, &update).unwrap();
     assert!(!changed_again);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn refresh_article_content_skips_url_imports() {
+    let path = temp_dir().join(format!("le-refresh-url-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    let original = "imported body ".repeat(40);
+    let a = db::Article {
+        id: "imp1".into(),
+        url: "https://example.com/same-url".into(),
+        title: "Imported".into(),
+        title_zh: String::new(),
+        source: "导入".into(),
+        category: "other".into(),
+        published_at: None,
+        content_text: original.clone(),
+        fetched_at: "2020-01-01T00:00:00Z".into(),
+        origin: "url".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
+    };
+    db::insert_article_if_new(&conn, &a).unwrap();
+
+    let update = db::Article {
+        id: String::new(),
+        url: "https://example.com/same-url".into(),
+        title: "RSS overwrite".into(),
+        title_zh: String::new(),
+        source: "T".into(),
+        category: "tech".into(),
+        published_at: None,
+        content_text: "word ".repeat(500),
+        fetched_at: "2024-01-01T00:00:00Z".into(),
+        origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
+    };
+    let changed = db::refresh_article_content(&conn, &update).unwrap();
+    assert!(!changed);
+    let stored = db::get_article(&conn, "imp1").unwrap().expect("exists");
+    assert_eq!(stored.title, "Imported");
+    assert_eq!(stored.content_text, original);
+    assert_eq!(stored.origin, "url");
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn list_articles_returns_excerpt_not_full_body() {
+    let path = temp_dir().join(format!("le-list-excerpt-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    let body = "x".repeat(9000);
+    let a = db::Article {
+        id: "long1".into(),
+        url: "https://example.com/long".into(),
+        title: "Long".into(),
+        title_zh: String::new(),
+        source: "S".into(),
+        category: "tech".into(),
+        published_at: None,
+        content_text: body.clone(),
+        fetched_at: "2020-01-01T00:00:00Z".into(),
+        origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
+    };
+    db::insert_article_if_new(&conn, &a).unwrap();
+
+    let listed = db::list_articles(&conn, None, Some(1), Some(0)).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].content_text.len(),
+        db::LIST_EXCERPT_CHARS as usize,
+        "home list should not ship the full body"
+    );
+    let stored = db::get_article(&conn, "long1").unwrap().expect("exists");
+    assert_eq!(stored.content_text.len(), 9000);
 
     let _ = std::fs::remove_file(path);
 }

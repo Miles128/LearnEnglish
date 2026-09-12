@@ -62,9 +62,14 @@ function ingestRows(rawLevels: RawRow[]) {
 export function ensureLexiconLoaded(): Promise<void> {
   if (loaded) return Promise.resolve();
   if (loadPromise) return loadPromise;
-  loadPromise = import("./data/word-levels.json").then((mod) => {
-    ingestRows(mod.default as RawRow[]);
-  });
+  loadPromise = import("./data/word-levels.json")
+    .then((mod) => {
+      ingestRows(mod.default as RawRow[]);
+    })
+    .catch((err) => {
+      loadPromise = null;
+      throw err;
+    });
   return loadPromise;
 }
 

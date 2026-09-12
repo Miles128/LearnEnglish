@@ -166,7 +166,7 @@ pub fn db_path(app_data: PathBuf) -> PathBuf {
 pub fn open_db(path: PathBuf) -> Result<Connection, String> {
     let conn = Connection::open(path).map_err(|e| e.to_string())?;
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
-    conn.execute_batch("PRAGMA foreign_keys = ON;")
+    conn.execute_batch("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;")
         .map_err(|e| e.to_string())?;
     migrate(&conn)?;
     feeds::seed_feed_categories(&conn)?;

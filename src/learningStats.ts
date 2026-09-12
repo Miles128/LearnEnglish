@@ -1,11 +1,6 @@
-export type LearningStats = {
-  opened_total: number;
-  opened_7d: number;
-  top_source: string | null;
-  top_category: string | null;
-  vocab_created_7d: number;
-  vocab_learning: number;
-};
+import type { LearningStats } from "./api/types";
+
+export type { LearningStats };
 
 export function formatLearningInsight(stats: LearningStats): string {
   if (stats.opened_total === 0) {

@@ -77,27 +77,6 @@ fn chat_json<T: for<'de> Deserialize<'de>>(
     }
 }
 
-/// Translate article titles in batch. Input order must match output order.
-pub fn translate_titles(cfg: &AppConfig, titles: &[String]) -> Result<Vec<String>, String> {
-    if titles.is_empty() {
-        return Ok(vec![]);
-    }
-    ensure_configured(cfg)?;
-    let system = r#"You translate English article titles to Simplified Chinese for learners.
-Given a JSON array of English titles, return ONLY a JSON array of Chinese titles in the same order and length.
-No markdown fences, no commentary."#;
-    let payload = serde_json::to_string(titles).map_err(|e| e.to_string())?;
-    let out: Vec<String> = chat_json(cfg, system, &payload, "title translations")?;
-    if out.len() != titles.len() {
-        return Err(format!(
-            "title translation count mismatch: got {} expected {}",
-            out.len(),
-            titles.len()
-        ));
-    }
-    Ok(out)
-}
-
 /// Translate article paragraphs in batch. Input order must match output order.
 pub fn translate_texts(cfg: &AppConfig, texts: &[String]) -> Result<Vec<String>, String> {
     if texts.is_empty() {

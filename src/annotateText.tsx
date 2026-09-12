@@ -83,12 +83,14 @@ function renderSpan(
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key !== "Enter" && e.key !== " ") return;
     e.preventDefault();
+    const el = e.currentTarget as HTMLElement;
+    const r = el.getBoundingClientRect();
     onHardClick?.({
       term: span.term,
       display: span.text,
       zh: span.zh,
-      clientX: 0,
-      clientY: 0,
+      clientX: r.left + r.width / 2,
+      clientY: r.top,
     });
   };
 

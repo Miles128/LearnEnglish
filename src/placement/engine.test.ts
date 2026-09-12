@@ -4,9 +4,11 @@ import {
   L_MAX,
   L_MIN,
   buildChoices,
+  describePlacementResult,
   mapLToBand,
   pickNext,
   shouldForcePlacement,
+  shouldHideAppNav,
   updateL,
   type PoolItem,
 } from "./engine";
@@ -30,6 +32,53 @@ describe("shouldForcePlacement", () => {
 
   it("skips when the user skipped", () => {
     expect(shouldForcePlacement({ vocab_placement_skipped: true })).toBe(false);
+  });
+});
+
+describe("shouldHideAppNav", () => {
+  it("hides other routes only when placement is forced and config loaded", () => {
+    expect(
+      shouldHideAppNav({
+        ready: true,
+        loadError: null,
+        forcePlacement: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldHideAppNav({
+        ready: true,
+        loadError: "boom",
+        forcePlacement: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldHideAppNav({
+        ready: true,
+        loadError: null,
+        forcePlacement: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("describePlacementResult", () => {
+  it("does not claim the band was saved when persist failed", () => {
+    expect(
+      describePlacementResult({
+        saved: false,
+        shownL: 4200,
+        freqBand: 3000,
+        cefrLevel: "B1",
+      }).summary,
+    ).toContain("设置未写入");
+    expect(
+      describePlacementResult({
+        saved: true,
+        shownL: 4200,
+        freqBand: 3000,
+        cefrLevel: "B1",
+      }).summary,
+    ).toContain("已设为 3k / B1");
   });
 });
 

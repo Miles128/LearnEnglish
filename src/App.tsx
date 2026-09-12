@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
-import { shouldForcePlacement } from "./placement/engine";
+import { shouldForcePlacement, shouldHideAppNav } from "./placement/engine";
 import { useAppConfig } from "./store";
 import { type RefreshProgress } from "./api";
 import "./App.css";
@@ -41,6 +41,11 @@ export default function App() {
     }
   }, [cfg, ready, loadError, location.pathname, navigate]);
 
+  const hideNav = shouldHideAppNav({
+    ready,
+    loadError,
+    forcePlacement: shouldForcePlacement(cfg),
+  });
   const showBar = progress != null && progress.phase !== "done";
   const showDoneBriefly = progress?.phase === "done";
 
@@ -51,13 +56,15 @@ export default function App() {
           拾言
           <span className="brand-en">Shiyan</span>
         </div>
-        <nav>
-          <NavLink to="/" end>
-            今日阅读
-          </NavLink>
-          <NavLink to="/vocab">生词库</NavLink>
-          <NavLink to="/settings">设置</NavLink>
-        </nav>
+        {!hideNav && (
+          <nav>
+            <NavLink to="/" end>
+              今日阅读
+            </NavLink>
+            <NavLink to="/vocab">生词库</NavLink>
+            <NavLink to="/settings">设置</NavLink>
+          </nav>
+        )}
       </aside>
       <main className="main">
         {loadError && (

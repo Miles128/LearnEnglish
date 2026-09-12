@@ -4,13 +4,18 @@ use rusqlite::{params, Connection, OptionalExtension};
 const ARTICLE_COLS: &str =
     "id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin,summary_zh,last_opened_at,open_count";
 
+/// Home list only needs an excerpt (known% + blurb). Full body stays on get_article.
+pub const LIST_EXCERPT_CHARS: i32 = 6000;
+
 pub fn list_articles(
     conn: &Connection,
     category: Option<&str>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<Article>, String> {
-    let mut sql = format!("SELECT {ARTICLE_COLS} FROM articles");
+    let mut sql = format!(
+        "SELECT id,url,title,title_zh,source,category,published_at,SUBSTR(content_text,1,{LIST_EXCERPT_CHARS}),fetched_at,origin,summary_zh,last_opened_at,open_count FROM articles"
+    );
     let mut params: Vec<rusqlite::types::Value> = vec![];
     if let Some(cat) = category {
         if cat != "all" {
@@ -242,7 +247,7 @@ pub fn refresh_article_content(conn: &Connection, a: &Article) -> Result<bool, S
     let changed = conn
         .execute(
             "UPDATE articles SET title=?1, content_text=?2, fetched_at=?3, summary_zh=''
-             WHERE url=?4 AND content_text <> ?2",
+             WHERE url=?4 AND origin='rss' AND content_text <> ?2",
             params![a.title, a.content_text, a.fetched_at, a.url],
         )
         .map_err(|e| e.to_string())?;

@@ -567,10 +567,14 @@ mark.vocab-hit:hover {
   border-radius: 2px;
 }
 
-.hard-word:hover,
+.hard-word:hover {
+  background: rgba(15, 92, 76, 0.08);
+}
+
 .hard-word:focus-visible {
   background: rgba(15, 92, 76, 0.08);
-  outline: none;
+  outline: 2px solid rgba(15, 92, 76, 0.55);
+  outline-offset: 2px;
 }
 
 .hard-word.vocab-hit {

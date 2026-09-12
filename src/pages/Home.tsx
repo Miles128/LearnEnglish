@@ -36,7 +36,6 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
-      await ensureLexiconLoaded();
       const [list, cats, stats] = await Promise.all([
         api.listArticles(
           category === "all" ? undefined : category,
@@ -45,13 +44,13 @@ export default function Home() {
         ),
         api.listFeedCategories().catch(() => [] as FeedCategory[]),
         api.getLearningStats().catch(() => null),
+        ensureLexiconLoaded().catch(() => undefined),
       ]);
       setArticles(list);
       setHasMore(list.length >= PAGE_SIZE);
       setCategories(cats);
       setLearningStats(stats);
-      // Note: missing title_zh / summary_zh is filled by the refresh pipeline
-      // (feeds::fill_missing_title_translations), never on page load.
+      // Note: missing title_zh / summary_zh is filled by the refresh pipeline.
     } catch (e) {
       setError(String(e));
     } finally {

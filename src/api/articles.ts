@@ -37,5 +37,4 @@ export const apiArticles = {
     invoke<TranslationRow>("translate_selection", { articleId, text }),
   translateFullArticle: (articleId: string) =>
     invoke<FullTranslateResult>("translate_full_article", { articleId }),
-  translateMissingTitles: () => invoke<number>("translate_missing_titles"),
 };

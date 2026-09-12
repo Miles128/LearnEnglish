@@ -176,13 +176,17 @@ pub fn refresh_feeds(
         return Ok(result);
     }
 
+    let (non_english_ids, teaser_ids) = {
+        let conn = db.lock_read()?;
+        (
+            collect_non_english_rss_ids(&conn)?,
+            collect_summary_only_rss_ids(&conn)?,
+        )
+    };
     let mut known_urls = {
-        // Purges are writes; they run on the write connection.
         let conn = db.lock_write()?;
-        result.skipped_non_english += purge_non_english_articles(&conn)?;
-        // Stock cleanup: drop RSS-teaser bodies that would not pass today's ingest rule,
-        // so the same refresh can re-download them as real full text (or skip).
-        result.skipped_short += purge_summary_only_articles(&conn)?;
+        result.skipped_non_english += delete_articles(&conn, &non_english_ids)?;
+        result.skipped_short += delete_articles(&conn, &teaser_ids)?;
         db::list_article_urls(&conn)?
     };
     let known_lengths = {
@@ -276,14 +280,6 @@ pub fn refresh_feeds(
     });
 
     Ok(result)
-}
-
-pub fn fill_missing_title_translations(
-    db: &DbState,
-    cfg: &AppConfig,
-    limit: usize,
-) -> Result<usize, String> {
-    fill_missing_title_translations_with_progress(db, cfg, limit, |_, _| {})
 }
 
 fn fill_missing_title_translations_with_progress(
@@ -537,18 +533,28 @@ fn looks_like_english(title: &str, content: &str) -> bool {
     (latin as f64) / (letters as f64) >= 0.85
 }
 
-pub(crate) fn purge_non_english_articles(conn: &Connection) -> Result<usize, String> {
-    // Only (id, title, body sample) rows for rss articles — enough signal for the
-    // heuristic without loading every full body into memory.
+pub(crate) fn collect_non_english_rss_ids(conn: &Connection) -> Result<Vec<String>, String> {
     let existing = db::list_rss_language_samples(conn, 1200)?;
+    Ok(existing
+        .into_iter()
+        .filter(|(_, title, sample)| !is_english_article(None, title, sample))
+        .map(|(id, _, _)| id)
+        .collect())
+}
+
+pub(crate) fn delete_articles(conn: &Connection, ids: &[String]) -> Result<usize, String> {
     let mut removed = 0usize;
-    for (id, title, sample) in existing {
-        if !is_english_article(None, &title, &sample) {
-            db::delete_article(conn, &id)?;
-            removed += 1;
-        }
+    for id in ids {
+        db::delete_article(conn, id)?;
+        removed += 1;
     }
     Ok(removed)
+}
+
+#[cfg(test)]
+pub(crate) fn purge_non_english_articles(conn: &Connection) -> Result<usize, String> {
+    let ids = collect_non_english_rss_ids(conn)?;
+    delete_articles(conn, &ids)
 }
 
 /// True when stored body would be rejected as RSS-only teaser (no trusted page fulltext).
@@ -556,19 +562,22 @@ fn is_summary_only_body(content: &str) -> bool {
     choose_article_body(content, None).is_none()
 }
 
-pub(crate) fn purge_summary_only_articles(conn: &Connection) -> Result<usize, String> {
+pub(crate) fn collect_summary_only_rss_ids(conn: &Connection) -> Result<Vec<String>, String> {
     // SQL prefilter: teaser bodies are < TRUST_RSS_FULLTEXT_CHARS chars; bytes are
     // always >= chars, so this bound can only over-select. Exact check below.
     let byte_bound = (TRUST_RSS_FULLTEXT_CHARS * 4) as i64;
     let candidates = db::list_rss_teaser_candidates(conn, byte_bound)?;
-    let mut removed = 0usize;
-    for article in candidates {
-        if is_summary_only_body(&article.content_text) {
-            db::delete_article(conn, &article.id)?;
-            removed += 1;
-        }
-    }
-    Ok(removed)
+    Ok(candidates
+        .into_iter()
+        .filter(|article| is_summary_only_body(&article.content_text))
+        .map(|article| article.id)
+        .collect())
+}
+
+#[cfg(test)]
+pub(crate) fn purge_summary_only_articles(conn: &Connection) -> Result<usize, String> {
+    let ids = collect_summary_only_rss_ids(conn)?;
+    delete_articles(conn, &ids)
 }
 
 fn html_to_text(html: &str) -> String {

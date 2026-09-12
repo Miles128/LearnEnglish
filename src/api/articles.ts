@@ -3,6 +3,7 @@ import type {
   Article,
   ArticleView,
   FullTranslateResult,
+  LearningStats,
   TranslationRow,
 } from "./types";
 
@@ -15,6 +16,9 @@ export const apiArticles = {
     }),
   getArticleView: (id: string) =>
     invoke<ArticleView | null>("get_article_view", { id }),
+  markArticleOpened: (id: string) =>
+    invoke<void>("mark_article_opened", { id }),
+  getLearningStats: () => invoke<LearningStats>("get_learning_stats"),
   importArticleUrl: (url: string) =>
     invoke<Article>("import_article_url", { url }),
   importArticleFile: (path: string) =>
@@ -33,5 +37,4 @@ export const apiArticles = {
     invoke<TranslationRow>("translate_selection", { articleId, text }),
   translateFullArticle: (articleId: string) =>
     invoke<FullTranslateResult>("translate_full_article", { articleId }),
-  translateMissingTitles: () => invoke<number>("translate_missing_titles"),
 };

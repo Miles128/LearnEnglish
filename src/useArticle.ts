@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, Article } from "./api";
+import { shouldRecordOpen } from "./learningStats";
 
 export type ArticleViewState = "loading" | "missing" | "error" | "ready";
 
@@ -15,7 +16,10 @@ export function articleViewState(input: {
   return "missing";
 }
 
-/** Map cached paragraph rows to scope_key → text. */
+export function shouldApplyLoad(requestSeq: number, latestSeq: number): boolean {
+  return requestSeq === latestSeq;
+}
+
 export function translationsMap(
   rows: { scope_key: string; translated_text: string }[],
 ): Record<string, string> {
@@ -33,8 +37,11 @@ export function useArticle(id: string | undefined) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const loadSeq = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     if (!id) {
+      if (!shouldApplyLoad(seq, loadSeq.current)) return;
       setArticle(null);
       setParagraphs([]);
       setTranslations({});
@@ -45,6 +52,7 @@ export function useArticle(id: string | undefined) {
     setLoading(true);
     try {
       const loaded = await api.getArticleView(id);
+      if (!shouldApplyLoad(seq, loadSeq.current)) return;
       if (!loaded) {
         setArticle(null);
         setParagraphs([]);
@@ -55,18 +63,29 @@ export function useArticle(id: string | undefined) {
       setParagraphs(loaded.paragraphs);
       setTranslations(translationsMap(loaded.translations));
     } catch (e) {
+      if (!shouldApplyLoad(seq, loadSeq.current)) return;
       setArticle(null);
       setParagraphs([]);
       setTranslations({});
       setError(String(e));
     } finally {
-      setLoading(false);
+      if (shouldApplyLoad(seq, loadSeq.current)) setLoading(false);
     }
   }, [id]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  const recordedId = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const id = shouldRecordOpen(recordedId.current, article);
+    if (!id) return;
+    recordedId.current = id;
+    void api.markArticleOpened(id).catch(() => {
+      recordedId.current = undefined;
+    });
+  }, [article]);
 
   const view = articleViewState({ loading, article, error });
   return { article, paragraphs, translations, setTranslations, error, setError, loading, view };

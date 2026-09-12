@@ -176,13 +176,17 @@ pub fn refresh_feeds(
         return Ok(result);
     }
 
+    let (non_english_ids, teaser_ids) = {
+        let conn = db.lock_read()?;
+        (
+            collect_non_english_rss_ids(&conn)?,
+            collect_summary_only_rss_ids(&conn)?,
+        )
+    };
     let mut known_urls = {
-        // Purges are writes; they run on the write connection.
         let conn = db.lock_write()?;
-        result.skipped_non_english += purge_non_english_articles(&conn)?;
-        // Stock cleanup: drop RSS-teaser bodies that would not pass today's ingest rule,
-        // so the same refresh can re-download them as real full text (or skip).
-        result.skipped_short += purge_summary_only_articles(&conn)?;
+        result.skipped_non_english += delete_articles(&conn, &non_english_ids)?;
+        result.skipped_short += delete_articles(&conn, &teaser_ids)?;
         db::list_article_urls(&conn)?
     };
     let known_lengths = {
@@ -241,7 +245,7 @@ pub fn refresh_feeds(
         phase: "translate".into(),
         current: 0,
         total: 0,
-        label: "正在翻译标题…".into(),
+        label: "正在翻译标题与简介…".into(),
         percent: download_weight,
     });
 
@@ -256,15 +260,15 @@ pub fn refresh_feeds(
             current: done,
             total,
             label: if total == 0 {
-                "标题翻译完成".into()
+                "标题与简介完成".into()
             } else {
-                format!("正在翻译标题 {done}/{total}")
+                format!("正在翻译标题与简介 {done}/{total}")
             },
             percent: download_weight.saturating_add(translate_pct).min(99),
         });
     }) {
         Ok(n) => result.titles_translated = n,
-        Err(e) => result.errors.push(format!("标题翻译: {e}")),
+        Err(e) => result.errors.push(format!("标题/简介: {e}")),
     }
 
     on_progress(RefreshProgress {
@@ -278,14 +282,6 @@ pub fn refresh_feeds(
     Ok(result)
 }
 
-pub fn fill_missing_title_translations(
-    db: &DbState,
-    cfg: &AppConfig,
-    limit: usize,
-) -> Result<usize, String> {
-    fill_missing_title_translations_with_progress(db, cfg, limit, |_, _| {})
-}
-
 fn fill_missing_title_translations_with_progress(
     db: &DbState,
     cfg: &AppConfig,
@@ -294,7 +290,7 @@ fn fill_missing_title_translations_with_progress(
 ) -> Result<usize, String> {
     let missing = {
         let conn = db.lock_read()?;
-        db::articles_missing_title_zh(&conn, limit)?
+        db::articles_missing_card_zh(&conn, limit)?
     };
     if missing.is_empty() {
         on_progress(0, 0);
@@ -306,23 +302,32 @@ fn fill_missing_title_translations_with_progress(
     on_progress(done, total);
 
     for chunk in missing.chunks(8) {
-        let titles: Vec<String> = chunk.iter().map(|a| a.title.clone()).collect();
-        let translated = vocab::translate_titles(cfg, &titles).map_err(|e| {
+        let cards: Vec<vocab::ArticleCardIn> = chunk
+            .iter()
+            .map(|a| vocab::card_from_article(&a.title, &a.content_text))
+            .collect();
+        let translated = vocab::translate_article_cards(cfg, &cards).map_err(|e| {
             format!(
-                "标题翻译（第 {}–{} 条）：{e}",
+                "标题/简介（第 {}–{} 条）：{e}",
                 done + 1,
-                done + titles.len()
+                done + cards.len()
             )
         })?;
         {
             let conn = db.lock_write()?;
-            for (article, zh) in chunk.iter().zip(translated.into_iter()) {
-                let zh = zh.trim().to_string();
-                if zh.is_empty() {
-                    continue;
+            for (article, card) in chunk.iter().zip(translated.into_iter()) {
+                let mut wrote = false;
+                if article.title_zh.is_empty() && !card.title_zh.is_empty() {
+                    db::set_article_title_zh(&conn, &article.id, &card.title_zh)?;
+                    wrote = true;
                 }
-                db::set_article_title_zh(&conn, &article.id, &zh)?;
-                done += 1;
+                if article.summary_zh.is_empty() && !card.summary_zh.is_empty() {
+                    db::set_article_summary_zh(&conn, &article.id, &card.summary_zh)?;
+                    wrote = true;
+                }
+                if wrote {
+                    done += 1;
+                }
             }
         }
         on_progress(done, total);
@@ -411,6 +416,9 @@ fn download_feed_articles(
                     content_text: rss_text,
                     fetched_at: now.clone(),
                     origin: "rss".into(),
+                    summary_zh: String::new(),
+                    last_opened_at: None,
+                    open_count: 0,
                 });
             } else {
                 stats.skipped_existing += 1;
@@ -465,6 +473,9 @@ fn download_feed_articles(
             content_text,
             fetched_at: now.clone(),
             origin: "rss".into(),
+            summary_zh: String::new(),
+            last_opened_at: None,
+            open_count: 0,
         });
     }
     Ok((articles, updates, stats))
@@ -522,18 +533,28 @@ fn looks_like_english(title: &str, content: &str) -> bool {
     (latin as f64) / (letters as f64) >= 0.85
 }
 
-pub(crate) fn purge_non_english_articles(conn: &Connection) -> Result<usize, String> {
-    // Only (id, title, body sample) rows for rss articles — enough signal for the
-    // heuristic without loading every full body into memory.
+pub(crate) fn collect_non_english_rss_ids(conn: &Connection) -> Result<Vec<String>, String> {
     let existing = db::list_rss_language_samples(conn, 1200)?;
+    Ok(existing
+        .into_iter()
+        .filter(|(_, title, sample)| !is_english_article(None, title, sample))
+        .map(|(id, _, _)| id)
+        .collect())
+}
+
+pub(crate) fn delete_articles(conn: &Connection, ids: &[String]) -> Result<usize, String> {
     let mut removed = 0usize;
-    for (id, title, sample) in existing {
-        if !is_english_article(None, &title, &sample) {
-            db::delete_article(conn, &id)?;
-            removed += 1;
-        }
+    for id in ids {
+        db::delete_article(conn, id)?;
+        removed += 1;
     }
     Ok(removed)
+}
+
+#[cfg(test)]
+pub(crate) fn purge_non_english_articles(conn: &Connection) -> Result<usize, String> {
+    let ids = collect_non_english_rss_ids(conn)?;
+    delete_articles(conn, &ids)
 }
 
 /// True when stored body would be rejected as RSS-only teaser (no trusted page fulltext).
@@ -541,19 +562,22 @@ fn is_summary_only_body(content: &str) -> bool {
     choose_article_body(content, None).is_none()
 }
 
-pub(crate) fn purge_summary_only_articles(conn: &Connection) -> Result<usize, String> {
+pub(crate) fn collect_summary_only_rss_ids(conn: &Connection) -> Result<Vec<String>, String> {
     // SQL prefilter: teaser bodies are < TRUST_RSS_FULLTEXT_CHARS chars; bytes are
     // always >= chars, so this bound can only over-select. Exact check below.
     let byte_bound = (TRUST_RSS_FULLTEXT_CHARS * 4) as i64;
     let candidates = db::list_rss_teaser_candidates(conn, byte_bound)?;
-    let mut removed = 0usize;
-    for article in candidates {
-        if is_summary_only_body(&article.content_text) {
-            db::delete_article(conn, &article.id)?;
-            removed += 1;
-        }
-    }
-    Ok(removed)
+    Ok(candidates
+        .into_iter()
+        .filter(|article| is_summary_only_body(&article.content_text))
+        .map(|article| article.id)
+        .collect())
+}
+
+#[cfg(test)]
+pub(crate) fn purge_summary_only_articles(conn: &Connection) -> Result<usize, String> {
+    let ids = collect_summary_only_rss_ids(conn)?;
+    delete_articles(conn, &ids)
 }
 
 fn html_to_text(html: &str) -> String {
@@ -703,6 +727,9 @@ pub fn import_article_from_url(db: &DbState, url: &str) -> Result<Article, Strin
         content_text: extracted.text,
         fetched_at: Utc::now().to_rfc3339(),
         origin: "url".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
 
     let conn = db.lock_write()?;

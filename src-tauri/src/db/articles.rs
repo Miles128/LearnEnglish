@@ -2,7 +2,10 @@ use super::Article;
 use rusqlite::{params, Connection, OptionalExtension};
 
 const ARTICLE_COLS: &str =
-    "id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin";
+    "id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin,summary_zh,last_opened_at,open_count";
+
+/// Home list only needs an excerpt (known% + blurb). Full body stays on get_article.
+pub const LIST_EXCERPT_CHARS: i32 = 6000;
 
 pub fn list_articles(
     conn: &Connection,
@@ -10,7 +13,9 @@ pub fn list_articles(
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<Article>, String> {
-    let mut sql = format!("SELECT {ARTICLE_COLS} FROM articles");
+    let mut sql = format!(
+        "SELECT id,url,title,title_zh,source,category,published_at,SUBSTR(content_text,1,{LIST_EXCERPT_CHARS}),fetched_at,origin,summary_zh,last_opened_at,open_count FROM articles"
+    );
     let mut params: Vec<rusqlite::types::Value> = vec![];
     if let Some(cat) = category {
         if cat != "all" {
@@ -82,6 +87,81 @@ pub fn map_article(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
         content_text: row.get(7)?,
         fetched_at: row.get(8)?,
         origin: row.get(9)?,
+        summary_zh: row.get(10)?,
+        last_opened_at: row.get(11)?,
+        open_count: row.get(12)?,
+    })
+}
+
+pub fn mark_article_opened(conn: &Connection, id: &str) -> Result<(), String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let changed = conn
+        .execute(
+            "UPDATE articles SET last_opened_at=?1, open_count=open_count+1 WHERE id=?2",
+            params![now, id],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("article not found".into());
+    }
+    Ok(())
+}
+
+pub fn learning_stats(conn: &Connection) -> Result<super::LearningStats, String> {
+    let since = (chrono::Utc::now() - chrono::Duration::days(7)).to_rfc3339();
+    let opened_total: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM articles WHERE last_opened_at IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let opened_7d: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM articles WHERE last_opened_at >= ?1",
+            params![since],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let top_source = conn
+        .query_row(
+            "SELECT source FROM articles WHERE last_opened_at IS NOT NULL
+             GROUP BY source ORDER BY SUM(open_count) DESC, source ASC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let top_category = conn
+        .query_row(
+            "SELECT category FROM articles WHERE last_opened_at IS NOT NULL
+             GROUP BY category ORDER BY SUM(open_count) DESC, category ASC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let vocab_created_7d: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM vocab WHERE created_at >= ?1",
+            params![since],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let vocab_learning: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM vocab WHERE status='learning'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(super::LearningStats {
+        opened_total,
+        opened_7d,
+        top_source,
+        top_category,
+        vocab_created_7d,
+        vocab_learning,
     })
 }
 
@@ -137,8 +217,8 @@ pub fn list_article_content_lengths(
 pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, String> {
     let changed = conn
         .execute(
-            "INSERT INTO articles (id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+            "INSERT INTO articles (id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin,summary_zh)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
              ON CONFLICT(url) DO NOTHING",
             params![
                 a.id,
@@ -150,7 +230,8 @@ pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, Str
                 a.published_at,
                 a.content_text,
                 a.fetched_at,
-                a.origin
+                a.origin,
+                a.summary_zh
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -161,11 +242,12 @@ pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, Str
 /// Matches by URL: callers may build the update struct with an empty/fresh id
 /// (the RSS refresh path does exactly that).
 /// Keeps id / url / title_zh / source / category / published_at / origin intact.
+/// Clears `summary_zh` so the refresh pipeline regenerates it for the new body.
 pub fn refresh_article_content(conn: &Connection, a: &Article) -> Result<bool, String> {
     let changed = conn
         .execute(
-            "UPDATE articles SET title=?1, content_text=?2, fetched_at=?3
-             WHERE url=?4 AND content_text <> ?2",
+            "UPDATE articles SET title=?1, content_text=?2, fetched_at=?3, summary_zh=''
+             WHERE url=?4 AND origin='rss' AND content_text <> ?2",
             params![a.title, a.content_text, a.fetched_at, a.url],
         )
         .map_err(|e| e.to_string())?;
@@ -186,15 +268,14 @@ pub fn delete_article(conn: &Connection, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn articles_missing_title_zh(conn: &Connection, limit: usize) -> Result<Vec<Article>, String> {
+pub fn articles_missing_card_zh(conn: &Connection, limit: usize) -> Result<Vec<Article>, String> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin
-             FROM articles
-             WHERE IFNULL(title_zh,'') = ''
+        .prepare(&format!(
+            "SELECT {ARTICLE_COLS} FROM articles
+             WHERE IFNULL(title_zh,'') = '' OR IFNULL(summary_zh,'') = ''
              ORDER BY fetched_at DESC
-             LIMIT ?1",
-        )
+             LIMIT ?1"
+        ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![limit as i64], map_article)
@@ -208,6 +289,15 @@ pub fn set_article_title_zh(conn: &Connection, id: &str, title_zh: &str) -> Resu
     conn.execute(
         "UPDATE articles SET title_zh=?1 WHERE id=?2",
         params![title_zh, id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn set_article_summary_zh(conn: &Connection, id: &str, summary_zh: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE articles SET summary_zh=?1 WHERE id=?2",
+        params![summary_zh, id],
     )
     .map_err(|e| e.to_string())?;
     Ok(())

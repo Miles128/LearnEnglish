@@ -15,6 +15,9 @@ fn sample_article(id: &str) -> db::Article {
         content_text: "word ".repeat(100),
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     }
 }
 
@@ -56,6 +59,9 @@ fn db_seeds_feeds_and_stores_article() {
         content_text: "word ".repeat(100),
         fetched_at: chrono::Utc::now().to_rfc3339(),
         origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     db::upsert_article(&conn, &article).unwrap();
     let list = db::list_articles(&conn, Some("tech"), None, None).unwrap();
@@ -153,6 +159,9 @@ fn insert_article_if_new_is_idempotent() {
         content_text: "original content that should stay".into(),
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     assert!(db::insert_article_if_new(&conn, &first).unwrap());
 
@@ -167,6 +176,9 @@ fn insert_article_if_new_is_idempotent() {
         content_text: "should not overwrite".into(),
         fetched_at: "2024-06-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     assert!(!db::insert_article_if_new(&conn, &second).unwrap());
 
@@ -197,6 +209,9 @@ fn list_article_urls_supports_incremental_skip() {
         content_text: "x".repeat(50),
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     db::insert_article_if_new(&conn, &a).unwrap();
     let urls = db::list_article_urls(&conn).unwrap();
@@ -249,6 +264,9 @@ fn purge_summary_only_removes_teasers_keeps_fulltext() {
         content_text: "a".repeat(500), // mid-length RSS summary
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     let full = db::Article {
         id: "full".into(),
@@ -261,6 +279,9 @@ fn purge_summary_only_removes_teasers_keeps_fulltext() {
         content_text: "word ".repeat(500), // ≥ 2000 chars
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     db::insert_article_if_new(&conn, &teaser).unwrap();
     db::insert_article_if_new(&conn, &full).unwrap();
@@ -293,6 +314,9 @@ fn purge_never_touches_user_imported_articles() {
             content_text: "a".repeat(500), // would be purged if origin were rss
             fetched_at: "2020-01-01T00:00:00Z".into(),
             origin: origin.into(),
+            summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
         };
         db::insert_article_if_new(&conn, &a).unwrap();
     }
@@ -312,6 +336,39 @@ fn purge_never_touches_user_imported_articles() {
 }
 
 #[test]
+fn collect_non_english_ids_does_not_delete() {
+    let path = temp_dir().join(format!("le-collect-zh-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    let zh = db::Article {
+        id: "zh1".into(),
+        url: "https://example.com/zh".into(),
+        title: "如何学习 Rust 编程语言入门指南".into(),
+        title_zh: String::new(),
+        source: "T".into(),
+        category: "tech".into(),
+        published_at: None,
+        content_text: "今天我们来讨论如何高效学习一门新的编程语言。首先需要理解基本概念，然后通过大量练习巩固知识。"
+            .repeat(5),
+        fetched_at: "2020-01-01T00:00:00Z".into(),
+        origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
+    };
+    db::insert_article_if_new(&conn, &zh).unwrap();
+
+    let ids = feeds::collect_non_english_rss_ids(&conn).unwrap();
+    assert_eq!(ids, vec!["zh1".to_string()]);
+    assert!(db::get_article(&conn, "zh1").unwrap().is_some());
+
+    let removed = feeds::delete_articles(&conn, &ids).unwrap();
+    assert_eq!(removed, 1);
+    assert!(db::get_article(&conn, "zh1").unwrap().is_none());
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn refresh_article_content_updates_longer_body() {
     let path = temp_dir().join(format!("le-refresh-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");
@@ -326,8 +383,12 @@ fn refresh_article_content_updates_longer_body() {
         content_text: "short body".into(),
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     db::insert_article_if_new(&conn, &a).unwrap();
+    db::set_article_summary_zh(&conn, "r1", "旧简介").unwrap();
 
     let longer = "word ".repeat(500);
     // The refresh path builds the update struct with an empty id; matching must
@@ -343,6 +404,9 @@ fn refresh_article_content_updates_longer_body() {
         content_text: longer.clone(),
         fetched_at: "2024-01-01T00:00:00Z".into(),
         origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     let changed = db::refresh_article_content(&conn, &update).unwrap();
     assert!(changed);
@@ -350,11 +414,94 @@ fn refresh_article_content_updates_longer_body() {
     assert_eq!(stored.title, "New Title");
     assert_eq!(stored.content_text, longer);
     assert_eq!(stored.title_zh, "旧题", "title_zh must be preserved");
+    assert_eq!(stored.summary_zh, "", "stale summary cleared on body refresh");
     assert_eq!(stored.origin, "rss");
 
     // Idempotent: same body is a no-op.
     let changed_again = db::refresh_article_content(&conn, &update).unwrap();
     assert!(!changed_again);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn refresh_article_content_skips_url_imports() {
+    let path = temp_dir().join(format!("le-refresh-url-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    let original = "imported body ".repeat(40);
+    let a = db::Article {
+        id: "imp1".into(),
+        url: "https://example.com/same-url".into(),
+        title: "Imported".into(),
+        title_zh: String::new(),
+        source: "导入".into(),
+        category: "other".into(),
+        published_at: None,
+        content_text: original.clone(),
+        fetched_at: "2020-01-01T00:00:00Z".into(),
+        origin: "url".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
+    };
+    db::insert_article_if_new(&conn, &a).unwrap();
+
+    let update = db::Article {
+        id: String::new(),
+        url: "https://example.com/same-url".into(),
+        title: "RSS overwrite".into(),
+        title_zh: String::new(),
+        source: "T".into(),
+        category: "tech".into(),
+        published_at: None,
+        content_text: "word ".repeat(500),
+        fetched_at: "2024-01-01T00:00:00Z".into(),
+        origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
+    };
+    let changed = db::refresh_article_content(&conn, &update).unwrap();
+    assert!(!changed);
+    let stored = db::get_article(&conn, "imp1").unwrap().expect("exists");
+    assert_eq!(stored.title, "Imported");
+    assert_eq!(stored.content_text, original);
+    assert_eq!(stored.origin, "url");
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn list_articles_returns_excerpt_not_full_body() {
+    let path = temp_dir().join(format!("le-list-excerpt-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    let body = "x".repeat(9000);
+    let a = db::Article {
+        id: "long1".into(),
+        url: "https://example.com/long".into(),
+        title: "Long".into(),
+        title_zh: String::new(),
+        source: "S".into(),
+        category: "tech".into(),
+        published_at: None,
+        content_text: body.clone(),
+        fetched_at: "2020-01-01T00:00:00Z".into(),
+        origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
+    };
+    db::insert_article_if_new(&conn, &a).unwrap();
+
+    let listed = db::list_articles(&conn, None, Some(1), Some(0)).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].content_text.len(),
+        db::LIST_EXCERPT_CHARS as usize,
+        "home list should not ship the full body"
+    );
+    let stored = db::get_article(&conn, "long1").unwrap().expect("exists");
+    assert_eq!(stored.content_text.len(), 9000);
 
     let _ = std::fs::remove_file(path);
 }
@@ -375,6 +522,9 @@ fn list_articles_paginates() {
             content_text: "x".repeat(50),
             fetched_at: format!("2020-01-0{}T00:00:00Z", i + 1),
             origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
         };
         db::insert_article_if_new(&conn, &a).unwrap();
     }
@@ -637,4 +787,125 @@ fn article_view_loads_paragraphs_and_translations() {
         .unwrap()
         .is_none());
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn schema_adds_summary_zh_column() {
+    let path = temp_dir().join(format!("le-summary-col-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    let has: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('articles') WHERE name='summary_zh'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(has, 1, "articles.summary_zh should exist after migrate");
+    let opened_col: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('articles') WHERE name='last_opened_at'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(opened_col, 1, "articles.last_opened_at should exist after migrate");
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 5);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn summary_zh_roundtrips_and_missing_query() {
+    let path = temp_dir().join(format!("le-summary-zh-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    let mut a = sample_article("s1");
+    a.title_zh = "已有译题".into();
+    a.summary_zh = String::new();
+    db::insert_article_if_new(&conn, &a).unwrap();
+
+    let missing = db::articles_missing_card_zh(&conn, 40).unwrap();
+    assert_eq!(missing.len(), 1, "empty summary still needs a card fill");
+    assert_eq!(missing[0].id, "s1");
+
+    db::set_article_summary_zh(&conn, "s1", "这是一条不超过五十字的中文简介").unwrap();
+    let stored = db::get_article(&conn, "s1").unwrap().expect("exists");
+    assert_eq!(stored.title_zh, "已有译题");
+    assert_eq!(stored.summary_zh, "这是一条不超过五十字的中文简介");
+    assert!(db::articles_missing_card_zh(&conn, 40).unwrap().is_empty());
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn mark_article_opened_is_implicit_and_repeatable() {
+    let path = temp_dir().join(format!("le-opened-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    db::insert_article_if_new(&conn, &sample_article("r1")).unwrap();
+
+    let before = db::get_article(&conn, "r1").unwrap().expect("exists");
+    assert!(before.last_opened_at.is_none());
+    assert_eq!(before.open_count, 0);
+
+    db::mark_article_opened(&conn, "r1").unwrap();
+    let once = db::get_article(&conn, "r1").unwrap().expect("exists");
+    assert!(once.last_opened_at.as_deref().unwrap().starts_with("20"));
+    assert_eq!(once.open_count, 1);
+
+    db::mark_article_opened(&conn, "r1").unwrap();
+    let twice = db::get_article(&conn, "r1").unwrap().expect("exists");
+    assert_eq!(twice.open_count, 2);
+    assert!(twice.last_opened_at >= once.last_opened_at);
+
+    assert!(db::mark_article_opened(&conn, "missing").is_err());
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn learning_stats_uses_opens_and_new_vocab() {
+    let path = temp_dir().join(format!("le-learn-stats-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    let mut bbc = sample_article("bbc1");
+    bbc.source = "BBC".into();
+    bbc.category = "world".into();
+    let mut npr = sample_article("npr1");
+    npr.source = "NPR".into();
+    npr.category = "world".into();
+    db::insert_article_if_new(&conn, &bbc).unwrap();
+    db::insert_article_if_new(&conn, &npr).unwrap();
+    db::mark_article_opened(&conn, "bbc1").unwrap();
+    db::mark_article_opened(&conn, "bbc1").unwrap();
+    db::mark_article_opened(&conn, "npr1").unwrap();
+
+    db::insert_vocab(
+        &conn,
+        &sample_vocab("v-new", "fresh", &chrono::Utc::now().to_rfc3339()),
+    )
+    .unwrap();
+    db::insert_vocab(
+        &conn,
+        &sample_vocab("v-old", "stale", "2020-01-01T00:00:00Z"),
+    )
+    .unwrap();
+
+    let stats = db::learning_stats(&conn).unwrap();
+    assert_eq!(stats.opened_total, 2);
+    assert_eq!(stats.opened_7d, 2);
+    assert_eq!(stats.top_source.as_deref(), Some("BBC"));
+    assert_eq!(stats.top_category.as_deref(), Some("world"));
+    assert_eq!(stats.vocab_created_7d, 1);
+    assert_eq!(stats.vocab_learning, 2);
+
+    let empty_path = temp_dir().join(format!("le-learn-empty-{}.db", Uuid::new_v4()));
+    let empty = db::open_db(empty_path.clone()).expect("open");
+    let zero = db::learning_stats(&empty).unwrap();
+    assert_eq!(zero.opened_total, 0);
+    assert_eq!(zero.opened_7d, 0);
+    assert!(zero.top_source.is_none());
+    assert_eq!(zero.vocab_created_7d, 0);
+
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(empty_path);
 }

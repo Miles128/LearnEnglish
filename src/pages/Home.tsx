@@ -1,7 +1,8 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, Article, FeedCategory, RefreshResult } from "../api";
+import { api, Article, FeedCategory, LearningStats, RefreshResult } from "../api";
+import { formatLearningInsight } from "../learningStats";
 import { estimateKnownPercent } from "../knownPercent";
 import { useAppConfig, useVocab } from "../store";
 import { ensureLexiconLoaded, isFreqBand, type FreqBand } from "../wordLevels";
@@ -25,6 +26,7 @@ export default function Home() {
   const [manageOpen, setManageOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [learningStats, setLearningStats] = useState<LearningStats | null>(null);
 
   const { cfg } = useAppConfig();
   const { learningTerms } = useVocab();
@@ -34,20 +36,21 @@ export default function Home() {
     setLoading(true);
     setError(null);
     try {
-      await ensureLexiconLoaded();
-      const [list, cats] = await Promise.all([
+      const [list, cats, stats] = await Promise.all([
         api.listArticles(
           category === "all" ? undefined : category,
           PAGE_SIZE,
           0,
         ),
         api.listFeedCategories().catch(() => [] as FeedCategory[]),
+        api.getLearningStats().catch(() => null),
+        ensureLexiconLoaded().catch(() => undefined),
       ]);
       setArticles(list);
       setHasMore(list.length >= PAGE_SIZE);
       setCategories(cats);
-      // Note: missing title_zh is filled by the refresh pipeline
-      // (feeds::fill_missing_title_translations), never on page load.
+      setLearningStats(stats);
+      // Note: missing title_zh / summary_zh is filled by the refresh pipeline.
     } catch (e) {
       setError(String(e));
     } finally {
@@ -110,7 +113,7 @@ export default function Home() {
       setMessage(
         `新增 ${result.added_or_updated}` +
           (result.skipped_existing ? ` · 已有 ${result.skipped_existing}` : "") +
-          (result.titles_translated ? ` · 译题 ${result.titles_translated}` : "") +
+          (result.titles_translated ? ` · 译题/简介 ${result.titles_translated}` : "") +
           (result.errors.length ? ` · ${result.errors.length} 个问题` : ""),
       );
       await load();
@@ -209,6 +212,10 @@ export default function Home() {
           </button>
         ))}
       </div>
+
+      {learningStats && (
+        <p className="learning-insight">{formatLearningInsight(learningStats)}</p>
+      )}
 
       {message && <p className="banner ok">{message}</p>}
       {error && <p className="banner err">{error}</p>}

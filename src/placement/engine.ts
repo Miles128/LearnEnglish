@@ -20,6 +20,37 @@ export function shouldForcePlacement(cfg: {
   return true;
 }
 
+/** Hide Home/Vocab/Settings while placement is required and config loaded. */
+export function shouldHideAppNav(input: {
+  ready: boolean;
+  loadError: string | null;
+  forcePlacement: boolean;
+}): boolean {
+  return input.ready && !input.loadError && input.forcePlacement;
+}
+
+export function describePlacementResult(input: {
+  saved: boolean;
+  shownL: number;
+  freqBand: number;
+  cefrLevel: string;
+}): { title: string; summary: string } {
+  const bandLabel =
+    input.freqBand >= 1000
+      ? `${input.freqBand / 1000}k`
+      : String(input.freqBand);
+  if (!input.saved) {
+    return {
+      title: "测验完成",
+      summary: `大约认识约 ${input.shownL} 词 · 设置未写入，请重试`,
+    };
+  }
+  return {
+    title: "测验完成",
+    summary: `大约认识约 ${input.shownL} 词 · 已设为 ${bandLabel} / ${input.cefrLevel}`,
+  };
+}
+
 export function clampL(L: number): number {
   return Math.max(L_MIN, Math.min(L_MAX, L));
 }

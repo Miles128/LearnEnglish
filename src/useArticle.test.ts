@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { articleViewState, translationsMap } from "./useArticle";
+import { articleViewState, shouldApplyLoad, translationsMap } from "./useArticle";
 
 describe("articleViewState", () => {
   it("is loading while the first fetch is in flight", () => {
@@ -32,6 +32,13 @@ describe("articleViewState", () => {
         error: "翻译失败",
       }),
     ).toBe("ready");
+  });
+});
+
+describe("shouldApplyLoad", () => {
+  it("drops stale responses when a newer request started", () => {
+    expect(shouldApplyLoad(1, 2)).toBe(false);
+    expect(shouldApplyLoad(2, 2)).toBe(true);
   });
 });
 

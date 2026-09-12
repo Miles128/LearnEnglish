@@ -44,6 +44,8 @@ src-tauri/src/        Rust 后端
 - `origin` 字段区分 rss/url/file 导入；refresh 的清理(purge)只处理 rss 来源，永不删用户导入。
 - LLM 配置在 `config.local.json`（gitignore）；无 Key 时翻译功能优雅降级。
 
+开发时少编 Rust：只改 `src/`（排版、划词、样式）用 `pnpm dev`，浏览器看 Vite；`invoke` 不可用，不要在这里测刷新/翻译/入库。改 `src-tauri` 或要真实数据时才 `pnpm dev:desktop`（或 `pnpm tauri dev`）。桌面会话结束执行 `pnpm clean:rust`。
+
 Verify before claiming done:
 
 ```bash
@@ -55,7 +57,9 @@ cd src-tauri && cargo test
 Desktop smoke (macOS + Rust):
 
 ```bash
-pnpm tauri dev
+pnpm dev:desktop
 ```
+
+开发缓存：`src-tauri/target` 是 Cargo 产物（不入库）。`profile.dev` 只保留本 crate 行号表、依赖不带 debug，避免 `target/debug` 涨到数 GB。不开发时 `pnpm clean:rust`。若启用 Time Machine，排除 `src-tauri/target`（`cargo clean` 会删掉该目录上的排除标记，下次生成后再 `tmutil addexclusion src-tauri/target`）。
 
 Follow [documents/PRD.md](documents/PRD.md) scope and non-goals.

@@ -6,6 +6,7 @@ import {
   L0,
   PLACEMENT_TOTAL,
   buildChoices,
+  describePlacementResult,
   mapLToBand,
   pickNext,
   updateL,
@@ -34,6 +35,7 @@ export default function Placement() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [finalL, setFinalL] = useState<number | null>(null);
+  const [saved, setSaved] = useState(false);
 
   const mapped = useMemo(
     () => mapLToBand(finalL ?? L),
@@ -88,8 +90,10 @@ export default function Placement() {
         vocab_placement_at: new Date().toISOString(),
       };
       await saveCfg(next);
+      setSaved(true);
       setPhase("result");
     } catch (e) {
+      setSaved(false);
       setError(String(e));
       setPhase("result");
     } finally {
@@ -130,12 +134,10 @@ export default function Placement() {
     void (async () => {
       setError(null);
       try {
-        // Persist the skip so the placement prompt never nags again.
         await saveCfg({ ...cfg, vocab_placement_skipped: true });
+        navigate("/", { replace: true });
       } catch (e) {
         setError(String(e));
-      } finally {
-        navigate("/", { replace: true });
       }
     })();
   }
@@ -166,32 +168,42 @@ export default function Placement() {
 
   if (phase === "result") {
     const shownL = Math.round(finalL ?? L);
-    const bandLabel =
-      mapped.freqBand >= 1000
-        ? `${mapped.freqBand / 1000}k`
-        : String(mapped.freqBand);
+    const copy = describePlacementResult({
+      saved,
+      shownL,
+      freqBand: mapped.freqBand,
+      cefrLevel: mapped.cefrLevel,
+    });
     return (
       <div className="page placement-page">
         <header className="page-header">
           <div>
-            <h1>测验完成</h1>
-            <p className="muted">
-              大约认识约 <strong>{shownL}</strong> 词 · 已设为{" "}
-              <strong>
-                {bandLabel} / {mapped.cefrLevel}
-              </strong>
-            </p>
+            <h1>{copy.title}</h1>
+            <p className="muted">{copy.summary}</p>
           </div>
         </header>
         {error && <p className="banner err">{error}</p>}
         {saving && <p className="muted">保存中…</p>}
         <div className="placement-actions">
-          <Link className="btn primary" to="/">
-            回今日阅读
-          </Link>
-          <Link className="btn" to="/settings">
-            设置
-          </Link>
+          {saved ? (
+            <>
+              <Link className="btn primary" to="/">
+                回今日阅读
+              </Link>
+              <Link className="btn" to="/settings">
+                设置
+              </Link>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="btn primary"
+              disabled={saving}
+              onClick={() => void finish(finalL ?? L)}
+            >
+              重试保存
+            </button>
+          )}
         </div>
       </div>
     );

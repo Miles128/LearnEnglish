@@ -1,4 +1,4 @@
-use crate::db::{self, Article, DbState, TranslationRow};
+use crate::db::{self, Article, DbState, LearningStats, TranslationRow};
 use crate::error::AppError;
 use crate::feeds;
 use crate::import_file;
@@ -45,6 +45,23 @@ pub fn get_article_view(
 ) -> Result<Option<ArticleView>, AppError> {
     let conn = state.lock_read()?;
     Ok(load_article_view(&conn, &id)?)
+}
+
+#[tauri::command]
+pub fn mark_article_opened(
+    state: tauri::State<'_, DbState>,
+    id: String,
+) -> Result<(), AppError> {
+    let conn = state.lock_write()?;
+    Ok(db::mark_article_opened(&conn, &id)?)
+}
+
+#[tauri::command]
+pub fn get_learning_stats(
+    state: tauri::State<'_, DbState>,
+) -> Result<LearningStats, AppError> {
+    let conn = state.lock_read()?;
+    Ok(db::learning_stats(&conn)?)
 }
 
 #[derive(Clone, serde::Serialize, ts_rs::TS)]
@@ -228,15 +245,6 @@ pub async fn translate_full_article(
             },
         );
         Ok(FullTranslateResult { rows: out, errors })
-    })
-    .await
-}
-
-#[tauri::command]
-pub async fn translate_missing_titles(app: AppHandle) -> Result<usize, AppError> {
-    let cfg = crate::config::load_config()?;
-    crate::commands::spawn_db(app, move |state| {
-        Ok(feeds::fill_missing_title_translations(state, &cfg, 40)?)
     })
     .await
 }

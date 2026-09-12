@@ -29,10 +29,23 @@ cp config.local.json.example config.local.json
 # 填写 base_url / api_key / model
 
 pnpm install
-pnpm tauri dev
 ```
 
-请使用弹出的**桌面窗口**，不要用浏览器打开 `localhost:1420`（否则没有 Tauri `invoke`）。
+改界面（排版、划词、样式）只开 Vite，不编 Rust：
+
+```bash
+pnpm dev
+```
+
+浏览器打开终端里的地址即可。此时没有 Tauri `invoke`，刷新源、翻译、入库会失败，属正常。
+
+改 Rust 或要真实数据时再开桌面窗口：
+
+```bash
+pnpm dev:desktop
+```
+
+请用弹出的**桌面窗口**，不要用浏览器打开 `localhost:1420`。用完可 `pnpm clean:rust` 清掉 `src-tauri/target`。
 
 ## 验证
 

@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "tsc --noEmit && vitest run",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "clean:rust": "cargo clean --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

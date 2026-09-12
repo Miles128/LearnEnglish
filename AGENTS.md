@@ -58,4 +58,6 @@ Desktop smoke (macOS + Rust):
 pnpm tauri dev
 ```
 
+开发缓存：`src-tauri/target` 是 Cargo 产物（不入库）。`profile.dev` 只保留本 crate 行号表、依赖不带 debug，避免 `target/debug` 涨到数 GB。不开发时 `pnpm clean:rust`。若启用 Time Machine，排除 `src-tauri/target`（`cargo clean` 会删掉该目录上的排除标记，下次生成后再 `tmutil addexclusion src-tauri/target`）。
+
 Follow [documents/PRD.md](documents/PRD.md) scope and non-goals.

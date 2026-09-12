@@ -2,7 +2,7 @@ use super::Article;
 use rusqlite::{params, Connection, OptionalExtension};
 
 const ARTICLE_COLS: &str =
-    "id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin,summary_zh";
+    "id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin,summary_zh,last_opened_at,open_count";
 
 pub fn list_articles(
     conn: &Connection,
@@ -83,6 +83,80 @@ pub fn map_article(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
         fetched_at: row.get(8)?,
         origin: row.get(9)?,
         summary_zh: row.get(10)?,
+        last_opened_at: row.get(11)?,
+        open_count: row.get(12)?,
+    })
+}
+
+pub fn mark_article_opened(conn: &Connection, id: &str) -> Result<(), String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let changed = conn
+        .execute(
+            "UPDATE articles SET last_opened_at=?1, open_count=open_count+1 WHERE id=?2",
+            params![now, id],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("article not found".into());
+    }
+    Ok(())
+}
+
+pub fn learning_stats(conn: &Connection) -> Result<super::LearningStats, String> {
+    let since = (chrono::Utc::now() - chrono::Duration::days(7)).to_rfc3339();
+    let opened_total: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM articles WHERE last_opened_at IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let opened_7d: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM articles WHERE last_opened_at >= ?1",
+            params![since],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let top_source = conn
+        .query_row(
+            "SELECT source FROM articles WHERE last_opened_at IS NOT NULL
+             GROUP BY source ORDER BY SUM(open_count) DESC, source ASC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let top_category = conn
+        .query_row(
+            "SELECT category FROM articles WHERE last_opened_at IS NOT NULL
+             GROUP BY category ORDER BY SUM(open_count) DESC, category ASC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let vocab_created_7d: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM vocab WHERE created_at >= ?1",
+            params![since],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let vocab_learning: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM vocab WHERE status='learning'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(super::LearningStats {
+        opened_total,
+        opened_7d,
+        top_source,
+        top_category,
+        vocab_created_7d,
+        vocab_learning,
     })
 }
 

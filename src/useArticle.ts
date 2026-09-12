@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, Article } from "./api";
+import { shouldRecordOpen } from "./learningStats";
 
 export type ArticleViewState = "loading" | "missing" | "error" | "ready";
 
@@ -67,6 +68,16 @@ export function useArticle(id: string | undefined) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const recordedId = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const id = shouldRecordOpen(recordedId.current, article);
+    if (!id) return;
+    recordedId.current = id;
+    void api.markArticleOpened(id).catch(() => {
+      recordedId.current = undefined;
+    });
+  }, [article]);
 
   const view = articleViewState({ loading, article, error });
   return { article, paragraphs, translations, setTranslations, error, setError, loading, view };

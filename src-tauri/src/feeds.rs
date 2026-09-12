@@ -421,6 +421,8 @@ fn download_feed_articles(
                     fetched_at: now.clone(),
                     origin: "rss".into(),
                     summary_zh: String::new(),
+                    last_opened_at: None,
+                    open_count: 0,
                 });
             } else {
                 stats.skipped_existing += 1;
@@ -476,6 +478,8 @@ fn download_feed_articles(
             fetched_at: now.clone(),
             origin: "rss".into(),
             summary_zh: String::new(),
+            last_opened_at: None,
+            open_count: 0,
         });
     }
     Ok((articles, updates, stats))
@@ -715,6 +719,8 @@ pub fn import_article_from_url(db: &DbState, url: &str) -> Result<Article, Strin
         fetched_at: Utc::now().to_rfc3339(),
         origin: "url".into(),
         summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
 
     let conn = db.lock_write()?;

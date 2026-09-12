@@ -1,4 +1,4 @@
-use crate::db::{self, Article, DbState, TranslationRow};
+use crate::db::{self, Article, DbState, LearningStats, TranslationRow};
 use crate::error::AppError;
 use crate::feeds;
 use crate::import_file;
@@ -45,6 +45,23 @@ pub fn get_article_view(
 ) -> Result<Option<ArticleView>, AppError> {
     let conn = state.lock_read()?;
     Ok(load_article_view(&conn, &id)?)
+}
+
+#[tauri::command]
+pub fn mark_article_opened(
+    state: tauri::State<'_, DbState>,
+    id: String,
+) -> Result<(), AppError> {
+    let conn = state.lock_write()?;
+    Ok(db::mark_article_opened(&conn, &id)?)
+}
+
+#[tauri::command]
+pub fn get_learning_stats(
+    state: tauri::State<'_, DbState>,
+) -> Result<LearningStats, AppError> {
+    let conn = state.lock_read()?;
+    Ok(db::learning_stats(&conn)?)
 }
 
 #[derive(Clone, serde::Serialize, ts_rs::TS)]

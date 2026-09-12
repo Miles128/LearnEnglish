@@ -41,6 +41,8 @@ pub fn run() {
             commands::config::save_config_cmd,
             commands::articles::list_articles,
             commands::articles::get_article_view,
+            commands::articles::mark_article_opened,
+            commands::articles::get_learning_stats,
             commands::feeds::list_feeds,
             commands::feeds::set_feed_enabled,
             commands::feeds::list_feed_categories,

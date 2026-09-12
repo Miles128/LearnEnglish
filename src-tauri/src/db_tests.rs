@@ -16,6 +16,8 @@ fn sample_article(id: &str) -> db::Article {
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
         summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     }
 }
 
@@ -58,6 +60,8 @@ fn db_seeds_feeds_and_stores_article() {
         fetched_at: chrono::Utc::now().to_rfc3339(),
         origin: "rss".into(),
         summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     db::upsert_article(&conn, &article).unwrap();
     let list = db::list_articles(&conn, Some("tech"), None, None).unwrap();
@@ -156,6 +160,8 @@ fn insert_article_if_new_is_idempotent() {
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
         summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     assert!(db::insert_article_if_new(&conn, &first).unwrap());
 
@@ -171,6 +177,8 @@ fn insert_article_if_new_is_idempotent() {
         fetched_at: "2024-06-01T00:00:00Z".into(),
         origin: "rss".into(),
         summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     assert!(!db::insert_article_if_new(&conn, &second).unwrap());
 
@@ -202,6 +210,8 @@ fn list_article_urls_supports_incremental_skip() {
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
         summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     db::insert_article_if_new(&conn, &a).unwrap();
     let urls = db::list_article_urls(&conn).unwrap();
@@ -255,6 +265,8 @@ fn purge_summary_only_removes_teasers_keeps_fulltext() {
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
         summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     let full = db::Article {
         id: "full".into(),
@@ -268,6 +280,8 @@ fn purge_summary_only_removes_teasers_keeps_fulltext() {
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
         summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     db::insert_article_if_new(&conn, &teaser).unwrap();
     db::insert_article_if_new(&conn, &full).unwrap();
@@ -301,6 +315,8 @@ fn purge_never_touches_user_imported_articles() {
             fetched_at: "2020-01-01T00:00:00Z".into(),
             origin: origin.into(),
             summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
         };
         db::insert_article_if_new(&conn, &a).unwrap();
     }
@@ -335,6 +351,8 @@ fn refresh_article_content_updates_longer_body() {
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
         summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     db::insert_article_if_new(&conn, &a).unwrap();
     db::set_article_summary_zh(&conn, "r1", "旧简介").unwrap();
@@ -354,6 +372,8 @@ fn refresh_article_content_updates_longer_body() {
         fetched_at: "2024-01-01T00:00:00Z".into(),
         origin: "rss".into(),
         summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
     };
     let changed = db::refresh_article_content(&conn, &update).unwrap();
     assert!(changed);
@@ -388,6 +408,8 @@ fn list_articles_paginates() {
             fetched_at: format!("2020-01-0{}T00:00:00Z", i + 1),
             origin: "rss".into(),
         summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
         };
         db::insert_article_if_new(&conn, &a).unwrap();
     }
@@ -664,10 +686,18 @@ fn schema_adds_summary_zh_column() {
         )
         .unwrap();
     assert_eq!(has, 1, "articles.summary_zh should exist after migrate");
+    let opened_col: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('articles') WHERE name='last_opened_at'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(opened_col, 1, "articles.last_opened_at should exist after migrate");
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     let _ = std::fs::remove_file(path);
 }
 
@@ -691,4 +721,76 @@ fn summary_zh_roundtrips_and_missing_query() {
     assert!(db::articles_missing_card_zh(&conn, 40).unwrap().is_empty());
 
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn mark_article_opened_is_implicit_and_repeatable() {
+    let path = temp_dir().join(format!("le-opened-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    db::insert_article_if_new(&conn, &sample_article("r1")).unwrap();
+
+    let before = db::get_article(&conn, "r1").unwrap().expect("exists");
+    assert!(before.last_opened_at.is_none());
+    assert_eq!(before.open_count, 0);
+
+    db::mark_article_opened(&conn, "r1").unwrap();
+    let once = db::get_article(&conn, "r1").unwrap().expect("exists");
+    assert!(once.last_opened_at.as_deref().unwrap().starts_with("20"));
+    assert_eq!(once.open_count, 1);
+
+    db::mark_article_opened(&conn, "r1").unwrap();
+    let twice = db::get_article(&conn, "r1").unwrap().expect("exists");
+    assert_eq!(twice.open_count, 2);
+    assert!(twice.last_opened_at >= once.last_opened_at);
+
+    assert!(db::mark_article_opened(&conn, "missing").is_err());
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn learning_stats_uses_opens_and_new_vocab() {
+    let path = temp_dir().join(format!("le-learn-stats-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    let mut bbc = sample_article("bbc1");
+    bbc.source = "BBC".into();
+    bbc.category = "world".into();
+    let mut npr = sample_article("npr1");
+    npr.source = "NPR".into();
+    npr.category = "world".into();
+    db::insert_article_if_new(&conn, &bbc).unwrap();
+    db::insert_article_if_new(&conn, &npr).unwrap();
+    db::mark_article_opened(&conn, "bbc1").unwrap();
+    db::mark_article_opened(&conn, "bbc1").unwrap();
+    db::mark_article_opened(&conn, "npr1").unwrap();
+
+    db::insert_vocab(
+        &conn,
+        &sample_vocab("v-new", "fresh", &chrono::Utc::now().to_rfc3339()),
+    )
+    .unwrap();
+    db::insert_vocab(
+        &conn,
+        &sample_vocab("v-old", "stale", "2020-01-01T00:00:00Z"),
+    )
+    .unwrap();
+
+    let stats = db::learning_stats(&conn).unwrap();
+    assert_eq!(stats.opened_total, 2);
+    assert_eq!(stats.opened_7d, 2);
+    assert_eq!(stats.top_source.as_deref(), Some("BBC"));
+    assert_eq!(stats.top_category.as_deref(), Some("world"));
+    assert_eq!(stats.vocab_created_7d, 1);
+    assert_eq!(stats.vocab_learning, 2);
+
+    let empty_path = temp_dir().join(format!("le-learn-empty-{}.db", Uuid::new_v4()));
+    let empty = db::open_db(empty_path.clone()).expect("open");
+    let zero = db::learning_stats(&empty).unwrap();
+    assert_eq!(zero.opened_total, 0);
+    assert_eq!(zero.opened_7d, 0);
+    assert!(zero.top_source.is_none());
+    assert_eq!(zero.vocab_created_7d, 0);
+
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(empty_path);
 }

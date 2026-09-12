@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import type { Article, FeedCategory } from "../api";
 import { categoryLabel } from "../readerUtils";
 import { formatKnownPercent } from "../knownPercent";
+import { articleIsRead } from "../learningStats";
 import {
   loadCollapsedSources,
   saveCollapsedSources,
@@ -59,7 +60,12 @@ export default function SourceBoard({ section, categories, knownPctById }: Props
             const blurb = a.summary_zh || `${a.content_text.slice(0, 140)}…`;
             return (
               <li key={a.id}>
-                <Link to={`/article/${a.id}`} className="article-row">
+                <Link
+                  to={`/article/${a.id}`}
+                  className={
+                    articleIsRead(a) ? "article-row is-read" : "article-row"
+                  }
+                >
                   {pctLabel && (
                     <div className="article-row-meta">
                       <span className="known-pct">{pctLabel}</span>

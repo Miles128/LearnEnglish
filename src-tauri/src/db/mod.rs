@@ -71,6 +71,27 @@ pub struct Article {
     /// LLM-generated Simplified Chinese blurb, at most 50 characters.
     #[serde(default)]
     pub summary_zh: String,
+    /// Set when the reader is opened. Implicit; never asked.
+    #[serde(default)]
+    pub last_opened_at: Option<String>,
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub open_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LearningStats {
+    #[ts(type = "number")]
+    pub opened_total: i64,
+    #[ts(type = "number")]
+    pub opened_7d: i64,
+    pub top_source: Option<String>,
+    pub top_category: Option<String>,
+    #[ts(type = "number")]
+    pub vocab_created_7d: i64,
+    #[ts(type = "number")]
+    pub vocab_learning: i64,
 }
 
 fn default_article_origin() -> String {
@@ -226,7 +247,7 @@ const LEGACY_COLUMN_ADDITIONS: &[&str] = &[
 /// Version-gated migrations. To add one: raise `LATEST_VERSION` and apply its
 /// DDL inside `migrate` when `stored < N`. Stamp each version with its own
 /// number (never `LATEST_VERSION`) so later steps are not skipped.
-const LATEST_VERSION: i64 = 4;
+const LATEST_VERSION: i64 = 5;
 
 fn migrate(conn: &Connection) -> Result<(), String> {
     let mut stored: i64 = conn
@@ -283,6 +304,23 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         conn.pragma_update(None, "user_version", 4)
             .map_err(|e| e.to_string())?;
         stored = 4;
+    }
+
+    if stored < 5 {
+        for sql in [
+            "ALTER TABLE articles ADD COLUMN last_opened_at TEXT",
+            "ALTER TABLE articles ADD COLUMN open_count INTEGER NOT NULL DEFAULT 0",
+        ] {
+            if let Err(e) = conn.execute(sql, []) {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column name") {
+                    return Err(msg);
+                }
+            }
+        }
+        conn.pragma_update(None, "user_version", 5)
+            .map_err(|e| e.to_string())?;
+        stored = 5;
     }
 
     if stored < LATEST_VERSION {

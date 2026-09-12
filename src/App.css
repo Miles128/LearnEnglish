@@ -264,6 +264,17 @@ a {
   box-shadow: var(--shadow);
 }
 
+.article-row.is-read {
+  opacity: 0.55;
+}
+
+.learning-insight {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
 .article-row h2 {
   margin: 8px 0;
   font-size: 1.2rem;

@@ -130,6 +130,18 @@ pub async fn translate_full_article(
 }
 
 #[tauri::command]
+pub async fn fill_missing_card_zh(app: AppHandle) -> Result<usize, AppError> {
+    let cfg = crate::config::load_config()?;
+    if cfg.api_key.trim().is_empty() {
+        return Ok(0);
+    }
+    crate::commands::spawn_db(app, move |state| {
+        Ok(feeds::fill_missing_card_zh(state, &cfg, 80, |_, _| {})?)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn import_article_url(app: AppHandle, url: String) -> Result<Article, AppError> {
     crate::commands::spawn_db(app, move |state| {
         Ok(feeds::import_article_from_url(state, &url)?)

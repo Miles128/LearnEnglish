@@ -1,14 +1,16 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, ArticleListItem, FeedCategory, LearningStats, RefreshResult } from "../api";
+import { articleNeedsCardZh } from "../articleList";
 import { formatLearningInsight } from "../learningStats";
 import { estimateKnownPercent } from "../knownPercent";
 import { useAppConfig, useVocab } from "../store";
 import { ensureLexiconLoaded, isFreqBand, type FreqBand } from "../wordLevels";
 import ImportRow from "../components/ImportRow";
-import SourceBoard, { type SourceSection } from "../components/SourceBoard";
+import SourceBoard from "../components/SourceBoard";
 import ManageFeedsDrawer from "../components/ManageFeedsDrawer";
+import { groupBySource, sortSectionsByInterest } from "../sourceInterest";
 
 const PAGE_SIZE = 60;
 
@@ -31,6 +33,10 @@ export default function Home() {
   const { cfg } = useAppConfig();
   const { learningTerms } = useVocab();
   const freqBand: FreqBand = isFreqBand(cfg.freq_band) ? cfg.freq_band : 3000;
+  const hasLlm = Boolean(cfg.api_key?.trim());
+  const didBackfill = useRef(false);
+  const [cardFillError, setCardFillError] = useState<string | null>(null);
+  const [cardFilling, setCardFilling] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -50,7 +56,6 @@ export default function Home() {
       setHasMore(list.length >= PAGE_SIZE);
       setCategories(cats);
       setLearningStats(stats);
-      // Note: missing title_zh / summary_zh is filled by the refresh pipeline.
     } catch (e) {
       setError(String(e));
     } finally {
@@ -59,8 +64,31 @@ export default function Home() {
   }, [category]);
 
   useEffect(() => {
+    didBackfill.current = false;
     void load();
   }, [load]);
+
+  const fillCards = useCallback(async () => {
+    setCardFilling(true);
+    setCardFillError(null);
+    try {
+      const n = await api.fillMissingCardZh();
+      if (n > 0) await load();
+    } catch (e) {
+      didBackfill.current = false;
+      setCardFillError(String(e));
+    } finally {
+      setCardFilling(false);
+    }
+  }, [load]);
+
+  useEffect(() => {
+    if (didBackfill.current) return;
+    if (!hasLlm || loading || articles.length === 0) return;
+    if (!articles.some(articleNeedsCardZh)) return;
+    didBackfill.current = true;
+    void fillCards();
+  }, [articles, hasLlm, loading, fillCards]);
 
   async function loadMore() {
     if (loadingMore) return;
@@ -82,7 +110,10 @@ export default function Home() {
     }
   }
 
-  const sections = useMemo(() => groupBySource(articles), [articles]);
+  const sections = useMemo(
+    () => sortSectionsByInterest(groupBySource(articles), Date.now()),
+    [articles],
+  );
   const tabCategories = useMemo(() => {
     const tabs = [{ id: "all", label: "全部" }];
     for (const c of categories) {
@@ -216,6 +247,29 @@ export default function Home() {
       {learningStats && (
         <p className="learning-insight">{formatLearningInsight(learningStats)}</p>
       )}
+      {!hasLlm && articles.some(articleNeedsCardZh) && (
+        <p className="muted">
+          设置里填 API Key 后，列表会自动补中文译题和一两句简介。
+        </p>
+      )}
+      {hasLlm && cardFilling && (
+        <p className="muted">正在补中文译题与简介…</p>
+      )}
+      {cardFillError && (
+        <p className="banner err with-action">
+          <span>简介未生成：{cardFillError}</span>
+          <button
+            type="button"
+            className="btn small"
+            onClick={() => {
+              didBackfill.current = true;
+              void fillCards();
+            }}
+          >
+            重试
+          </button>
+        </p>
+      )}
 
       {message && <p className="banner ok">{message}</p>}
       {error && <p className="banner err">{error}</p>}
@@ -262,16 +316,3 @@ export default function Home() {
   );
 }
 
-function groupBySource(articles: ArticleListItem[]): SourceSection[] {
-  const map = new Map<string, SourceSection>();
-  for (const a of articles) {
-    const key = a.source || "其他";
-    let sec = map.get(key);
-    if (!sec) {
-      sec = { source: key, category: a.category, articles: [] };
-      map.set(key, sec);
-    }
-    sec.articles.push(a);
-  }
-  return Array.from(map.values());
-}

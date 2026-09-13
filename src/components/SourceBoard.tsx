@@ -76,15 +76,7 @@ export default function SourceBoard({ section, categories, knownPctById }: Props
                   {a.title_zh ? (
                     <p className="article-title-zh">{a.title_zh}</p>
                   ) : null}
-                  {blurb ? (
-                    <p
-                      className={
-                        a.summary_zh ? "article-summary-zh" : "snippet"
-                      }
-                    >
-                      {blurb}
-                    </p>
-                  ) : null}
+                  {blurb ? <p className="article-summary-zh">{blurb}</p> : null}
                 </Link>
               </li>
             );

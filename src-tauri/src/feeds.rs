@@ -249,7 +249,7 @@ pub fn refresh_feeds(
         percent: download_weight,
     });
 
-    match fill_missing_title_translations_with_progress(db, cfg, 40, |done, total| {
+    match fill_missing_card_zh(db, cfg, 80, |done, total| {
         let translate_pct = if total == 0 {
             translate_weight
         } else {
@@ -282,7 +282,7 @@ pub fn refresh_feeds(
     Ok(result)
 }
 
-fn fill_missing_title_translations_with_progress(
+pub fn fill_missing_card_zh(
     db: &DbState,
     cfg: &AppConfig,
     limit: usize,
@@ -299,6 +299,7 @@ fn fill_missing_title_translations_with_progress(
 
     let total = missing.len();
     let mut done = 0usize;
+    let mut last_err: Option<String> = None;
     on_progress(done, total);
 
     for chunk in missing.chunks(8) {
@@ -306,13 +307,17 @@ fn fill_missing_title_translations_with_progress(
             .iter()
             .map(|a| vocab::card_from_article(&a.title, &a.content_text))
             .collect();
-        let translated = vocab::translate_article_cards(cfg, &cards).map_err(|e| {
-            format!(
-                "标题/简介（第 {}–{} 条）：{e}",
-                done + 1,
-                done + cards.len()
-            )
-        })?;
+        let translated = match vocab::translate_article_cards(cfg, &cards) {
+            Ok(rows) => rows,
+            Err(e) => {
+                last_err = Some(format!(
+                    "标题/简介（第 {}–{} 条）：{e}",
+                    done + 1,
+                    done + cards.len()
+                ));
+                continue;
+            }
+        };
         {
             let conn = db.lock_write()?;
             for (article, card) in chunk.iter().zip(translated.into_iter()) {
@@ -331,6 +336,11 @@ fn fill_missing_title_translations_with_progress(
             }
         }
         on_progress(done, total);
+    }
+    if done == 0 {
+        if let Some(e) = last_err {
+            return Err(e);
+        }
     }
     Ok(done)
 }
@@ -732,15 +742,46 @@ pub fn import_article_from_url(db: &DbState, url: &str) -> Result<Article, Strin
         open_count: 0,
     };
 
-    let conn = db.lock_write()?;
-    let inserted = db::insert_article_if_new(&conn, &article)?;
-    if inserted {
-        return Ok(article);
+    {
+        let conn = db.lock_write()?;
+        if !db::insert_article_if_new(&conn, &article)? {
+            return db::get_article_by_url(&conn, url)?
+                .ok_or_else(|| "导入失败：文章未写入".into());
+        }
     }
-    drop(conn);
-    let conn = db.lock_read()?;
-    db::get_article_by_url(&conn, url)?
-        .ok_or_else(|| "导入失败：文章未写入".into())
+    let mut article = article;
+    if let Ok(cfg) = crate::config::load_config() {
+        let _ = fill_article_card_zh(db, &cfg, &mut article);
+    }
+    Ok(article)
+}
+
+pub fn fill_article_card_zh(
+    db: &DbState,
+    cfg: &AppConfig,
+    article: &mut Article,
+) -> Result<(), String> {
+    if !article.title_zh.is_empty() && !article.summary_zh.is_empty() {
+        return Ok(());
+    }
+    if cfg.api_key.trim().is_empty() {
+        return Ok(());
+    }
+    let cards = [vocab::card_from_article(&article.title, &article.content_text)];
+    let translated = vocab::translate_article_cards(cfg, &cards)?;
+    let Some(card) = translated.into_iter().next() else {
+        return Ok(());
+    };
+    let conn = db.lock_write()?;
+    if article.title_zh.is_empty() && !card.title_zh.is_empty() {
+        db::set_article_title_zh(&conn, &article.id, &card.title_zh)?;
+        article.title_zh = card.title_zh;
+    }
+    if article.summary_zh.is_empty() && !card.summary_zh.is_empty() {
+        db::set_article_summary_zh(&conn, &article.id, &card.summary_zh)?;
+        article.summary_zh = card.summary_zh;
+    }
+    Ok(())
 }
 
 fn looks_like_paywall(text: &str) -> bool {

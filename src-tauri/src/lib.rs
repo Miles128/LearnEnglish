@@ -52,6 +52,7 @@ pub fn run() {
             commands::feeds::validate_feed,
             commands::feeds::discover_feeds,
             commands::feeds::refresh_feeds,
+            commands::articles::fill_missing_card_zh,
             commands::articles::import_article_url,
             commands::articles::import_article_file,
             commands::articles::translate_paragraph,

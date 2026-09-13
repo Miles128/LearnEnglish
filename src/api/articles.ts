@@ -20,6 +20,7 @@ export const apiArticles = {
   markArticleOpened: (id: string) =>
     invoke<void>("mark_article_opened", { id }),
   getLearningStats: () => invoke<LearningStats>("get_learning_stats"),
+  fillMissingCardZh: () => invoke<number>("fill_missing_card_zh"),
   importArticleUrl: (url: string) =>
     invoke<Article>("import_article_url", { url }),
   importArticleFile: (path: string) =>

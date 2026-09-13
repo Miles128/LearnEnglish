@@ -104,15 +104,15 @@ a {
 
 .page.reader {
   width: 100%;
-  max-width: min(var(--reader-measure), 100%);
-  margin-inline: auto;
-  padding-inline: clamp(1.25rem, 5vw, 3.5rem);
+  max-width: none;
+  margin-inline: 0;
+  padding-inline: clamp(1.25rem, 4vw, 2.5rem);
   box-sizing: border-box;
   --reader-font: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC",
     "Source Han Serif SC", serif;
   --reader-size: 18px;
   --reader-lh: 1.75;
-  --reader-measure: 52rem;
+  --reader-measure: 100%;
 }
 
 .page.reader.reader-full {
@@ -556,6 +556,21 @@ mark.vocab-hit {
 
 mark.vocab-hit:hover {
   background: rgba(15, 92, 76, 0.26);
+}
+
+.plain-word {
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.plain-word:hover,
+.plain-word:focus-visible {
+  background: rgba(15, 92, 76, 0.06);
+}
+
+.plain-word:focus-visible {
+  outline: 2px solid rgba(15, 92, 76, 0.35);
+  outline-offset: 2px;
 }
 
 .hard-word {

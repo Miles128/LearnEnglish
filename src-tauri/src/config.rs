@@ -65,7 +65,7 @@ fn default_reader_line_height() -> f64 {
 }
 
 fn default_reader_line_width() -> String {
-    "medium".into()
+    "full".into()
 }
 
 impl Default for AppConfig {
@@ -163,7 +163,7 @@ mod tests {
         assert_eq!(cfg.reader_font, "serif");
         assert_eq!(cfg.reader_font_size, 18);
         assert_eq!(cfg.reader_line_height, 1.75);
-        assert_eq!(cfg.reader_line_width, "medium");
+        assert_eq!(cfg.reader_line_width, "full");
         assert_eq!(cfg.cefr_level, "B1");
         assert_eq!(cfg.freq_band, 3000);
         assert!(cfg.disabled_feeds.is_empty());

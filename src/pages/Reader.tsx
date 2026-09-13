@@ -344,7 +344,18 @@ export default function Reader() {
           <Link to="/" className="back">
             ← 返回
           </Link>
-          <h1>{title}</h1>
+          <h1>
+            {lexReady ? (
+              <AnnotatedPara
+                text={title}
+                prefs={prefs}
+                learningTerms={vocabTerms}
+                onHardClick={onHardWordClick}
+              />
+            ) : (
+              title
+            )}
+          </h1>
           {article.title_zh && <p className="article-title-zh">{article.title_zh}</p>}
           {article.summary_zh && (
             <p className="article-summary-zh">{article.summary_zh}</p>

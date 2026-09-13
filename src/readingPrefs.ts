@@ -104,7 +104,7 @@ export function defaultReadingPrefs(): ReadingPrefs {
     reader_font: "serif",
     reader_font_size: 18,
     reader_line_height: 1.75,
-    reader_line_width: "medium",
+    reader_line_width: "full",
   };
 }
 

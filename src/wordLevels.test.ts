@@ -14,10 +14,6 @@ beforeAll(async () => {
   await ensureLexiconLoaded();
 });
 
-function tokenCount(spans: AnnotatedSpan[]): number {
-  return spans.filter((s) => s.type === "token").length;
-}
-
 function plain(spans: AnnotatedSpan[]): string {
   return spans.map((s) => s.text).join("");
 }
@@ -60,19 +56,24 @@ describe("annotateText", () => {
     }
   });
 
-  it("produces no token spans when everything is easy", () => {
-    const spans = annotateText(
-      "The cat sat on the mat and that was it.",
-      prefsC2,
-      [],
-    );
-    expect(tokenCount(spans)).toBe(0);
+  it("emits a token for every word so any word can be clicked", () => {
+    const spans = annotateText("The cat sat.", prefsC2, []);
+    const words = spans.filter((s) => s.type === "token");
+    expect(words.map((s) => (s.type === "token" ? s.text : ""))).toEqual([
+      "The",
+      "cat",
+      "sat",
+    ]);
+    expect(words.every((s) => s.type === "token" && !s.hard)).toBe(true);
   });
 
-  it("stricter prefs mark at least as many tokens", () => {
+  it("stricter prefs mark at least as many hard tokens", () => {
     const text = "The cat sat on the mat while the warden watched the prey.";
-    const b1 = tokenCount(annotateText(text, prefsB1, []));
-    const c2 = tokenCount(annotateText(text, prefsC2, []));
+    const hardCount = (prefs: DifficultyPrefs) =>
+      annotateText(text, prefs, []).filter((s) => s.type === "token" && s.hard)
+        .length;
+    const b1 = hardCount(prefsB1);
+    const c2 = hardCount(prefsC2);
     expect(b1).toBeGreaterThan(0);
     expect(b1).toBeGreaterThanOrEqual(c2);
   });

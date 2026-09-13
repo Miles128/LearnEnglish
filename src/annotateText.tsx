@@ -23,7 +23,7 @@ export type HardWordClick = (info: {
 /**
  * Memoized per-paragraph annotation so only paragraphs whose text, prefs or
  * vocab changed re-run the (expensive) word-level annotation pass.
- * `onHardClick` must be referentially stable (useCallback) to get memo hits.
+ * Every English word is clickable. `onHardClick` must be referentially stable.
  */
 export const AnnotatedPara = memo(function AnnotatedPara({
   text,
@@ -53,21 +53,20 @@ function renderSpan(
   if (span.type === "text") return span.text;
 
   const classNames = [
-    span.hard ? "hard-word" : null,
+    span.hard ? "hard-word" : "plain-word",
     span.learning ? "vocab-hit" : null,
   ]
     .filter(Boolean)
     .join(" ");
 
   const title = [
-    span.hard ? "超出当前难度" : null,
+    span.hard ? "超出当前难度" : "单击翻译",
     span.learning ? "生词库 · 学习中" : null,
   ]
     .filter(Boolean)
     .join(" · ");
 
   const onClick = (e: MouseEvent) => {
-    if (!span.hard && !span.learning) return;
     e.preventDefault();
     e.stopPropagation();
     window.getSelection()?.removeAllRanges();
@@ -103,12 +102,12 @@ function renderSpan(
     onKeyDown,
   };
 
-  if (span.hard) {
-    return createElement("span", { ...interactive, className: classNames }, span.text);
+  if (span.learning && !span.hard) {
+    return createElement(
+      "mark",
+      { ...interactive, className: classNames },
+      span.text,
+    );
   }
-  return createElement(
-    "mark",
-    { ...interactive, className: classNames || "vocab-hit" },
-    span.text,
-  );
+  return createElement("span", { ...interactive, className: classNames }, span.text);
 }

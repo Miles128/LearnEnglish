@@ -196,18 +196,14 @@ export function annotateText(
       const entry = lookupWord(phraseHit.key);
       const hard = entry ? isHardWord(entry, prefs) : false;
       const learningHit = learning.has(phraseHit.key);
-      if (hard || learningHit) {
-        spans.push({
-          type: "token",
-          text: phraseHit.raw,
-          term: phraseHit.key,
-          hard,
-          learning: learningHit,
-          zh: entry?.zh,
-        });
-      } else {
-        spans.push({ type: "text", text: phraseHit.raw });
-      }
+      spans.push({
+        type: "token",
+        text: phraseHit.raw,
+        term: phraseHit.key,
+        hard,
+        learning: learningHit,
+        zh: entry?.zh,
+      });
       i = phraseHit.end;
       continue;
     }
@@ -234,18 +230,14 @@ export function annotateText(
     const lemmaKey = findLemmaKey(key);
     const inLearning = learning.has(key) || learning.has(lemmaKey);
 
-    if (hard || inLearning) {
-      spans.push({
-        type: "token",
-        text: raw,
-        term: lemmaKey || key,
-        hard,
-        learning: inLearning,
-        zh: entry?.zh,
-      });
-    } else {
-      spans.push({ type: "text", text: raw });
-    }
+    spans.push({
+      type: "token",
+      text: raw,
+      term: lemmaKey || key,
+      hard,
+      learning: inLearning,
+      zh: entry?.zh,
+    });
     i = m.index + raw.length;
   }
 

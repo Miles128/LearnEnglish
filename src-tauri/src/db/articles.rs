@@ -37,8 +37,8 @@ pub fn list_articles(
     Ok(rows)
 }
 
-/// RSS articles whose stored body length (bytes) is below `max_bytes` — the
-/// candidate set for summary-only purges without loading every full body.
+/// RSS articles whose stored body length (bytes) is below `max_bytes`.
+/// Pass `i64::MAX` to scan every RSS body (chrome/tag-wall dumps can be long).
 pub fn list_rss_teaser_candidates(
     conn: &Connection,
     max_bytes: i64,

@@ -1,6 +1,20 @@
 import type { ReactNode } from "react";
 import Markdown from "react-markdown";
 
+const MARKDOWN_ANNOTATE_TAGS = [
+  "p",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "li",
+  "blockquote",
+] as const;
+
+export function shouldAnnotateMarkdownTag(tag: string): boolean {
+  return (MARKDOWN_ANNOTATE_TAGS as readonly string[]).includes(tag);
+}
+
 type Props = {
   text: string;
   asMarkdown: boolean;
@@ -58,6 +72,14 @@ export default function ReaderParagraph({
                   </a>
                 ),
                 p: ({ children }) => <p>{annotateChildren(children)}</p>,
+                h1: ({ children }) => <h1>{annotateChildren(children)}</h1>,
+                h2: ({ children }) => <h2>{annotateChildren(children)}</h2>,
+                h3: ({ children }) => <h3>{annotateChildren(children)}</h3>,
+                h4: ({ children }) => <h4>{annotateChildren(children)}</h4>,
+                li: ({ children }) => <li>{annotateChildren(children)}</li>,
+                blockquote: ({ children }) => (
+                  <blockquote>{annotateChildren(children)}</blockquote>
+                ),
               }}
             >
               {text}

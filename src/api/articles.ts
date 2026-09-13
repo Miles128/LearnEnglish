@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Article,
+  ArticleListItem,
   ArticleView,
   FullTranslateResult,
   LearningStats,
@@ -9,7 +10,7 @@ import type {
 
 export const apiArticles = {
   listArticles: (category?: string, limit?: number, offset?: number) =>
-    invoke<Article[]>("list_articles", {
+    invoke<ArticleListItem[]>("list_articles", {
       category: category ?? null,
       limit: limit ?? null,
       offset: offset ?? null,

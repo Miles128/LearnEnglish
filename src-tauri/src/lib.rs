@@ -5,6 +5,7 @@ mod error;
 mod feeds;
 mod import_file;
 mod srs;
+mod translate;
 mod vocab;
 
 #[cfg(test)]

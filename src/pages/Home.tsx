@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, Article, FeedCategory, LearningStats, RefreshResult } from "../api";
+import { api, ArticleListItem, FeedCategory, LearningStats, RefreshResult } from "../api";
 import { formatLearningInsight } from "../learningStats";
 import { estimateKnownPercent } from "../knownPercent";
 import { useAppConfig, useVocab } from "../store";
@@ -16,7 +16,7 @@ export default function Home() {
   const navigate = useNavigate();
   const [category, setCategory] = useState("all");
   const [categories, setCategories] = useState<FeedCategory[]>([]);
-  const [articles, setArticles] = useState<Article[]>([]);
+  const [articles, setArticles] = useState<ArticleListItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -97,7 +97,7 @@ export default function Home() {
     for (const a of articles) {
       map.set(
         a.id,
-        estimateKnownPercent(a.content_text, learningTerms, freqBand),
+        estimateKnownPercent(a.excerpt, learningTerms, freqBand),
       );
     }
     return map;
@@ -262,7 +262,7 @@ export default function Home() {
   );
 }
 
-function groupBySource(articles: Article[]): SourceSection[] {
+function groupBySource(articles: ArticleListItem[]): SourceSection[] {
   const map = new Map<string, SourceSection>();
   for (const a of articles) {
     const key = a.source || "其他";

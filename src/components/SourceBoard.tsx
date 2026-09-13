@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import type { Article, FeedCategory } from "../api";
+import type { ArticleListItem, FeedCategory } from "../api";
+import { articleListBlurb } from "../articleList";
 import { categoryLabel } from "../readerUtils";
 import { formatKnownPercent } from "../knownPercent";
 import { articleIsRead } from "../learningStats";
@@ -13,7 +14,7 @@ import {
 export type SourceSection = {
   source: string;
   category: string;
-  articles: Article[];
+  articles: ArticleListItem[];
 };
 
 type Props = {
@@ -57,7 +58,7 @@ export default function SourceBoard({ section, categories, knownPctById }: Props
           {section.articles.map((a) => {
             const pct = knownPctById.get(a.id) ?? null;
             const pctLabel = formatKnownPercent(pct);
-            const blurb = a.summary_zh || `${a.content_text.slice(0, 140)}…`;
+            const blurb = articleListBlurb(a);
             return (
               <li key={a.id}>
                 <Link

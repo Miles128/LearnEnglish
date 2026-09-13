@@ -69,12 +69,17 @@ pub fn import_article_from_file(db: &DbState, path: &str) -> Result<Article, Str
         open_count: 0,
     };
 
-    let conn = db.lock_write()?;
-    let inserted = db::insert_article_if_new(&conn, &article)?;
-    if inserted {
-        return Ok(article);
+    {
+        let conn = db.lock_write()?;
+        if !db::insert_article_if_new(&conn, &article)? {
+            return Err("导入失败：文章未写入".into());
+        }
     }
-    Err("导入失败：文章未写入".into())
+    let mut article = article;
+    if let Ok(cfg) = crate::config::load_config() {
+        let _ = feeds::fill_article_card_zh(db, &cfg, &mut article);
+    }
+    Ok(article)
 }
 
 fn title_from_path(path: &Path) -> String {

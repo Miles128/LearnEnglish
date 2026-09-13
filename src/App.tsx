@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
-import { shouldForcePlacement, shouldHideAppNav } from "./placement/engine";
+import {
+  shouldForcePlacement,
+  shouldHideAppNav,
+  shouldShowPlacementNav,
+} from "./placement/engine";
 import { useAppConfig } from "./store";
 import { type RefreshProgress } from "./api";
 import "./App.css";
@@ -41,10 +45,16 @@ export default function App() {
     }
   }, [cfg, ready, loadError, location.pathname, navigate]);
 
+  const forcePlacement = shouldForcePlacement(cfg);
   const hideNav = shouldHideAppNav({
     ready,
     loadError,
-    forcePlacement: shouldForcePlacement(cfg),
+    forcePlacement,
+  });
+  const showPlacementNav = shouldShowPlacementNav({
+    ready,
+    loadError,
+    forcePlacement,
   });
   const showBar = progress != null && progress.phase !== "done";
   const showDoneBriefly = progress?.phase === "done";
@@ -63,6 +73,11 @@ export default function App() {
             </NavLink>
             <NavLink to="/vocab">生词库</NavLink>
             <NavLink to="/settings">设置</NavLink>
+          </nav>
+        )}
+        {showPlacementNav && (
+          <nav>
+            <NavLink to="/placement">词汇测评</NavLink>
           </nav>
         )}
       </aside>

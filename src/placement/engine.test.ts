@@ -9,6 +9,7 @@ import {
   pickNext,
   shouldForcePlacement,
   shouldHideAppNav,
+  shouldShowPlacementNav,
   updateL,
   type PoolItem,
 } from "./engine";
@@ -36,7 +37,7 @@ describe("shouldForcePlacement", () => {
 });
 
 describe("shouldHideAppNav", () => {
-  it("hides other routes only when placement is forced and config loaded", () => {
+  it("hides Home/Vocab/Settings whenever placement is forced", () => {
     expect(
       shouldHideAppNav({
         ready: true,
@@ -50,12 +51,31 @@ describe("shouldHideAppNav", () => {
         loadError: "boom",
         forcePlacement: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldHideAppNav({
         ready: true,
         loadError: null,
         forcePlacement: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldShowPlacementNav", () => {
+  it("offers a placement link when config failed but placement is still due", () => {
+    expect(
+      shouldShowPlacementNav({
+        ready: true,
+        loadError: "boom",
+        forcePlacement: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowPlacementNav({
+        ready: true,
+        loadError: null,
+        forcePlacement: true,
       }),
     ).toBe(false);
   });

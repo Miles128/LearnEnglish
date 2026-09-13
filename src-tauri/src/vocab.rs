@@ -98,7 +98,7 @@ Translate faithfully. No markdown fences, no commentary."#;
     Ok(out)
 }
 
-pub const CARD_SUMMARY_MAX_CHARS: usize = 50;
+pub const CARD_SUMMARY_MAX_CHARS: usize = 120;
 const CARD_EXCERPT_CHARS: usize = 400;
 
 /// Truncate to at most `max_chars` Unicode scalars, then trim.
@@ -127,7 +127,7 @@ pub fn card_from_article(title: &str, content_text: &str) -> ArticleCardIn {
     }
 }
 
-/// Batch: Chinese title + ≤50-char Chinese summary. Input order = output order.
+/// Batch: Chinese title + 1–2 sentence Chinese synopsis. Input order = output order.
 pub fn translate_article_cards(
     cfg: &AppConfig,
     cards: &[ArticleCardIn],
@@ -139,7 +139,8 @@ pub fn translate_article_cards(
     let system = r#"You write Simplified Chinese metadata for English articles for language learners.
 Given a JSON array of objects {title, excerpt}, return ONLY a JSON array of the same length.
 Each item must be {"title_zh":"<Chinese title>","summary_zh":"<Chinese synopsis>"}.
-summary_zh must be a faithful one-sentence synopsis of the excerpt, at most 50 Chinese characters (no ellipsis padding, no quotes).
+title_zh is a natural Chinese rendering of the title (not pinyin).
+summary_zh is 1–2 complete Simplified Chinese sentences (about 40–120 characters) that say what the article is about. No ellipsis padding, no quotes, no English.
 No markdown fences, no commentary."#;
     let payload = serde_json::to_string(cards).map_err(|e| e.to_string())?;
     let out: Vec<ArticleCardOut> = chat_json(cfg, system, &payload, "article cards")?;
@@ -322,9 +323,21 @@ fn ensure_configured(cfg: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// OpenAI-compatible chat URL. Official DeepSeek / OpenAI roots need `/v1`.
+pub fn chat_completions_url(base_url: &str) -> String {
+    let base = base_url.trim().trim_end_matches('/');
+    if base.ends_with("/chat/completions") {
+        return base.to_string();
+    }
+    let known_root = base.ends_with("api.deepseek.com") || base.ends_with("api.openai.com");
+    if known_root && !base.ends_with("/v1") {
+        return format!("{base}/v1/chat/completions");
+    }
+    format!("{base}/chat/completions")
+}
+
 fn chat(cfg: &AppConfig, system: &str, user: &str) -> Result<String, String> {
-    let base = cfg.base_url.trim_end_matches('/');
-    let url = format!("{base}/chat/completions");
+    let url = chat_completions_url(&cfg.base_url);
     let body = json!({
         "model": cfg.model,
         "temperature": 0.2,
@@ -341,7 +354,7 @@ fn chat(cfg: &AppConfig, system: &str, user: &str) -> Result<String, String> {
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("LLM {e}"))?;
 
     let parsed: ChatResponse = resp.json().map_err(|e| e.to_string())?;
     parsed
@@ -353,7 +366,20 @@ fn chat(cfg: &AppConfig, system: &str, user: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod clip_tests {
-    use super::clip_zh;
+    use super::{chat_completions_url, clip_zh};
+
+    #[test]
+    fn deepseek_root_gets_v1() {
+        assert_eq!(
+            chat_completions_url("https://api.deepseek.com"),
+            "https://api.deepseek.com/v1/chat/completions"
+        );
+        assert_eq!(
+            chat_completions_url("https://api.deepseek.com/v1"),
+            "https://api.deepseek.com/v1/chat/completions"
+        );
+    }
+
 
     #[test]
     fn clip_zh_counts_unicode_scalars() {
@@ -362,5 +388,12 @@ mod clip_tests {
         assert_eq!(clip_zh("  短简介  ", 50), "短简介");
         let long: String = "字".repeat(80);
         assert_eq!(clip_zh(&long, 50).chars().count(), 50);
+        let two_sentences: String = "字".repeat(160);
+        assert_eq!(
+            clip_zh(&two_sentences, super::CARD_SUMMARY_MAX_CHARS)
+                .chars()
+                .count(),
+            120
+        );
     }
 }

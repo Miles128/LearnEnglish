@@ -1,4 +1,4 @@
-use super::Article;
+use super::{Article, ArticleListItem};
 use rusqlite::{params, Connection, OptionalExtension};
 
 const ARTICLE_COLS: &str =
@@ -12,7 +12,7 @@ pub fn list_articles(
     category: Option<&str>,
     limit: Option<i64>,
     offset: Option<i64>,
-) -> Result<Vec<Article>, String> {
+) -> Result<Vec<ArticleListItem>, String> {
     let mut sql = format!(
         "SELECT id,url,title,title_zh,source,category,published_at,SUBSTR(content_text,1,{LIST_EXCERPT_CHARS}),fetched_at,origin,summary_zh,last_opened_at,open_count FROM articles"
     );
@@ -30,7 +30,7 @@ pub fn list_articles(
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(rusqlite::params_from_iter(params.iter()), map_article)
+        .query_map(rusqlite::params_from_iter(params.iter()), map_article_list_item)
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
@@ -73,6 +73,24 @@ pub fn list_rss_language_samples(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
     Ok(rows)
+}
+
+pub fn map_article_list_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArticleListItem> {
+    Ok(ArticleListItem {
+        id: row.get(0)?,
+        url: row.get(1)?,
+        title: row.get(2)?,
+        title_zh: row.get(3)?,
+        source: row.get(4)?,
+        category: row.get(5)?,
+        published_at: row.get(6)?,
+        excerpt: row.get(7)?,
+        fetched_at: row.get(8)?,
+        origin: row.get(9)?,
+        summary_zh: row.get(10)?,
+        last_opened_at: row.get(11)?,
+        open_count: row.get(12)?,
+    })
 }
 
 pub fn map_article(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {

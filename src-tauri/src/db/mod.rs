@@ -79,6 +79,31 @@ pub struct Article {
     pub open_count: i64,
 }
 
+/// Home-list row: excerpt only. Full body stays on `Article` / get_article.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ArticleListItem {
+    pub id: String,
+    pub url: String,
+    pub title: String,
+    #[serde(default)]
+    pub title_zh: String,
+    pub source: String,
+    pub category: String,
+    pub published_at: Option<String>,
+    pub excerpt: String,
+    pub fetched_at: String,
+    #[serde(default = "default_article_origin")]
+    pub origin: String,
+    #[serde(default)]
+    pub summary_zh: String,
+    #[serde(default)]
+    pub last_opened_at: Option<String>,
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub open_count: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct LearningStats {

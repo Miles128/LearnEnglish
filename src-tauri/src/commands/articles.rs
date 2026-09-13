@@ -1,8 +1,8 @@
-use crate::db::{self, Article, DbState, LearningStats, TranslationRow};
+use crate::db::{self, Article, ArticleListItem, DbState, LearningStats, TranslationRow};
 use crate::error::AppError;
 use crate::feeds;
 use crate::import_file;
-use crate::vocab;
+use crate::translate;
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter};
 
@@ -28,14 +28,17 @@ pub fn load_article_view(conn: &Connection, id: &str) -> Result<Option<ArticleVi
 }
 
 #[tauri::command]
-pub fn list_articles(
-    state: tauri::State<'_, DbState>,
+pub async fn list_articles(
+    app: AppHandle,
     category: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
-) -> Result<Vec<Article>, AppError> {
-    let conn = state.lock_read()?;
-    Ok(db::list_articles(&conn, category.as_deref(), limit, offset)?)
+) -> Result<Vec<ArticleListItem>, AppError> {
+    crate::commands::spawn_db(app, move |state| {
+        let conn = state.lock_read()?;
+        Ok(db::list_articles(&conn, category.as_deref(), limit, offset)?)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -64,56 +67,6 @@ pub fn get_learning_stats(
     Ok(db::learning_stats(&conn)?)
 }
 
-#[derive(Clone, serde::Serialize, ts_rs::TS)]
-#[ts(export)]
-pub struct TranslateProgress {
-    pub article_id: String,
-    pub current: usize,
-    pub total: usize,
-    pub scope_key: String,
-    pub translated_text: String,
-    pub done: bool,
-}
-
-/// Stable across process restarts and compiler versions (unlike DefaultHasher),
-/// so cached selection translations survive app updates.
-fn stable_scope_key(text: &str) -> String {
-    // FNV-1a 64-bit
-    let mut hash: u64 = 0xcbf29ce484222325;
-    for byte in text.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("{hash:x}")
-}
-
-fn translate_and_cache(
-    state: &DbState,
-    cfg: &crate::config::AppConfig,
-    article_id: &str,
-    scope: &str,
-    scope_key: &str,
-    text: &str,
-) -> Result<TranslationRow, AppError> {
-    {
-        let conn = state.lock_read()?;
-        if let Some(existing) = db::get_translation(&conn, article_id, scope, scope_key)? {
-            return Ok(existing);
-        }
-    }
-    let translated = vocab::translate_text(cfg, text)?;
-    let conn = state.lock_write()?;
-    Ok(db::save_translation(
-        &conn,
-        article_id,
-        scope,
-        scope_key,
-        text,
-        &translated,
-        &cfg.model,
-    )?)
-}
-
 #[tauri::command]
 pub async fn translate_paragraph(
     app: AppHandle,
@@ -123,14 +76,14 @@ pub async fn translate_paragraph(
 ) -> Result<TranslationRow, AppError> {
     let cfg = crate::config::load_config()?;
     crate::commands::spawn_db(app, move |state| {
-        translate_and_cache(
+        Ok(translate::translate_and_cache(
             state,
             &cfg,
             &article_id,
             "paragraph",
             &paragraph_index.to_string(),
             &text,
-        )
+        )?)
     })
     .await
 }
@@ -143,108 +96,47 @@ pub async fn translate_selection(
 ) -> Result<TranslationRow, AppError> {
     let cfg = crate::config::load_config()?;
     crate::commands::spawn_db(app, move |state| {
-        let scope_key = stable_scope_key(&text);
-        translate_and_cache(state, &cfg, &article_id, "selection", &scope_key, &text)
+        let scope_key = translate::stable_scope_key(&text);
+        Ok(translate::translate_and_cache(
+            state,
+            &cfg,
+            &article_id,
+            "selection",
+            &scope_key,
+            &text,
+        )?)
     })
     .await
-}
-
-#[derive(Clone, serde::Serialize, ts_rs::TS)]
-#[ts(export)]
-pub struct FullTranslateResult {
-    pub rows: Vec<TranslationRow>,
-    pub errors: Vec<String>,
 }
 
 #[tauri::command]
 pub async fn translate_full_article(
     app: AppHandle,
     article_id: String,
-) -> Result<FullTranslateResult, AppError> {
+) -> Result<translate::FullTranslateResult, AppError> {
     let cfg = crate::config::load_config()?;
     let emit_app = app.clone();
     crate::commands::spawn_db(app, move |state| {
-        let paragraphs = {
-            let conn = state.lock_read()?;
-            let article = db::get_article(&conn, &article_id)?
-                .ok_or_else(|| "article not found".to_string())?;
-            feeds::split_paragraphs(&article.content_text)
-        };
-
-        let total = paragraphs.len();
-        let mut out = Vec::new();
-        let mut errors = Vec::new();
-
-        for chunk_start in (0..total).step_by(8) {
-            let indices: Vec<usize> = (chunk_start..(chunk_start + 8).min(total)).collect();
-            let mut missing: Vec<usize> = Vec::new();
-            let mut missing_texts: Vec<String> = Vec::new();
-            for &i in &indices {
-                let scope_key = i.to_string();
-                let existing = {
-                    let conn = state.lock_read()?;
-                    db::get_translation(&conn, &article_id, "paragraph", &scope_key)?
-                };
-                match existing {
-                    Some(row) => out.push(row),
-                    None => {
-                        missing.push(i);
-                        missing_texts.push(paragraphs[i].clone());
-                    }
-                }
-            }
-            if missing_texts.is_empty() {
-                continue;
-            }
-            match vocab::translate_texts(&cfg, &missing_texts) {
-                Ok(translated) => {
-                    for (i, text) in missing.iter().zip(translated.iter()) {
-                        let scope_key = i.to_string();
-                        let row = {
-                            let conn = state.lock_write()?;
-                            db::save_translation(
-                                &conn,
-                                &article_id,
-                                "paragraph",
-                                &scope_key,
-                                &paragraphs[*i],
-                                text,
-                                &cfg.model,
-                            )?
-                        };
-                        let _ = emit_app.emit(
-                            "translate-progress",
-                            TranslateProgress {
-                                article_id: article_id.clone(),
-                                current: *i + 1,
-                                total,
-                                scope_key: row.scope_key.clone(),
-                                translated_text: row.translated_text.clone(),
-                                done: false,
-                            },
-                        );
-                        out.push(row);
-                    }
-                }
-                Err(e) => {
-                    let first = missing.first().map(|i| i + 1).unwrap_or(0);
-                    let last = missing.last().map(|i| i + 1).unwrap_or(0);
-                    errors.push(format!("段落 {first}–{last} 翻译失败：{e}"));
-                }
-            }
-        }
-        let _ = emit_app.emit(
-            "translate-progress",
-            TranslateProgress {
-                article_id: article_id.clone(),
-                current: total,
-                total,
-                scope_key: String::new(),
-                translated_text: String::new(),
-                done: true,
+        Ok(translate::translate_full_article(
+            state,
+            &cfg,
+            &article_id,
+            |p| {
+                let _ = emit_app.emit("translate-progress", p);
             },
-        );
-        Ok(FullTranslateResult { rows: out, errors })
+        )?)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn fill_missing_card_zh(app: AppHandle) -> Result<usize, AppError> {
+    let cfg = crate::config::load_config()?;
+    if cfg.api_key.trim().is_empty() {
+        return Ok(0);
+    }
+    crate::commands::spawn_db(app, move |state| {
+        Ok(feeds::fill_missing_card_zh(state, &cfg, 80, |_, _| {})?)
     })
     .await
 }

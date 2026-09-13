@@ -20,13 +20,22 @@ export function shouldForcePlacement(cfg: {
   return true;
 }
 
-/** Hide Home/Vocab/Settings while placement is required and config loaded. */
+/** Hide Home/Vocab/Settings while placement is required. */
 export function shouldHideAppNav(input: {
   ready: boolean;
   loadError: string | null;
   forcePlacement: boolean;
 }): boolean {
-  return input.ready && !input.loadError && input.forcePlacement;
+  return input.ready && input.forcePlacement;
+}
+
+/** Config failed: do not auto-redirect, but still offer 测评. */
+export function shouldShowPlacementNav(input: {
+  ready: boolean;
+  loadError: string | null;
+  forcePlacement: boolean;
+}): boolean {
+  return input.ready && Boolean(input.loadError) && input.forcePlacement;
 }
 
 export function describePlacementResult(input: {

@@ -496,7 +496,7 @@ fn list_articles_returns_excerpt_not_full_body() {
     let listed = db::list_articles(&conn, None, Some(1), Some(0)).unwrap();
     assert_eq!(listed.len(), 1);
     assert_eq!(
-        listed[0].content_text.len(),
+        listed[0].excerpt.len(),
         db::LIST_EXCERPT_CHARS as usize,
         "home list should not ship the full body"
     );

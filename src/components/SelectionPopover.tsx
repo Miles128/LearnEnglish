@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef, useState } from "react";
 import type { SpeakTarget } from "../useTts";
 
 export type Popover = {
@@ -56,14 +57,29 @@ export default function SelectionPopover({
   onAddVocab,
   onClose,
 }: Props) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState({ w: 280, h: 160 });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const { width, height } = el.getBoundingClientRect();
+    setBox((prev) =>
+      Math.abs(prev.w - width) < 1 && Math.abs(prev.h - height) < 1
+        ? prev
+        : { w: width, h: height },
+    );
+  }, [popover.text, popover.translation, popover.loading, popover.error]);
   const pos = clampPopoverPosition({
     x: popover.x,
     y: popover.y,
     viewW: typeof window === "undefined" ? 800 : window.innerWidth,
     viewH: typeof window === "undefined" ? 600 : window.innerHeight,
+    popW: box.w,
+    popH: box.h,
   });
   return (
     <div
+      ref={ref}
       className="selection-pop"
       role="dialog"
       aria-modal="true"

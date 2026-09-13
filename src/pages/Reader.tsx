@@ -346,6 +346,9 @@ export default function Reader() {
           </Link>
           <h1>{title}</h1>
           {article.title_zh && <p className="article-title-zh">{article.title_zh}</p>}
+          {article.summary_zh && (
+            <p className="article-summary-zh">{article.summary_zh}</p>
+          )}
           <p className="muted">
             {article.source} · {categoryLabel(article.category, categories)} · 难度{" "}
             {prefs.cefrLevel} / {prefs.freqBand / 1000}k

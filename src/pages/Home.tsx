@@ -37,6 +37,7 @@ export default function Home() {
   const didBackfill = useRef(false);
   const [cardFillError, setCardFillError] = useState<string | null>(null);
   const [cardFilling, setCardFilling] = useState(false);
+  const [sortNowMs, setSortNowMs] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -56,6 +57,7 @@ export default function Home() {
       setHasMore(list.length >= PAGE_SIZE);
       setCategories(cats);
       setLearningStats(stats);
+      setSortNowMs(Date.now());
     } catch (e) {
       setError(String(e));
     } finally {
@@ -103,6 +105,7 @@ export default function Home() {
       const merged = articles.concat(next.filter((a) => !seen.has(a.id)));
       setArticles(merged);
       setHasMore(next.length >= PAGE_SIZE);
+      setSortNowMs(Date.now());
     } catch (e) {
       setError(String(e));
     } finally {
@@ -111,8 +114,8 @@ export default function Home() {
   }
 
   const sections = useMemo(
-    () => sortSectionsByInterest(groupBySource(articles), Date.now()),
-    [articles],
+    () => sortSectionsByInterest(groupBySource(articles), sortNowMs),
+    [articles, sortNowMs],
   );
   const tabCategories = useMemo(() => {
     const tabs = [{ id: "all", label: "全部" }];

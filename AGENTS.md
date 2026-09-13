@@ -40,7 +40,7 @@ src-tauri/src/        Rust 后端
 - 前端一律经 `api/*` invoke 后端 command；后端分层 commands → (feeds/vocab/import_file 业务) → db 仓储，db 不做网络。
 - 全局单连接 SQLite，`DbState(Mutex<Connection>)`；命令内 lock 后尽快释放，网络调用不持锁。
 - 文章幂等去重按 `url UNIQUE`，`insert_article_if_new` 冲突即跳过；RSS 旧文只在 RSS 正文可信且更长时升级。
-- 正文阈值：RSS 正文 ≥2000 字符视为全文信任；否则须抓文章页且 ≥400 字符（MIN_FULLTEXT_CHARS），防爬失败宁缺勿滥。
+- 正文阈值：RSS 正文 ≥2000 字符且像可读文章才信任；否则须抓文章页。导航/关键词墙、链接列表、不足 400 字散文（MIN_FULLTEXT_CHARS）一律不入库，刷新时清掉。
 - `origin` 字段区分 rss/url/file 导入；refresh 的清理(purge)只处理 rss 来源，永不删用户导入。
 - LLM 配置在 `config.local.json`（gitignore）；无 Key 时翻译功能优雅降级。
 

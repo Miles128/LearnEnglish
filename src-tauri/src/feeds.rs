@@ -34,6 +34,13 @@ static RE_TRAILING_WS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[ \t]+\n"
 static RE_BLANK_RUN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").unwrap());
 static RE_HTML_TITLE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?is)<title[^>]*>(.*?)</title>").unwrap());
+static RE_FOOTNOTE_DEF: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^\[\d+\]:\s+\S+\s*$").unwrap());
+static RE_LIST_LINK_LINE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^\s*(?:[-*]|\d+\.)\s+\[").unwrap());
+static RE_KEYWORD_TAIL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?is)(?:Keywords for this article|Filed under:|^\s*Tags:).*$").unwrap()
+});
 
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
@@ -410,6 +417,7 @@ fn download_feed_articles(
         if known_urls.contains(&url) {
             let stored_len = known_lengths.get(&url).copied().unwrap_or(0);
             if rss_text.chars().count() >= TRUST_RSS_FULLTEXT_CHARS
+                && is_readable_article_body(&rss_text)
                 && rss_text.chars().count() > stored_len
             {
                 updates.push(Article {
@@ -436,9 +444,11 @@ fn download_feed_articles(
             continue;
         }
 
-        // Full-text RSS can be trusted; teaser/summary feeds must fetch the article page.
-        // If anti-crawl / paywall leaves us with only the RSS summary, skip — do not ingest teasers.
-        let content_text = if rss_text.chars().count() >= TRUST_RSS_FULLTEXT_CHARS {
+        // Full-text RSS can be trusted; teaser / chrome / tag-wall bodies must
+        // fetch the article page. If the page is also junk, skip.
+        let content_text = if rss_text.chars().count() >= TRUST_RSS_FULLTEXT_CHARS
+            && is_readable_article_body(&rss_text)
+        {
             rss_text
         } else {
             if page_fetches >= MAX_PAGE_FETCHES {
@@ -568,18 +578,57 @@ pub(crate) fn purge_non_english_articles(conn: &Connection) -> Result<usize, Str
 }
 
 /// True when stored body would be rejected as RSS-only teaser (no trusted page fulltext).
+#[cfg(test)]
 fn is_summary_only_body(content: &str) -> bool {
     choose_article_body(content, None).is_none()
 }
 
+/// Nav chrome, keyword teasers, or link lists — not a readable article.
+fn is_readable_article_body(text: &str) -> bool {
+    if looks_like_page_chrome(text) || is_link_or_nav_dump(text) {
+        return false;
+    }
+    prose_char_count(text) >= MIN_FULLTEXT_CHARS
+}
+
+fn looks_like_page_chrome(text: &str) -> bool {
+    let head: String = text.chars().take(480).collect();
+    let lower = head.to_ascii_lowercase();
+    lower.contains("skip to main content")
+        || lower.contains("skip to content")
+        || lower.contains("open navigation menu")
+        || lower.contains("googletagmanager.com")
+}
+
+fn is_link_or_nav_dump(text: &str) -> bool {
+    let without_notes = RE_FOOTNOTE_DEF.replace_all(text, "");
+    let lines: Vec<&str> = without_notes
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if lines.len() < 8 {
+        return false;
+    }
+    let link_lines = lines
+        .iter()
+        .filter(|line| RE_LIST_LINK_LINE.is_match(line))
+        .count();
+    (link_lines as f64) / (lines.len() as f64) >= 0.5
+}
+
+fn prose_char_count(text: &str) -> usize {
+    let mut s = RE_KEYWORD_TAIL.replace_all(text, "").into_owned();
+    s = RE_FOOTNOTE_DEF.replace_all(&s, "").into_owned();
+    s = RE_TAG_STRIP.replace_all(&s, " ").into_owned();
+    s.split_whitespace().map(|w| w.chars().count()).sum()
+}
+
 pub(crate) fn collect_summary_only_rss_ids(conn: &Connection) -> Result<Vec<String>, String> {
-    // SQL prefilter: teaser bodies are < TRUST_RSS_FULLTEXT_CHARS chars; bytes are
-    // always >= chars, so this bound can only over-select. Exact check below.
-    let byte_bound = (TRUST_RSS_FULLTEXT_CHARS * 4) as i64;
-    let candidates = db::list_rss_teaser_candidates(conn, byte_bound)?;
+    // Chrome/tag-wall dumps are often longer than a teaser, so scan every RSS body.
+    let candidates = db::list_rss_teaser_candidates(conn, i64::MAX)?;
     Ok(candidates
         .into_iter()
-        .filter(|article| is_summary_only_body(&article.content_text))
+        .filter(|article| !is_readable_article_body(&article.content_text))
         .map(|article| article.id)
         .collect())
 }
@@ -675,7 +724,7 @@ fn extract_article_page(client: &Client, url: &str) -> Result<ExtractedPage, Str
         if title.is_empty() && !page_title.is_empty() {
             title = page_title;
         }
-        if text.chars().count() >= MIN_FULLTEXT_CHARS {
+        if is_readable_article_body(&text) {
             text
         } else {
             html_to_text(&html)
@@ -684,7 +733,7 @@ fn extract_article_page(client: &Client, url: &str) -> Result<ExtractedPage, Str
         html_to_text(&html)
     };
 
-    if text.chars().count() < MIN_FULLTEXT_CHARS {
+    if !is_readable_article_body(&text) {
         return Err("正文太短，未能抽到可读全文".into());
     }
 
@@ -800,16 +849,16 @@ fn looks_like_paywall(text: &str) -> bool {
 
 /// Decide final article body from RSS text and an optional page extract.
 ///
-/// - Long RSS (≥ [`TRUST_RSS_FULLTEXT_CHARS`]): trust as full-text feed (page unused).
-/// - Shorter RSS (summary/teaser): only accept page text that meets [`MIN_FULLTEXT_CHARS`].
-///   Never fall back to the RSS summary when the page is missing or too short (anti-crawl).
+/// - Long, readable RSS (≥ [`TRUST_RSS_FULLTEXT_CHARS`]): trust as full-text.
+/// - Otherwise only accept a page extract that is real prose (not a teaser,
+///   nav/tag wall, or link dump). Never keep chrome just because it is long.
 fn choose_article_body(rss_text: &str, page_text: Option<&str>) -> Option<String> {
-    let rss_len = rss_text.chars().count();
-    if rss_len >= TRUST_RSS_FULLTEXT_CHARS {
+    if rss_text.chars().count() >= TRUST_RSS_FULLTEXT_CHARS && is_readable_article_body(rss_text)
+    {
         return Some(rss_text.to_string());
     }
     match page_text {
-        Some(page) if page.chars().count() >= MIN_FULLTEXT_CHARS => Some(page.to_string()),
+        Some(page) if is_readable_article_body(page) => Some(page.to_string()),
         _ => None,
     }
 }
@@ -932,5 +981,69 @@ mod tests {
         assert!(is_summary_only_body(&teaser));
         assert!(!is_summary_only_body(&"word ".repeat(500)));
         assert!(is_summary_only_body("short"));
+    }
+
+    fn chrome_nav_soup() -> String {
+        let mut s = String::from("Skip to main content\n\n");
+        for i in 1..40 {
+            s.push_str(&format!("* [ Home topic {i} ][{i}]\n"));
+        }
+        s.push_str("\nA one-line dek about the story.\n");
+        for i in 1..40 {
+            s.push_str(&format!("[{i}]: https://example.com/{i}\n"));
+        }
+        s
+    }
+
+    fn link_dump_body() -> String {
+        let mut s = String::from("#### Markets\n\n");
+        for i in 1..20 {
+            s.push_str(&format!("* [A market headline number {i} for readers][{i}]\n"));
+        }
+        s
+    }
+
+    fn short_real_post() -> String {
+        "Culture provides scaffolding, and learning happens over time. \
+The result is that we are each capable of extraordinary feats. \
+People can fly planes, ski down mountains, or solve a crossword. \
+Most people only exhibit this skill when there are months of exposure.\n\n\
+That is the whole post."
+            .repeat(2)
+    }
+
+    #[test]
+    fn rejects_page_chrome_and_keyword_teasers() {
+        let chrome = chrome_nav_soup();
+        assert!(chrome.chars().count() > TRUST_RSS_FULLTEXT_CHARS);
+        assert!(!is_readable_article_body(&chrome));
+        assert!(choose_article_body(&chrome, None).is_none());
+
+        let teaser = format!(
+            "In Chad, the Chari River has been badly affected by years of intensive sand \
+extraction along its banks, particularly around the capital. The ministry banned \
+the practice to protect wildlife.                            Keywords for this article"
+        );
+        assert!(!is_readable_article_body(&teaser));
+    }
+
+    #[test]
+    fn rejects_link_dump_even_when_long() {
+        let dump = link_dump_body();
+        assert!(dump.chars().count() > 400);
+        assert!(!is_readable_article_body(&dump));
+        assert!(choose_article_body(&dump, Some(&dump)).is_none());
+    }
+
+    #[test]
+    fn keeps_short_real_prose() {
+        let post = short_real_post();
+        assert!(post.chars().count() >= MIN_FULLTEXT_CHARS);
+        assert!(post.chars().count() < TRUST_RSS_FULLTEXT_CHARS);
+        assert!(is_readable_article_body(&post));
+        assert_eq!(
+            choose_article_body("teaser", Some(&post)).as_deref(),
+            Some(post.as_str())
+        );
     }
 }

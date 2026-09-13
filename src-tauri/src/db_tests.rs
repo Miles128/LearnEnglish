@@ -253,6 +253,11 @@ fn purge_summary_only_removes_teasers_keeps_fulltext() {
     let path = temp_dir().join(format!("le-purge-summary-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");
 
+    let mut chrome = String::from("Skip to main content\n\n");
+    for i in 1..40 {
+        chrome.push_str(&format!("* [ Home topic {i} ][{i}]\n"));
+    }
+    chrome.push_str("\nA one-line dek.\n");
     let teaser = db::Article {
         id: "teaser".into(),
         url: "https://example.com/teaser".into(),
@@ -261,7 +266,7 @@ fn purge_summary_only_removes_teasers_keeps_fulltext() {
         source: "T".into(),
         category: "tech".into(),
         published_at: None,
-        content_text: "a".repeat(500), // mid-length RSS summary
+        content_text: chrome,
         fetched_at: "2020-01-01T00:00:00Z".into(),
         origin: "rss".into(),
         summary_zh: String::new(),

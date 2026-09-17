@@ -61,12 +61,18 @@ pub fn import_article_from_file(db: &DbState, path: &str) -> Result<Article, Str
         source: "导入".into(),
         category: "other".into(),
         published_at: None,
+        word_count: content_text.split_whitespace().count() as i64,
+        quality: "fulltext".into(),
+        extraction_source: "file".into(),
         content_text,
         fetched_at: Utc::now().to_rfc3339(),
         origin: "file".into(),
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        dwell_ms: 0,
+        read_completed: false,
+        liked: false,
     };
 
     {

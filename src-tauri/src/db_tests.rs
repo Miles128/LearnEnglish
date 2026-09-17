@@ -18,6 +18,7 @@ fn sample_article(id: &str) -> db::Article {
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        ..Default::default()
     }
 }
 
@@ -62,6 +63,7 @@ fn db_seeds_feeds_and_stores_article() {
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        ..Default::default()
     };
     db::upsert_article(&conn, &article).unwrap();
     let list = db::list_articles(&conn, Some("tech"), None, None).unwrap();
@@ -162,6 +164,7 @@ fn insert_article_if_new_is_idempotent() {
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        ..Default::default()
     };
     assert!(db::insert_article_if_new(&conn, &first).unwrap());
 
@@ -179,6 +182,7 @@ fn insert_article_if_new_is_idempotent() {
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        ..Default::default()
     };
     assert!(!db::insert_article_if_new(&conn, &second).unwrap());
 
@@ -212,6 +216,7 @@ fn list_article_urls_supports_incremental_skip() {
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        ..Default::default()
     };
     db::insert_article_if_new(&conn, &a).unwrap();
     let urls = db::list_article_urls(&conn).unwrap();
@@ -272,6 +277,7 @@ fn purge_summary_only_removes_teasers_keeps_fulltext() {
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        ..Default::default()
     };
     let full = db::Article {
         id: "full".into(),
@@ -287,6 +293,7 @@ fn purge_summary_only_removes_teasers_keeps_fulltext() {
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        ..Default::default()
     };
     db::insert_article_if_new(&conn, &teaser).unwrap();
     db::insert_article_if_new(&conn, &full).unwrap();
@@ -322,6 +329,7 @@ fn purge_never_touches_user_imported_articles() {
             summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        ..Default::default()
         };
         db::insert_article_if_new(&conn, &a).unwrap();
     }
@@ -359,6 +367,7 @@ fn collect_non_english_ids_does_not_delete() {
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        ..Default::default()
     };
     db::insert_article_if_new(&conn, &zh).unwrap();
 
@@ -391,6 +400,7 @@ fn refresh_article_content_updates_longer_body() {
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        ..Default::default()
     };
     db::insert_article_if_new(&conn, &a).unwrap();
     db::set_article_summary_zh(&conn, "r1", "旧简介").unwrap();
@@ -412,6 +422,7 @@ fn refresh_article_content_updates_longer_body() {
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        ..Default::default()
     };
     let changed = db::refresh_article_content(&conn, &update).unwrap();
     assert!(changed);
@@ -448,6 +459,7 @@ fn refresh_article_content_skips_url_imports() {
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        ..Default::default()
     };
     db::insert_article_if_new(&conn, &a).unwrap();
 
@@ -465,6 +477,7 @@ fn refresh_article_content_skips_url_imports() {
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        ..Default::default()
     };
     let changed = db::refresh_article_content(&conn, &update).unwrap();
     assert!(!changed);
@@ -495,6 +508,7 @@ fn list_articles_returns_excerpt_not_full_body() {
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        ..Default::default()
     };
     db::insert_article_if_new(&conn, &a).unwrap();
 
@@ -530,6 +544,7 @@ fn list_articles_paginates() {
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        ..Default::default()
         };
         db::insert_article_if_new(&conn, &a).unwrap();
     }
@@ -817,7 +832,23 @@ fn schema_adds_summary_zh_column() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
+    let quality_col: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('articles') WHERE name='quality'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(quality_col, 1, "articles.quality should exist after migrate");
+    let ratio_col: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('feed_sources') WHERE name='fulltext_ratio'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(ratio_col, 1, "feed_sources.fulltext_ratio should exist after migrate");
     let _ = std::fs::remove_file(path);
 }
 

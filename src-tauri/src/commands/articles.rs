@@ -3,6 +3,7 @@ use crate::error::AppError;
 use crate::feeds;
 use crate::import_file;
 use crate::translate;
+use chrono::Datelike;
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter};
 
@@ -39,6 +40,67 @@ pub async fn list_articles(
         Ok(db::list_articles(&conn, category.as_deref(), limit, offset)?)
     })
     .await
+}
+
+/// Ranked window size for interest scoring. Ranking the most recent few
+/// hundred articles is plenty for a daily reading session.
+const RANK_WINDOW: i64 = 400;
+
+#[tauri::command]
+pub async fn list_articles_ranked(
+    app: AppHandle,
+    category: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<ArticleListItem>, AppError> {
+    crate::commands::spawn_db(app, move |state| {
+        let items = {
+            let conn = state.lock_read()?;
+            db::list_articles(&conn, category.as_deref(), Some(RANK_WINDOW), Some(0))?
+        };
+        let (source_opens, category_opens) = {
+            let conn = state.lock_read()?;
+            db::affinity_open_counts(&conn)?
+        };
+        let affinity = crate::rank::Affinity::from_maps(source_opens, category_opens);
+        let now = chrono::Utc::now();
+        let day_key = i64::from(now.num_days_from_ce());
+        let ranked = crate::rank::rank_articles(items, &affinity, now, day_key);
+        let start = offset.unwrap_or(0).max(0) as usize;
+        let take = limit.unwrap_or(60).max(0) as usize;
+        Ok(ranked
+            .into_iter()
+            .skip(start)
+            .take(take)
+            .collect())
+    })
+    .await
+}
+
+#[tauri::command]
+pub fn mark_article_progress(
+    state: tauri::State<'_, DbState>,
+    id: String,
+    dwell_ms_delta: i64,
+    read_completed: bool,
+) -> Result<(), AppError> {
+    let conn = state.lock_write()?;
+    Ok(db::add_article_reading_progress(
+        &conn,
+        &id,
+        dwell_ms_delta,
+        read_completed,
+    )?)
+}
+
+#[tauri::command]
+pub fn set_article_liked(
+    state: tauri::State<'_, DbState>,
+    id: String,
+    liked: bool,
+) -> Result<(), AppError> {
+    let conn = state.lock_write()?;
+    Ok(db::set_article_liked(&conn, &id, liked)?)
 }
 
 #[tauri::command]

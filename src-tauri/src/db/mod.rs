@@ -52,7 +52,7 @@ impl DbState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct Article {
     pub id: String,
@@ -77,10 +77,28 @@ pub struct Article {
     #[serde(default)]
     #[ts(type = "number")]
     pub open_count: i64,
+    /// Whitespace-delimited word count of the body, stamped at ingest/refresh.
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub word_count: i64,
+    /// '' = not yet assessed; 'fulltext' once the body passed the readability gate.
+    #[serde(default)]
+    pub quality: String,
+    /// Where the final body came from: rss | page | url | file.
+    #[serde(default)]
+    pub extraction_source: String,
+    /// Accumulated visible reading time in milliseconds.
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub dwell_ms: i64,
+    #[serde(default)]
+    pub read_completed: bool,
+    #[serde(default)]
+    pub liked: bool,
 }
 
 /// Home-list row: excerpt only. Full body stays on `Article` / get_article.
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ArticleListItem {
     pub id: String,
@@ -102,6 +120,20 @@ pub struct ArticleListItem {
     #[serde(default)]
     #[ts(type = "number")]
     pub open_count: i64,
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub word_count: i64,
+    /// Interest rank from the ranked list; 0 when unranked.
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub rank_score: f64,
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub dwell_ms: i64,
+    #[serde(default)]
+    pub read_completed: bool,
+    #[serde(default)]
+    pub liked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -123,7 +155,7 @@ fn default_article_origin() -> String {
     "rss".into()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct FeedSource {
     pub id: String,
@@ -136,6 +168,16 @@ pub struct FeedSource {
     pub origin: String,
     #[serde(default)]
     pub description: String,
+    /// HTTP ETag from the last successful fetch; sent back as If-None-Match.
+    #[serde(default)]
+    pub etag: String,
+    #[serde(default)]
+    pub last_fetched_at: Option<String>,
+    /// Fraction of entries in the last refresh whose RSS body was trusted
+    /// full-text. -1 = unknown (no data yet). Drives the per-feed trust bar.
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub fulltext_ratio: f64,
 }
 
 fn default_feed_origin() -> String {
@@ -272,7 +314,7 @@ const LEGACY_COLUMN_ADDITIONS: &[&str] = &[
 /// Version-gated migrations. To add one: raise `LATEST_VERSION` and apply its
 /// DDL inside `migrate` when `stored < N`. Stamp each version with its own
 /// number (never `LATEST_VERSION`) so later steps are not skipped.
-const LATEST_VERSION: i64 = 5;
+const LATEST_VERSION: i64 = 6;
 
 fn migrate(conn: &Connection) -> Result<(), String> {
     let mut stored: i64 = conn
@@ -346,6 +388,37 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         conn.pragma_update(None, "user_version", 5)
             .map_err(|e| e.to_string())?;
         stored = 5;
+    }
+
+    if stored < 6 {
+        // Quality metadata (stamped at ingest) + implicit reading signals
+        // (dwell / completion / like) + per-feed HTTP/1.1 cache metadata.
+        for sql in [
+            "ALTER TABLE articles ADD COLUMN word_count INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE articles ADD COLUMN quality TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE articles ADD COLUMN extraction_source TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE articles ADD COLUMN dwell_ms INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE articles ADD COLUMN read_completed INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE articles ADD COLUMN liked INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE feed_sources ADD COLUMN etag TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE feed_sources ADD COLUMN last_fetched_at TEXT",
+            "ALTER TABLE feed_sources ADD COLUMN fulltext_ratio REAL NOT NULL DEFAULT -1",
+        ] {
+            if let Err(e) = conn.execute(sql, []) {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column name") {
+                    return Err(msg);
+                }
+            }
+        }
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_articles_fetched ON articles(fetched_at DESC);
+             CREATE INDEX IF NOT EXISTS idx_articles_origin_quality ON articles(origin, quality);",
+        )
+        .map_err(|e| e.to_string())?;
+        conn.pragma_update(None, "user_version", 6)
+            .map_err(|e| e.to_string())?;
+        stored = 6;
     }
 
     if stored < LATEST_VERSION {

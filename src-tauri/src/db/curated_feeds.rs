@@ -28,6 +28,7 @@ pub fn curated_feeds() -> Vec<FeedSource> {
             enabled: true,
             origin: "curated".into(),
             description: String::new(),
+            ..Default::default()
         })
         .collect()
 }

@@ -98,9 +98,13 @@ pub async fn refresh_feeds(app: AppHandle) -> Result<RefreshResult, AppError> {
     let cfg = crate::config::load_config()?;
     let emit_app = app.clone();
     crate::commands::spawn_db(app, move |state| {
-        Ok(feeds::refresh_feeds(state, &cfg, |progress: RefreshProgress| {
-            let _ = emit_app.emit("refresh-progress", &progress);
-        })?)
+        Ok(feeds::refresh_feeds(
+            state,
+            &cfg,
+            move |progress: RefreshProgress| {
+                let _ = emit_app.emit("refresh-progress", &progress);
+            },
+        )?)
     })
     .await
 }

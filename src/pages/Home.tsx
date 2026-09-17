@@ -10,7 +10,8 @@ import { ensureLexiconLoaded, isFreqBand, type FreqBand } from "../wordLevels";
 import ImportRow from "../components/ImportRow";
 import SourceBoard from "../components/SourceBoard";
 import ManageFeedsDrawer from "../components/ManageFeedsDrawer";
-import { groupBySource, sortSectionsByInterest } from "../sourceInterest";
+import { groupBySource } from "../sourceInterest";
+import { pickTopArticles, topPickIds } from "../topPicks";
 
 const PAGE_SIZE = 60;
 
@@ -37,14 +38,13 @@ export default function Home() {
   const didBackfill = useRef(false);
   const [cardFillError, setCardFillError] = useState<string | null>(null);
   const [cardFilling, setCardFilling] = useState(false);
-  const [sortNowMs, setSortNowMs] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const [list, cats, stats] = await Promise.all([
-        api.listArticles(
+        api.listArticlesRanked(
           category === "all" ? undefined : category,
           PAGE_SIZE,
           0,
@@ -57,7 +57,6 @@ export default function Home() {
       setHasMore(list.length >= PAGE_SIZE);
       setCategories(cats);
       setLearningStats(stats);
-      setSortNowMs(Date.now());
     } catch (e) {
       setError(String(e));
     } finally {
@@ -96,7 +95,7 @@ export default function Home() {
     if (loadingMore) return;
     setLoadingMore(true);
     try {
-      const next = await api.listArticles(
+      const next = await api.listArticlesRanked(
         category === "all" ? undefined : category,
         PAGE_SIZE,
         articles.length,
@@ -105,7 +104,6 @@ export default function Home() {
       const merged = articles.concat(next.filter((a) => !seen.has(a.id)));
       setArticles(merged);
       setHasMore(next.length >= PAGE_SIZE);
-      setSortNowMs(Date.now());
     } catch (e) {
       setError(String(e));
     } finally {
@@ -113,9 +111,14 @@ export default function Home() {
     }
   }
 
+  const topPicks = useMemo(() => pickTopArticles(articles), [articles]);
+  const picksIds = useMemo(() => topPickIds(topPicks), [topPicks]);
+  // The backend returns articles in interest-rank order, so section order =
+  // first appearance, and articles within a board keep their rank.
   const sections = useMemo(
-    () => sortSectionsByInterest(groupBySource(articles), sortNowMs),
-    [articles, sortNowMs],
+    () =>
+      groupBySource(articles.filter((a) => !picksIds.has(a.id))),
+    [articles, picksIds],
   );
   const tabCategories = useMemo(() => {
     const tabs = [{ id: "all", label: "全部" }];
@@ -147,6 +150,7 @@ export default function Home() {
       setMessage(
         `新增 ${result.added_or_updated}` +
           (result.skipped_existing ? ` · 已有 ${result.skipped_existing}` : "") +
+          (result.feeds_unchanged ? ` · ${result.feeds_unchanged} 源无更新` : "") +
           (result.titles_translated ? ` · 译题/简介 ${result.titles_translated}` : "") +
           (result.errors.length ? ` · ${result.errors.length} 个问题` : ""),
       );
@@ -281,6 +285,20 @@ export default function Home() {
       {!loading && articles.length === 0 && !error && (
         <div className="empty">
           <p>还没有文章。点「刷新」或粘贴链接导入。</p>
+        </div>
+      )}
+
+      {topPicks.length > 0 && (
+        <div className="source-boards top-picks">
+          <SourceBoard
+            section={{
+              source: "今日精选",
+              category: topPicks[0].category,
+              articles: topPicks,
+            }}
+            categories={categories}
+            knownPctById={knownPctById}
+          />
         </div>
       )}
 

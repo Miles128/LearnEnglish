@@ -4,6 +4,7 @@ mod db;
 mod error;
 mod feeds;
 mod import_file;
+mod rank;
 mod srs;
 mod translate;
 mod vocab;
@@ -41,8 +42,11 @@ pub fn run() {
             commands::config::get_config,
             commands::config::save_config_cmd,
             commands::articles::list_articles,
+            commands::articles::list_articles_ranked,
             commands::articles::get_article_view,
             commands::articles::mark_article_opened,
+            commands::articles::mark_article_progress,
+            commands::articles::set_article_liked,
             commands::articles::get_learning_stats,
             commands::feeds::list_feeds,
             commands::feeds::set_feed_enabled,

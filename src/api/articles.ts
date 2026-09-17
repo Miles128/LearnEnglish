@@ -15,10 +15,24 @@ export const apiArticles = {
       limit: limit ?? null,
       offset: offset ?? null,
     }),
+  listArticlesRanked: (category?: string, limit?: number, offset?: number) =>
+    invoke<ArticleListItem[]>("list_articles_ranked", {
+      category: category ?? null,
+      limit: limit ?? null,
+      offset: offset ?? null,
+    }),
   getArticleView: (id: string) =>
     invoke<ArticleView | null>("get_article_view", { id }),
   markArticleOpened: (id: string) =>
     invoke<void>("mark_article_opened", { id }),
+  markArticleProgress: (id: string, dwellMsDelta: number, readCompleted: boolean) =>
+    invoke<void>("mark_article_progress", {
+      id,
+      dwellMsDelta,
+      readCompleted,
+    }),
+  setArticleLiked: (id: string, liked: boolean) =>
+    invoke<void>("set_article_liked", { id, liked }),
   getLearningStats: () => invoke<LearningStats>("get_learning_stats"),
   fillMissingCardZh: () => invoke<number>("fill_missing_card_zh"),
   importArticleUrl: (url: string) =>

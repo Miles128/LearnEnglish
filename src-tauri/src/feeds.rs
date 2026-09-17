@@ -42,7 +42,7 @@ static RE_KEYWORD_TAIL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?is)(?:Keywords for this article|Filed under:|^\s*Tags:).*$").unwrap()
 });
 
-#[derive(Debug, Serialize, TS)]
+#[derive(Debug, Default, Serialize, TS)]
 #[ts(export)]
 pub struct RefreshResult {
     pub fetched_feeds: usize,
@@ -51,6 +51,7 @@ pub struct RefreshResult {
     pub skipped_existing: usize,
     pub skipped_short: usize,
     pub skipped_non_english: usize,
+    pub feeds_unchanged: usize,
     pub titles_translated: usize,
     pub errors: Vec<String>,
 }
@@ -59,6 +60,32 @@ struct DownloadStats {
     skipped_existing: usize,
     skipped_short: usize,
     skipped_non_english: usize,
+    /// Entries whose RSS body was trusted full-text without a page fetch.
+    rss_fulltext_hits: usize,
+    /// Entries considered for new content (denominator of fulltext_ratio).
+    evaluated: usize,
+}
+
+impl Default for DownloadStats {
+    fn default() -> Self {
+        Self {
+            skipped_existing: 0,
+            skipped_short: 0,
+            skipped_non_english: 0,
+            rss_fulltext_hits: 0,
+            evaluated: 0,
+        }
+    }
+}
+
+struct FeedDownload {
+    articles: Vec<Article>,
+    updates: Vec<Article>,
+    stats: DownloadStats,
+    /// ETag from this response; None leaves the stored value untouched.
+    etag: Option<String>,
+    /// Server answered 304 Not-Modified — nothing to parse or insert.
+    unchanged: bool,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -144,10 +171,52 @@ pub(crate) fn select_enabled_feeds(feeds: Vec<FeedSource>) -> Vec<FeedSource> {
     feeds.into_iter().filter(|f| f.enabled).collect()
 }
 
+/// Per-feed trust bar for RSS bodies, adapted by the feed's observed
+/// full-text ratio from previous refreshes.
+/// - `>= 0.7` (mostly full-text feeds): lower the bar, page fetches rarely pay off.
+/// - `<= 0.2` (teaser-only feeds): raise the bar; short RSS bodies are junk.
+/// - otherwise (or unknown, -1): the default bar.
+pub(crate) fn rss_trust_chars(fulltext_ratio: f64) -> usize {
+    if fulltext_ratio >= 0.7 {
+        1200
+    } else if fulltext_ratio >= 0.0 && fulltext_ratio <= 0.2 {
+        3200
+    } else {
+        TRUST_RSS_FULLTEXT_CHARS
+    }
+}
+
+/// Assess rows whose quality was never stamped (legacy rows and anything
+/// that predates the quality column). Deletes non-English / junk bodies and
+/// stamps the rest as 'fulltext'. Assessed rows are never re-derived later,
+/// so refresh cost stays proportional to new data.
+pub(crate) fn assess_unassessed_articles(conn: &Connection) -> Result<(usize, usize), String> {
+    let unassessed = db::list_unassessed_rss_articles(conn)?;
+    let mut del_non_english = 0usize;
+    let mut del_short = 0usize;
+    for article in &unassessed {
+        if !is_english_article(None, &article.title, &article.content_text) {
+            db::delete_article(conn, &article.id)?;
+            del_non_english += 1;
+        } else if !is_readable_article_body(&article.content_text) {
+            db::delete_article(conn, &article.id)?;
+            del_short += 1;
+        } else {
+            let word_count = article.content_text.split_whitespace().count() as i64;
+            db::set_article_quality(conn, &article.id, "fulltext", "rss", word_count)?;
+        }
+    }
+    Ok((del_non_english, del_short))
+}
+
+/// How many feeds download concurrently. Bounded to keep polite to servers
+/// and to preserve per-feed progress ordering in the UI.
+const PARALLEL_FEEDS: usize = 4;
+
 pub fn refresh_feeds(
     db: &DbState,
     cfg: &AppConfig,
-    mut on_progress: impl FnMut(RefreshProgress),
+    mut on_progress: impl FnMut(RefreshProgress) + Send + 'static,
 ) -> Result<RefreshResult, String> {
     let feeds = {
         let conn = db.lock_read()?;
@@ -161,16 +230,7 @@ pub fn refresh_feeds(
     let translate_weight = 20u8;
     let download_weight = 80u8;
 
-    let mut result = RefreshResult {
-        fetched_feeds: 0,
-        added_or_updated: 0,
-        updated: 0,
-        skipped_existing: 0,
-        skipped_short: 0,
-        skipped_non_english: 0,
-        titles_translated: 0,
-        errors: vec![],
-    };
+    let mut result = RefreshResult::default();
 
     if download_total == 0 {
         on_progress(RefreshProgress {
@@ -183,78 +243,179 @@ pub fn refresh_feeds(
         return Ok(result);
     }
 
-    let (non_english_ids, teaser_ids) = {
-        let conn = db.lock_read()?;
-        (
-            collect_non_english_rss_ids(&conn)?,
-            collect_summary_only_rss_ids(&conn)?,
-        )
+    // Progress flows through a channel: workers (and this thread) send
+    // events, one pump thread owns the `FnMut` callback.
+    let (progress_tx, progress_rx) = std::sync::mpsc::channel::<RefreshProgress>();
+    let pump = std::thread::spawn(move || {
+        for event in progress_rx {
+            on_progress(event);
+        }
+    });
+    let report = |phase: &str, current: usize, total: usize, label: String, percent: u8| {
+        let _ = progress_tx.send(RefreshProgress {
+            phase: phase.into(),
+            current,
+            total,
+            label,
+            percent,
+        });
     };
-    let mut known_urls = {
+
+    // One-time assessment of rows that never got a quality stamp.
+    {
         let conn = db.lock_write()?;
-        result.skipped_non_english += delete_articles(&conn, &non_english_ids)?;
-        result.skipped_short += delete_articles(&conn, &teaser_ids)?;
+        let (del_non_english, del_short) = assess_unassessed_articles(&conn)?;
+        result.skipped_non_english += del_non_english;
+        result.skipped_short += del_short;
+    }
+    let known_urls = std::sync::Mutex::new({
+        let conn = db.lock_write()?;
         db::list_article_urls(&conn)?
-    };
+    });
     let known_lengths = {
         let conn = db.lock_read()?;
         db::list_article_content_lengths(&conn)?
     };
 
-    for (idx, feed) in enabled.iter().enumerate() {
-        let current = idx + 1;
-        let percent = ((current.saturating_sub(1) as u16 * download_weight as u16)
-            / download_total.max(1) as u16) as u8;
-        on_progress(RefreshProgress {
-            phase: "download".into(),
-            current,
-            total: download_total,
-            label: format!("增量下载 {current}/{download_total}：{}", feed.name),
-            percent,
-        });
+    let next_index = std::sync::atomic::AtomicUsize::new(0);
+    let done_feeds = std::sync::atomic::AtomicUsize::new(0);
+    let shared = std::sync::Mutex::new(&mut result);
+    let now = Utc::now().to_rfc3339();
 
-        result.fetched_feeds += 1;
-        match download_feed_articles(&HTTP, feed, &known_urls, &known_lengths) {
-            Ok((articles, updates, stats)) => {
-                result.skipped_existing += stats.skipped_existing;
-                result.skipped_short += stats.skipped_short;
-                result.skipped_non_english += stats.skipped_non_english;
-                let conn = db.lock_write()?;
-                for article in &articles {
-                    if db::insert_article_if_new(&conn, article)? {
-                        known_urls.insert(article.url.clone());
-                        result.added_or_updated += 1;
-                    } else {
-                        result.skipped_existing += 1;
+    std::thread::scope(|scope| {
+        let workers = PARALLEL_FEEDS.min(download_total);
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let index = next_index.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if index >= download_total {
+                    break;
+                }
+                let feed = &enabled[index];
+                let done = done_feeds.load(std::sync::atomic::Ordering::SeqCst);
+                report(
+                    "download",
+                    done + 1,
+                    download_total,
+                    format!("增量下载 {}/{}：{}", done + 1, download_total, feed.name),
+                    ((done as u16 * download_weight as u16) / download_total.max(1) as u16) as u8,
+                );
+
+                let trust_chars = rss_trust_chars(feed.fulltext_ratio);
+                let outcome =
+                    download_feed_articles(&HTTP, feed, trust_chars, &known_urls, &known_lengths);
+                done_feeds.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+                let mut ok = true;
+                let mut ratio: Option<f64> = None;
+                match outcome {
+                    Ok(download) => {
+                        if download.unchanged {
+                            (shared.lock().expect("refresh lock")).feeds_unchanged += 1;
+                        }
+                        {
+                            let stats = download.stats;
+                            let conn = db.lock_write();
+                            match conn {
+                                Err(e) => {
+                                    ok = false;
+                                    (shared.lock().expect("refresh lock"))
+                                        .errors
+                                        .push(format!("{}: {e}", feed.name));
+                                }
+                                Ok(conn) => {
+                                    let mut stats = stats;
+                                    for article in &download.articles {
+                                        match db::insert_article_if_new(&conn, article) {
+                                            Ok(true) => {
+                                                known_urls
+                                                    .lock()
+                                                    .expect("known urls lock")
+                                                    .insert(article.url.clone());
+                                                (shared.lock().expect("refresh lock"))
+                                                    .added_or_updated += 1;
+                                            }
+                                            Ok(false) => {
+                                                stats.skipped_existing += 1;
+                                            }
+                                            Err(e) => {
+                                                ok = false;
+                                                (shared.lock().expect("refresh lock"))
+                                                    .errors
+                                                    .push(format!("{}: {e}", feed.name));
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    for update in &download.updates {
+                                        if let Ok(true) = db::refresh_article_content(&conn, update) {
+                                            (shared.lock().expect("refresh lock")).updated += 1;
+                                        }
+                                    }
+                                    if stats.evaluated > 0 {
+                                        ratio = Some(
+                                            stats.rss_fulltext_hits as f64
+                                                / stats.evaluated as f64,
+                                        );
+                                    }
+                                    let mut result = shared.lock().expect("refresh lock");
+                                    result.skipped_existing += stats.skipped_existing;
+                                    result.skipped_short += stats.skipped_short;
+                                    result.skipped_non_english += stats.skipped_non_english;
+                                }
+                            }
+                        }
+                        match db.lock_write() {
+                            Ok(conn) => {
+                                if let Err(e) = db::set_feed_refresh_meta(
+                                    &conn,
+                                    &feed.id,
+                                    download.etag.as_deref(),
+                                    &now,
+                                    ratio,
+                                ) {
+                                    ok = false;
+                                    (shared.lock().expect("refresh lock"))
+                                        .errors
+                                        .push(format!("{}: {e}", feed.name));
+                                }
+                            }
+                            Err(e) => {
+                                ok = false;
+                                (shared.lock().expect("refresh lock"))
+                                    .errors
+                                    .push(format!("{}: {e}", feed.name));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        ok = false;
+                        (shared.lock().expect("refresh lock"))
+                            .errors
+                            .push(format!("{}: {e}", feed.name));
                     }
                 }
-                for update in &updates {
-                    if db::refresh_article_content(&conn, update)? {
-                        result.updated += 1;
-                    }
+                if ok {
+                    (shared.lock().expect("refresh lock")).fetched_feeds += 1;
                 }
-            }
-            Err(e) => result.errors.push(format!("{}: {}", feed.name, e)),
+                let done = done_feeds.load(std::sync::atomic::Ordering::SeqCst);
+                report(
+                    "download",
+                    done,
+                    download_total,
+                    format!("已完成 {done}/{download_total}：{}", feed.name),
+                    ((done as u16 * download_weight as u16) / download_total.max(1) as u16) as u8,
+                );
+            });
         }
-
-        let percent_done = ((current as u16 * download_weight as u16)
-            / download_total.max(1) as u16) as u8;
-        on_progress(RefreshProgress {
-            phase: "download".into(),
-            current,
-            total: download_total,
-            label: format!("已完成 {current}/{download_total}：{}", feed.name),
-            percent: percent_done,
-        });
-    }
-
-    on_progress(RefreshProgress {
-        phase: "translate".into(),
-        current: 0,
-        total: 0,
-        label: "正在翻译标题与简介…".into(),
-        percent: download_weight,
     });
+
+    report(
+        "translate",
+        0,
+        0,
+        "正在翻译标题与简介…".into(),
+        download_weight,
+    );
 
     match fill_missing_card_zh(db, cfg, 80, |done, total| {
         let translate_pct = if total == 0 {
@@ -262,29 +423,31 @@ pub fn refresh_feeds(
         } else {
             ((done as u16 * translate_weight as u16) / total.max(1) as u16) as u8
         };
-        on_progress(RefreshProgress {
-            phase: "translate".into(),
-            current: done,
+        report(
+            "translate",
+            done,
             total,
-            label: if total == 0 {
+            if total == 0 {
                 "标题与简介完成".into()
             } else {
                 format!("正在翻译标题与简介 {done}/{total}")
             },
-            percent: download_weight.saturating_add(translate_pct).min(99),
-        });
+            download_weight.saturating_add(translate_pct).min(99),
+        );
     }) {
         Ok(n) => result.titles_translated = n,
         Err(e) => result.errors.push(format!("标题/简介: {e}")),
     }
 
-    on_progress(RefreshProgress {
-        phase: "done".into(),
-        current: download_total,
-        total: download_total,
-        label: "刷新完成".into(),
-        percent: 100,
-    });
+    report(
+        "done",
+        download_total,
+        download_total,
+        "刷新完成".into(),
+        100,
+    );
+    drop(progress_tx);
+    let _ = pump.join();
 
     Ok(result)
 }
@@ -354,16 +517,37 @@ pub fn fill_missing_card_zh(
 
 /// Download + parse one feed without holding the DB lock.
 /// Skips entries whose URL is already in `known_urls` (incremental / idempotent).
+/// `trust_chars` is the per-feed RSS full-text trust bar (see [`rss_trust_chars`]).
 fn download_feed_articles(
     client: &Client,
     feed: &FeedSource,
-    known_urls: &HashSet<String>,
+    trust_chars: usize,
+    known_urls: &std::sync::Mutex<HashSet<String>>,
     known_lengths: &HashMap<String, usize>,
-) -> Result<(Vec<Article>, Vec<Article>, DownloadStats), String> {
-    let bytes = client
-        .get(&feed.url)
-        .send()
-        .map_err(|e| e.to_string())?
+) -> Result<FeedDownload, String> {
+    let mut stats = DownloadStats::default();
+    let request = client.get(&feed.url);
+    let request = if feed.etag.is_empty() {
+        request
+    } else {
+        request.header(reqwest::header::IF_NONE_MATCH, feed.etag.as_str())
+    };
+    let resp = request.send().map_err(|e| e.to_string())?;
+    if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+        return Ok(FeedDownload {
+            articles: vec![],
+            updates: vec![],
+            stats,
+            etag: None,
+            unchanged: true,
+        });
+    }
+    let etag = resp
+        .headers()
+        .get(reqwest::header::ETAG)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let bytes = resp
         .error_for_status()
         .map_err(|e| e.to_string())?
         .bytes()
@@ -373,15 +557,12 @@ fn download_feed_articles(
     let feed_language = parsed.language.clone();
     let mut articles = Vec::new();
     let mut updates = Vec::new();
-    let mut stats = DownloadStats {
-        skipped_existing: 0,
-        skipped_short: 0,
-        skipped_non_english: 0,
-    };
     let now = Utc::now().to_rfc3339();
 
     let mut page_fetches = 0usize;
     const MAX_PAGE_FETCHES: usize = 12;
+
+    let known_guard = known_urls.lock().map_err(|_| "known urls poisoned")?;
 
     for entry in parsed.entries.into_iter().take(40) {
         let url = entry
@@ -414,30 +595,28 @@ fn download_feed_articles(
         // Already downloaded — only upgrade when the RSS body itself is now
         // trusted full-text AND meaningfully longer than what we stored.
         // Never page-fetch known URLs again (budget preserved for new ones).
-        if known_urls.contains(&url) {
+        if known_guard.contains(&url) {
             let stored_len = known_lengths.get(&url).copied().unwrap_or(0);
-            if rss_text.chars().count() >= TRUST_RSS_FULLTEXT_CHARS
+            stats.evaluated += 1;
+            if rss_text.chars().count() >= trust_chars
                 && is_readable_article_body(&rss_text)
                 && rss_text.chars().count() > stored_len
             {
-                updates.push(Article {
-                    id: String::new(), // not used by refresh_article_content
-                    url: url.clone(),
+                stats.rss_fulltext_hits += 1;
+                updates.push(fulltext_article(
+                    String::new(), // not used by refresh_article_content
+                    url.clone(),
                     title,
-                    title_zh: String::new(),
-                    source: feed.name.clone(),
-                    category: feed.category.clone(),
-                    published_at: entry
+                    feed.name.clone(),
+                    feed.category.clone(),
+                    entry
                         .published
                         .or(entry.updated)
                         .map(|d| d.to_rfc3339()),
-                    content_text: rss_text,
-                    fetched_at: now.clone(),
-                    origin: "rss".into(),
-                    summary_zh: String::new(),
-                    last_opened_at: None,
-                    open_count: 0,
-                });
+                    rss_text,
+                    now.clone(),
+                    "rss",
+                ));
             } else {
                 stats.skipped_existing += 1;
             }
@@ -446,11 +625,14 @@ fn download_feed_articles(
 
         // Full-text RSS can be trusted; teaser / chrome / tag-wall bodies must
         // fetch the article page. If the page is also junk, skip.
-        let content_text = if rss_text.chars().count() >= TRUST_RSS_FULLTEXT_CHARS
+        let content_text = if rss_text.chars().count() >= trust_chars
             && is_readable_article_body(&rss_text)
         {
+            stats.evaluated += 1;
+            stats.rss_fulltext_hits += 1;
             rss_text
         } else {
+            stats.evaluated += 1;
             if page_fetches >= MAX_PAGE_FETCHES {
                 stats.skipped_short += 1;
                 continue;
@@ -477,28 +659,65 @@ fn download_feed_articles(
             continue;
         }
 
-        let published_at = entry
-            .published
-            .or(entry.updated)
-            .map(|d| d.to_rfc3339());
-
-        articles.push(Article {
-            id: Uuid::new_v4().to_string(),
+        articles.push(fulltext_article(
+            Uuid::new_v4().to_string(),
             url,
             title,
-            title_zh: String::new(),
-            source: feed.name.clone(),
-            category: feed.category.clone(),
-            published_at,
+            feed.name.clone(),
+            feed.category.clone(),
+            entry
+                .published
+                .or(entry.updated)
+                .map(|d| d.to_rfc3339()),
             content_text,
-            fetched_at: now.clone(),
-            origin: "rss".into(),
-            summary_zh: String::new(),
-            last_opened_at: None,
-            open_count: 0,
-        });
+            now.clone(),
+            "page",
+        ));
     }
-    Ok((articles, updates, stats))
+    Ok(FeedDownload {
+        articles,
+        updates,
+        stats,
+        etag,
+        unchanged: false,
+    })
+}
+
+/// Build an article whose body already passed the readability gate.
+/// Stamps word count + quality so refresh never re-derives them.
+fn fulltext_article(
+    id: String,
+    url: String,
+    title: String,
+    source: String,
+    category: String,
+    published_at: Option<String>,
+    content_text: String,
+    fetched_at: String,
+    extraction_source: &str,
+) -> Article {
+    let word_count = content_text.split_whitespace().count() as i64;
+    Article {
+        id,
+        url,
+        title,
+        title_zh: String::new(),
+        source,
+        category,
+        published_at,
+        content_text,
+        fetched_at,
+        origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
+        word_count,
+        quality: "fulltext".into(),
+        extraction_source: extraction_source.into(),
+        dwell_ms: 0,
+        read_completed: false,
+        liked: false,
+    }
 }
 
 /// Keep English-only articles for learning. Prefer feed/entry language tags;
@@ -553,15 +772,16 @@ fn looks_like_english(title: &str, content: &str) -> bool {
     (latin as f64) / (letters as f64) >= 0.85
 }
 
+#[cfg(test)]
 pub(crate) fn collect_non_english_rss_ids(conn: &Connection) -> Result<Vec<String>, String> {
-    let existing = db::list_rss_language_samples(conn, 1200)?;
-    Ok(existing
+    Ok(db::list_unassessed_rss_articles(conn)?
         .into_iter()
-        .filter(|(_, title, sample)| !is_english_article(None, title, sample))
-        .map(|(id, _, _)| id)
+        .filter(|article| !is_english_article(None, &article.title, &article.content_text))
+        .map(|article| article.id)
         .collect())
 }
 
+#[cfg(test)]
 pub(crate) fn delete_articles(conn: &Connection, ids: &[String]) -> Result<usize, String> {
     let mut removed = 0usize;
     for id in ids {
@@ -573,8 +793,8 @@ pub(crate) fn delete_articles(conn: &Connection, ids: &[String]) -> Result<usize
 
 #[cfg(test)]
 pub(crate) fn purge_non_english_articles(conn: &Connection) -> Result<usize, String> {
-    let ids = collect_non_english_rss_ids(conn)?;
-    delete_articles(conn, &ids)
+    let (non_english, _) = assess_unassessed_articles(conn)?;
+    Ok(non_english)
 }
 
 /// True when stored body would be rejected as RSS-only teaser (no trusted page fulltext).
@@ -623,20 +843,10 @@ fn prose_char_count(text: &str) -> usize {
     s.split_whitespace().map(|w| w.chars().count()).sum()
 }
 
-pub(crate) fn collect_summary_only_rss_ids(conn: &Connection) -> Result<Vec<String>, String> {
-    // Chrome/tag-wall dumps are often longer than a teaser, so scan every RSS body.
-    let candidates = db::list_rss_teaser_candidates(conn, i64::MAX)?;
-    Ok(candidates
-        .into_iter()
-        .filter(|article| !is_readable_article_body(&article.content_text))
-        .map(|article| article.id)
-        .collect())
-}
-
 #[cfg(test)]
 pub(crate) fn purge_summary_only_articles(conn: &Connection) -> Result<usize, String> {
-    let ids = collect_summary_only_rss_ids(conn)?;
-    delete_articles(conn, &ids)
+    let (_, short) = assess_unassessed_articles(conn)?;
+    Ok(short)
 }
 
 fn html_to_text(html: &str) -> String {
@@ -783,12 +993,18 @@ pub fn import_article_from_url(db: &DbState, url: &str) -> Result<Article, Strin
         source: source_from_url(url),
         category: "other".into(),
         published_at: None,
+        word_count: extracted.text.split_whitespace().count() as i64,
+        quality: "fulltext".into(),
+        extraction_source: "url".into(),
         content_text: extracted.text,
         fetched_at: Utc::now().to_rfc3339(),
         origin: "url".into(),
         summary_zh: String::new(),
         last_opened_at: None,
         open_count: 0,
+        dwell_ms: 0,
+        read_completed: false,
+        liked: false,
     };
 
     {
@@ -883,6 +1099,7 @@ mod tests {
             enabled,
             origin: "curated".into(),
             description: String::new(),
+            ..Default::default()
         }
     }
 
@@ -894,6 +1111,24 @@ mod tests {
         ]);
         assert_eq!(enabled.len(), 1);
         assert_eq!(enabled[0].id, "on");
+    }
+
+    #[test]
+    fn trust_bar_adapts_to_feed_fulltext_ratio() {
+        assert_eq!(rss_trust_chars(0.9), 1200, "full-text feeds lower the bar");
+        assert_eq!(rss_trust_chars(0.7), 1200);
+        assert_eq!(
+            rss_trust_chars(0.1),
+            3200,
+            "teaser-only feeds raise the bar"
+        );
+        assert_eq!(rss_trust_chars(0.0), 3200);
+        assert_eq!(
+            rss_trust_chars(-1.0),
+            TRUST_RSS_FULLTEXT_CHARS,
+            "unknown ratio keeps the default"
+        );
+        assert_eq!(rss_trust_chars(0.5), TRUST_RSS_FULLTEXT_CHARS);
     }
 
     #[test]

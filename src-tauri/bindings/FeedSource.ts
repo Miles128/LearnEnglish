@@ -4,4 +4,13 @@ export type FeedSource = { id: string, name: string, category: string, url: stri
 /**
  * curated = built-in seed; user = subscribed via manage UI
  */
-origin: string, description: string, };
+origin: string, description: string, 
+/**
+ * HTTP ETag from the last successful fetch; sent back as If-None-Match.
+ */
+etag: string, last_fetched_at: string | null, 
+/**
+ * Fraction of entries in the last refresh whose RSS body was trusted
+ * full-text. -1 = unknown (no data yet). Drives the per-feed trust bar.
+ */
+fulltext_ratio: number, };

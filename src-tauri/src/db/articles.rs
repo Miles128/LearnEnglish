@@ -2,7 +2,7 @@ use super::{Article, ArticleListItem};
 use rusqlite::{params, Connection, OptionalExtension};
 
 const ARTICLE_COLS: &str =
-    "id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin,summary_zh,last_opened_at,open_count";
+    "id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin,summary_zh,last_opened_at,open_count,word_count,quality,extraction_source,dwell_ms,read_completed,liked";
 
 /// Home list only needs an excerpt (known% + blurb). Full body stays on get_article.
 pub const LIST_EXCERPT_CHARS: i32 = 6000;
@@ -14,7 +14,7 @@ pub fn list_articles(
     offset: Option<i64>,
 ) -> Result<Vec<ArticleListItem>, String> {
     let mut sql = format!(
-        "SELECT id,url,title,title_zh,source,category,published_at,SUBSTR(content_text,1,{LIST_EXCERPT_CHARS}),fetched_at,origin,summary_zh,last_opened_at,open_count FROM articles"
+        "SELECT id,url,title,title_zh,source,category,published_at,SUBSTR(content_text,1,{LIST_EXCERPT_CHARS}),fetched_at,origin,summary_zh,last_opened_at,open_count,word_count,quality,extraction_source,dwell_ms,read_completed,liked FROM articles"
     );
     let mut params: Vec<rusqlite::types::Value> = vec![];
     if let Some(cat) = category {
@@ -37,44 +37,6 @@ pub fn list_articles(
     Ok(rows)
 }
 
-/// RSS articles whose stored body length (bytes) is below `max_bytes`.
-/// Pass `i64::MAX` to scan every RSS body (chrome/tag-wall dumps can be long).
-pub fn list_rss_teaser_candidates(
-    conn: &Connection,
-    max_bytes: i64,
-) -> Result<Vec<Article>, String> {
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT {ARTICLE_COLS} FROM articles WHERE origin='rss' AND LENGTH(content_text) < ?1"
-        ))
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map(params![max_bytes], map_article)
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    Ok(rows)
-}
-
-/// `(id, title, first `sample_chars` chars of body)` for rss articles.
-/// Enough signal for the English heuristic without full-body scans.
-pub fn list_rss_language_samples(
-    conn: &Connection,
-    sample_chars: i32,
-) -> Result<Vec<(String, String, String)>, String> {
-    let mut stmt = conn
-        .prepare("SELECT id, title, SUBSTR(content_text, 1, ?1) FROM articles WHERE origin='rss'")
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map(params![sample_chars], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    Ok(rows)
-}
-
 pub fn map_article_list_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArticleListItem> {
     Ok(ArticleListItem {
         id: row.get(0)?,
@@ -90,6 +52,11 @@ pub fn map_article_list_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<Articl
         summary_zh: row.get(10)?,
         last_opened_at: row.get(11)?,
         open_count: row.get(12)?,
+        word_count: row.get(13)?,
+        rank_score: 0.0,
+        dwell_ms: row.get(16)?,
+        read_completed: row.get::<_, i64>(17)? != 0,
+        liked: row.get::<_, i64>(18)? != 0,
     })
 }
 
@@ -108,6 +75,12 @@ pub fn map_article(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
         summary_zh: row.get(10)?,
         last_opened_at: row.get(11)?,
         open_count: row.get(12)?,
+        word_count: row.get(13)?,
+        quality: row.get(14)?,
+        extraction_source: row.get(15)?,
+        dwell_ms: row.get(16)?,
+        read_completed: row.get::<_, i64>(17)? != 0,
+        liked: row.get::<_, i64>(18)? != 0,
     })
 }
 
@@ -235,8 +208,8 @@ pub fn list_article_content_lengths(
 pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, String> {
     let changed = conn
         .execute(
-            "INSERT INTO articles (id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin,summary_zh)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+            "INSERT INTO articles (id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin,summary_zh,word_count,quality,extraction_source)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
              ON CONFLICT(url) DO NOTHING",
             params![
                 a.id,
@@ -249,7 +222,10 @@ pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, Str
                 a.content_text,
                 a.fetched_at,
                 a.origin,
-                a.summary_zh
+                a.summary_zh,
+                a.word_count,
+                a.quality,
+                a.extraction_source,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -264,12 +240,104 @@ pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, Str
 pub fn refresh_article_content(conn: &Connection, a: &Article) -> Result<bool, String> {
     let changed = conn
         .execute(
-            "UPDATE articles SET title=?1, content_text=?2, fetched_at=?3, summary_zh=''
-             WHERE url=?4 AND origin='rss' AND content_text <> ?2",
-            params![a.title, a.content_text, a.fetched_at, a.url],
+            "UPDATE articles SET title=?1, content_text=?2, fetched_at=?3, summary_zh='',
+                    word_count=?4, quality='fulltext', extraction_source=?5
+             WHERE url=?6 AND origin='rss' AND content_text <> ?2",
+            params![a.title, a.content_text, a.fetched_at, a.word_count, a.extraction_source, a.url],
         )
         .map_err(|e| e.to_string())?;
     Ok(changed > 0)
+}
+
+/// RSS articles whose body quality has not been assessed yet (`quality=''`).
+/// Legacy rows get assessed once during refresh; new rows are stamped on insert.
+pub fn list_unassessed_rss_articles(conn: &Connection) -> Result<Vec<Article>, String> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {ARTICLE_COLS} FROM articles WHERE origin='rss' AND quality=''"
+        ))
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], map_article)
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+/// Stamp the body-quality verdict on an article (once; never re-derived later).
+pub fn set_article_quality(
+    conn: &Connection,
+    id: &str,
+    quality: &str,
+    extraction_source: &str,
+    word_count: i64,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE articles SET quality=?1, extraction_source=?2, word_count=?3 WHERE id=?4",
+        params![quality, extraction_source, word_count, id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Accumulate visible reading time and optionally mark the article as read to the end.
+pub fn add_article_reading_progress(
+    conn: &Connection,
+    id: &str,
+    dwell_ms_delta: i64,
+    read_completed: bool,
+) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "UPDATE articles
+             SET dwell_ms = MAX(0, dwell_ms + ?1),
+                 read_completed = CASE WHEN ?2 THEN 1 ELSE read_completed END
+             WHERE id=?3",
+            params![dwell_ms_delta, read_completed, id],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("article not found".into());
+    }
+    Ok(())
+}
+
+pub fn set_article_liked(conn: &Connection, id: &str, liked: bool) -> Result<(), String> {
+    let changed = conn
+        .execute(
+            "UPDATE articles SET liked=?1 WHERE id=?2",
+            params![liked, id],
+        )
+        .map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("article not found".into());
+    }
+    Ok(())
+}
+
+/// All-time open counts grouped by source and by category — the affinity
+/// signal for article ranking.
+pub fn affinity_open_counts(
+    conn: &Connection,
+) -> Result<(std::collections::HashMap<String, i64>, std::collections::HashMap<String, i64>), String>
+{
+    let read = |sql: &str| -> Result<std::collections::HashMap<String, i64>, String> {
+        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<std::collections::HashMap<_, _>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(rows)
+    };
+    let by_source = read(
+        "SELECT source, SUM(open_count) FROM articles WHERE open_count > 0 GROUP BY source",
+    )?;
+    let by_category = read(
+        "SELECT category, SUM(open_count) FROM articles WHERE open_count > 0 GROUP BY category",
+    )?;
+    Ok((by_source, by_category))
 }
 
 #[cfg(test)]

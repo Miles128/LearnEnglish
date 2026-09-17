@@ -54,7 +54,7 @@ pub(crate) fn seed_feeds(conn: &Connection) -> Result<(), String> {
 pub fn list_feeds(conn: &Connection) -> Result<Vec<FeedSource>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id,name,category,url,enabled,origin,description FROM feed_sources ORDER BY category,name",
+            "SELECT id,name,category,url,enabled,origin,description,etag,last_fetched_at,fulltext_ratio FROM feed_sources ORDER BY category,name",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -168,6 +168,7 @@ pub fn subscribe_feed(
             enabled: true,
             origin: existing.origin,
             description: description.into(),
+            ..Default::default()
         });
     }
 
@@ -192,12 +193,13 @@ pub fn subscribe_feed(
         enabled: true,
         origin: "user".into(),
         description: description.into(),
+        ..Default::default()
     })
 }
 
 fn find_feed_by_url(conn: &Connection, url: &str) -> Result<Option<FeedSource>, String> {
     conn.query_row(
-        "SELECT id,name,category,url,enabled,origin,description FROM feed_sources WHERE url=?1",
+        "SELECT id,name,category,url,enabled,origin,description,etag,last_fetched_at,fulltext_ratio FROM feed_sources WHERE url=?1",
         params![url],
         map_feed,
     )
@@ -225,7 +227,32 @@ fn map_feed(row: &rusqlite::Row<'_>) -> rusqlite::Result<FeedSource> {
         enabled: row.get::<_, i64>(4)? == 1,
         origin: row.get(5)?,
         description: row.get(6)?,
+        etag: row.get(7)?,
+        last_fetched_at: row.get(8)?,
+        fulltext_ratio: row.get(9)?,
     })
+}
+
+/// Persist per-refresh metadata: HTTP ETag (for 304 reuse), fetch timestamp,
+/// and the observed full-text ratio that adapts the next refresh's trust bar.
+/// `fulltext_ratio` of `None` leaves the stored value untouched.
+pub fn set_feed_refresh_meta(
+    conn: &Connection,
+    id: &str,
+    etag: Option<&str>,
+    last_fetched_at: &str,
+    fulltext_ratio: Option<f64>,
+) -> Result<(), String> {
+    conn.execute(
+        "UPDATE feed_sources
+         SET etag = COALESCE(?2, etag),
+             last_fetched_at = ?3,
+             fulltext_ratio = COALESCE(?4, fulltext_ratio)
+         WHERE id=?1",
+        params![id, etag, last_fetched_at, fulltext_ratio],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn map_category(row: &rusqlite::Row<'_>) -> rusqlite::Result<FeedCategory> {

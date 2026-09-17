@@ -57,8 +57,10 @@ export default function Reader() {
   const [popover, setPopover] = useState<Popover | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [categories, setCategories] = useState<FeedCategory[]>([]);
+  const [likedOverride, setLikedOverride] = useState<boolean | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const clickGuardRef = useRef(false);
+  const readCompletedRef = useRef(false);
 
   const { speaking, speakTarget, startSpeak, stopSpeak } = useTts();
   const { cfg } = useAppConfig();
@@ -111,6 +113,59 @@ export default function Reader() {
   }, []);
 
   const title = useMemo(() => article?.title ?? "阅读", [article]);
+  const liked = likedOverride ?? article?.liked ?? false;
+
+  // Reading-time tracking: flush while the window is visible, on switching
+  // away, and on unmount. Capped per flush so sleep/resume can't inflate it.
+  useEffect(() => {
+    if (!id) return;
+    let flushedAt = Date.now();
+    const flush = () => {
+      const now = Date.now();
+      const delta = Math.min(now - flushedAt, 60_000);
+      flushedAt = now;
+      if (delta >= 1000) {
+        void api
+          .markArticleProgress(id, delta, readCompletedRef.current)
+          .catch(() => undefined);
+      }
+    };
+    const timer = window.setInterval(flush, 15_000);
+    const onVisibility = () => {
+      if (document.hidden) flush();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      flush();
+    };
+  }, [id]);
+
+  // Read-to-the-end detection: near the bottom of the article body.
+  useEffect(() => {
+    if (!id) return;
+    readCompletedRef.current = false;
+    setLikedOverride(null);
+    const onScroll = () => {
+      if (readCompletedRef.current) return;
+      const doc = document.documentElement;
+      if (window.innerHeight + window.scrollY >= doc.scrollHeight - 400) {
+        readCompletedRef.current = true;
+        void api.markArticleProgress(id, 0, true).catch(() => undefined);
+      }
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [id]);
+
+  function toggleLiked() {
+    if (!id) return;
+    const next = !(likedOverride ?? article?.liked ?? false);
+    setLikedOverride(next);
+    api.setArticleLiked(id, next).catch(() => setLikedOverride(null));
+  }
 
   const asMarkdown = useMemo(() => {
     if (!article) return false;
@@ -366,6 +421,14 @@ export default function Reader() {
           </p>
         </div>
         <div className="page-header-actions">
+          <button
+            className="btn"
+            type="button"
+            onClick={toggleLiked}
+            title={liked ? "取消收藏" : "收藏，之后优先推荐同类文章"}
+          >
+            {liked ? "★ 已收藏" : "☆ 收藏"}
+          </button>
           <button
             className="btn"
             type="button"

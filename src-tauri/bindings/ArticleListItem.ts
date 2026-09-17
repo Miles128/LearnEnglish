@@ -3,4 +3,8 @@
 /**
  * Home-list row: excerpt only. Full body stays on `Article` / get_article.
  */
-export type ArticleListItem = { id: string, url: string, title: string, title_zh: string, source: string, category: string, published_at: string | null, excerpt: string, fetched_at: string, origin: string, summary_zh: string, last_opened_at: string | null, open_count: number, };
+export type ArticleListItem = { id: string, url: string, title: string, title_zh: string, source: string, category: string, published_at: string | null, excerpt: string, fetched_at: string, origin: string, summary_zh: string, last_opened_at: string | null, open_count: number, word_count: number, 
+/**
+ * Interest rank from the ranked list; 0 when unranked.
+ */
+rank_score: number, dwell_ms: number, read_completed: boolean, liked: boolean, };

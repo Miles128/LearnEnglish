@@ -17,7 +17,7 @@ import {
 } from "../readingPrefs";
 import { AnnotatedPara } from "../annotateText";
 import { shouldRenderMarkdown } from "../markdown";
-import { bundledGloss, prepareLookup } from "../wordLookup";
+import { bundledGloss, isPhraseSelection, prepareLookup } from "../wordLookup";
 import { ensureDetailsLoaded, lookupDetail } from "../wordDetails";
 import SelectionPopover, { type Popover } from "../components/SelectionPopover";
 import ReaderParagraph from "../components/ReaderParagraph";
@@ -407,6 +407,22 @@ export default function Reader() {
     await showMeaning({ text, x: e.clientX, y: e.clientY });
   }
 
+  async function addToPhraseLibrary() {
+    if (!popover || !id) return;
+    try {
+      await api.addPhrase({
+        phrase: popover.text,
+        contextSentence: findContext(paragraphs, popover.source ?? popover.text),
+        articleId: id,
+      });
+      setToast(`已加入短语组合：${popover.text}`);
+      setPopover(null);
+      setTimeout(() => setToast(null), 2500);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   async function addToVocab() {
     if (!popover || !id) return;
     try {
@@ -545,6 +561,11 @@ export default function Reader() {
           speakTarget={speakTarget}
           onSpeakWord={speakWord}
           onAddVocab={() => void addToVocab()}
+          onAddPhrase={
+            popover.source && isPhraseSelection(popover.source)
+              ? () => void addToPhraseLibrary()
+              : undefined
+          }
           onClose={closePopover}
         />
       )}

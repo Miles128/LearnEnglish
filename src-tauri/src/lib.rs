@@ -68,7 +68,13 @@ pub fn run() {
             commands::vocab::due_vocab,
             commands::vocab::review_vocab,
             commands::vocab::set_vocab_status,
-            commands::vocab::delete_vocab
+            commands::vocab::delete_vocab,
+            commands::phrases::add_phrase,
+            commands::phrases::list_phrases,
+            commands::phrases::due_phrases,
+            commands::phrases::review_phrase,
+            commands::phrases::set_phrase_status,
+            commands::phrases::delete_phrase
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

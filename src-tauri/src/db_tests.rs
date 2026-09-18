@@ -789,6 +789,56 @@ fn retention_purge_drops_old_rss_but_keeps_liked_and_imports() {
     let _ = std::fs::remove_file(path);
 }
 
+fn sample_phrase(id: &str, text: &str) -> db::PhraseItem {
+    db::PhraseItem {
+        id: id.into(),
+        phrase: text.into(),
+        meaning_zh: "测试释义".into(),
+        usage: "collocation".into(),
+        context_sentence: "It is on the house.".into(),
+        article_id: None,
+        status: "learning".into(),
+        interval_days: 0.0,
+        reps: 0,
+        consecutive_know: 0,
+        next_review_at: "2020-01-01T00:00:00Z".into(),
+        created_at: "2020-01-01T00:00:00Z".into(),
+    }
+}
+
+#[test]
+fn phrase_library_dedup_review_and_listing() {
+    let path = temp_dir().join(format!("le-phrases-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    db::insert_phrase(&conn, &sample_phrase("p1", "on the house")).unwrap();
+    assert!(db::get_phrase_by_text(&conn, "On The House").unwrap().is_some());
+
+    // Case-insensitive unique index blocks a differently-cased duplicate.
+    let dup = db::insert_phrase(&conn, &sample_phrase("p2", "ON THE HOUSE"));
+    assert!(dup.is_err(), "duplicate phrase must be rejected");
+
+    // Due immediately (next_review_at in the past), listed once.
+    let due = db::due_phrases(&conn).unwrap();
+    assert_eq!(due.len(), 1);
+    assert_eq!(due[0].phrase, "on the house");
+
+    // SRS: easy schedule pushes it out of the due list.
+    let mut item = db::get_phrase(&conn, "p1").unwrap().unwrap();
+    crate::srs::apply_rating_phrase(&mut item, crate::srs::Rating::Easy);
+    assert_eq!(item.interval_days, 1.0);
+    db::update_phrase_review(&conn, &item).unwrap();
+    assert!(db::due_phrases(&conn).unwrap().is_empty());
+
+    // Status transitions + delete.
+    db::set_phrase_status(&conn, "p1", "mastered").unwrap();
+    assert_eq!(db::list_phrases(&conn, Some("mastered")).unwrap().len(), 1);
+    db::delete_phrase(&conn, "p1").unwrap();
+    assert!(db::list_phrases(&conn, None).unwrap().is_empty());
+
+    let _ = std::fs::remove_file(path);
+}
+
 #[test]
 fn vocab_dedup_by_term_and_delete_article_detaches() {
     let path = temp_dir().join(format!("le-vocab-{}.db", Uuid::new_v4()));
@@ -1056,7 +1106,15 @@ fn schema_adds_summary_zh_column() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
+    let phrases_table: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='phrases'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(phrases_table, 1, "phrases should exist after migrate");
     let meta_table: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='app_meta'",

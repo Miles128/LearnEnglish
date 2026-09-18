@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { ensureLexiconLoaded } from "./wordLevels";
-import { isAllCaps, prepareLookup } from "./wordLookup";
+import { isAllCaps, isPhraseSelection, prepareLookup } from "./wordLookup";
 
 beforeAll(async () => {
   await ensureLexiconLoaded();
@@ -40,6 +40,25 @@ describe("prepareLookup", () => {
   it("still reduces ordinary capitalized words", () => {
     expect(prepareLookup("Cities").term).toBe("city");
     expect(prepareLookup("Running").term).toBe("run");
+  });
+});
+
+describe("isPhraseSelection", () => {
+  it("accepts short phrases", () => {
+    expect(isPhraseSelection("on the house")).toBe(true);
+    expect(isPhraseSelection("give up")).toBe(true);
+    expect(isPhraseSelection("a piece of cake")).toBe(true);
+    expect(isPhraseSelection("take it for granted")).toBe(true);
+  });
+
+  it("rejects single words, long spans and sentences", () => {
+    expect(isPhraseSelection("run")).toBe(false);
+    expect(isPhraseSelection("This is a complete sentence.")).toBe(false);
+    expect(
+      isPhraseSelection("one two three four five six seven eight"),
+    ).toBe(false);
+    expect(isPhraseSelection("hello, world")).toBe(false);
+    expect(isPhraseSelection("")).toBe(false);
   });
 });
 

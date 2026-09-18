@@ -23,6 +23,8 @@ type Props = {
   speakTarget: SpeakTarget | null;
   onSpeakWord: (text: string) => void;
   onAddVocab: () => void;
+  /** Present for multi-word selections: save into the phrase library. */
+  onAddPhrase?: () => void;
   onClose: () => void;
 };
 
@@ -71,6 +73,7 @@ export default function SelectionPopover({
   speakTarget,
   onSpeakWord,
   onAddVocab,
+  onAddPhrase,
   onClose,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
@@ -147,7 +150,15 @@ export default function SelectionPopover({
         >
           {speaking && speakTarget?.kind === "word" ? "停止" : "朗读"}
         </button>
-        <button className="btn small primary" onClick={onAddVocab}>
+        {onAddPhrase ? (
+          <button className="btn small primary" onClick={onAddPhrase}>
+            加入短语组合
+          </button>
+        ) : null}
+        <button
+          className={onAddPhrase ? "btn small" : "btn small primary"}
+          onClick={onAddVocab}
+        >
           加入生词库
         </button>
         <button className="btn small" onClick={onClose}>

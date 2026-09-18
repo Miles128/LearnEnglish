@@ -4,11 +4,13 @@ export { apiArticles as articles } from "./articles";
 export { apiFeeds as feeds } from "./feeds";
 export { apiConfig as config } from "./config";
 export { apiVocab as vocab } from "./vocab";
+export { apiPhrases as phrases } from "./phrases";
 export type { AddVocabInput } from "./vocab";
 
 import { apiArticles } from "./articles";
 import { apiConfig } from "./config";
 import { apiFeeds } from "./feeds";
+import { apiPhrases } from "./phrases";
 import { apiVocab } from "./vocab";
 
 export const api = {
@@ -16,4 +18,5 @@ export const api = {
   ...apiFeeds,
   ...apiArticles,
   ...apiVocab,
+  ...apiPhrases,
 };

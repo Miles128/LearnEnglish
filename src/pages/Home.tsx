@@ -18,6 +18,7 @@ import SelectionPopover, { type Popover } from "../components/SelectionPopover";
 import {
   bundledGloss,
   cachedTranslation,
+  isPhraseSelection,
   prepareLookup,
   rememberTranslation,
 } from "../wordLookup";
@@ -315,6 +316,22 @@ export default function Home() {
     startSpeak({ kind: "word" }, [text]);
   }
 
+  async function addPopoverToPhraseLibrary() {
+    if (!popover) return;
+    try {
+      await api.addPhrase({
+        phrase: popover.text,
+        contextSentence: popover.source ?? popover.text,
+        articleId: null,
+      });
+      setToast(`已加入短语组合：${popover.text}`);
+      setPopover(null);
+      setTimeout(() => setToast(null), 2500);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   async function addPopoverToVocab() {
     if (!popover) return;
     try {
@@ -452,6 +469,11 @@ export default function Home() {
           speakTarget={speakTarget}
           onSpeakWord={speakWord}
           onAddVocab={() => void addPopoverToVocab()}
+          onAddPhrase={
+            popover.source && isPhraseSelection(popover.source)
+              ? () => void addPopoverToPhraseLibrary()
+              : undefined
+          }
           onClose={closePopover}
         />
       )}

@@ -630,6 +630,95 @@ fn list_article_titles_dedup_window() {
 }
 
 #[test]
+fn query_articles_filters_read_state_source_liked_and_tags() {
+    let path = temp_dir().join(format!("le-query-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    let mut unread = sample_article("unread");
+    unread.source = "NPR".into();
+    let mut read = sample_article("read");
+    read.source = "NPR".into();
+    let mut liked = sample_article("liked");
+    liked.source = "404 Media".into();
+    let mut tagged = sample_article("tagged");
+    tagged.source = "404 Media".into();
+
+    for a in [&unread, &read, &liked, &tagged] {
+        db::insert_article_if_new(&conn, a).unwrap();
+    }
+    db::mark_article_opened(&conn, "read").unwrap();
+    db::set_article_liked(&conn, "liked", true).unwrap();
+    db::set_article_tags(&conn, "tagged", &["ai".into(), "chips".into()]).unwrap();
+
+    let q = |query: db::ArticleQuery<'_>, limit: i64| {
+        db::query_articles(&conn, &query, Some(limit), Some(0))
+            .unwrap()
+            .into_iter()
+            .map(|a| a.id)
+            .collect::<Vec<_>>()
+    };
+
+    let unread_only = q(
+        db::ArticleQuery {
+            read_state: db::ReadState::Unread,
+            ..Default::default()
+        },
+        10,
+    );
+    assert_eq!(unread_only.len(), 3);
+    assert!(!unread_only.contains(&"read".to_string()));
+
+    let read_only = q(
+        db::ArticleQuery {
+            read_state: db::ReadState::Read,
+            ..Default::default()
+        },
+        10,
+    );
+    assert_eq!(read_only, vec!["read".to_string()]);
+
+    let by_source = q(
+        db::ArticleQuery {
+            source: Some("404 Media"),
+            ..Default::default()
+        },
+        10,
+    );
+    assert_eq!(by_source.len(), 2);
+
+    let liked_only = q(
+        db::ArticleQuery {
+            liked_only: true,
+            ..Default::default()
+        },
+        10,
+    );
+    assert_eq!(liked_only, vec!["liked".to_string()]);
+
+    let tags = vec!["ai".to_string()];
+    let by_tag = q(
+        db::ArticleQuery {
+            tags: &tags,
+            ..Default::default()
+        },
+        10,
+    );
+    assert_eq!(by_tag, vec!["tagged".to_string()]);
+
+    let combined = q(
+        db::ArticleQuery {
+            source: Some("404 Media"),
+            read_state: db::ReadState::Unread,
+            ..Default::default()
+        },
+        10,
+    );
+    assert_eq!(combined.len(), 2);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn content_audit_removes_synopsis_only_bodies_once() {
     let path = temp_dir().join(format!("le-audit-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");

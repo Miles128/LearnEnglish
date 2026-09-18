@@ -3,7 +3,11 @@ import { Link } from "react-router-dom";
 import type { ArticleListItem, FeedCategory } from "../api";
 import { articleListBlurb } from "../articleList";
 import { categoryLabel } from "../readerUtils";
-import { formatKnownPercent } from "../knownPercent";
+import {
+  difficultyClassName,
+  difficultyLabel,
+  type DifficultyLevel,
+} from "../difficulty";
 import { articleIsRead } from "../learningStats";
 import {
   loadCollapsedSources,
@@ -20,12 +24,12 @@ export type SourceSection = {
 type Props = {
   section: SourceSection;
   categories: FeedCategory[];
-  /** article id → known % estimate (precomputed by the parent). */
-  knownPctById: Map<string, number | null>;
+  /** article id → local difficulty level (computed by the parent). */
+  difficultyById: Map<string, DifficultyLevel | null>;
 };
 
 /** One per-source board on the home page: header + article list. */
-export default function SourceBoard({ section, categories, knownPctById }: Props) {
+export default function SourceBoard({ section, categories, difficultyById }: Props) {
   const [collapsed, setCollapsed] = useState(
     () => loadCollapsedSources().has(section.source),
   );
@@ -56,8 +60,7 @@ export default function SourceBoard({ section, categories, knownPctById }: Props
       {collapsed ? null : (
         <ul className="article-list">
           {section.articles.map((a) => {
-            const pct = knownPctById.get(a.id) ?? null;
-            const pctLabel = formatKnownPercent(pct);
+            const level = difficultyById.get(a.id) ?? null;
             const blurb = articleListBlurb(a);
             return (
               <li key={a.id}>
@@ -67,12 +70,14 @@ export default function SourceBoard({ section, categories, knownPctById }: Props
                     articleIsRead(a) ? "article-row is-read" : "article-row"
                   }
                 >
-                  {pctLabel && (
-                    <div className="article-row-meta">
-                      <span className="known-pct">{pctLabel}</span>
-                    </div>
-                  )}
-                  <h3 className="article-title-en">{a.title}</h3>
+                  <div className="article-title-line">
+                    <h3 className="article-title-en">{a.title}</h3>
+                    {level && (
+                      <span className={difficultyClassName(level)}>
+                        {difficultyLabel(level)}
+                      </span>
+                    )}
+                  </div>
                   {a.title_zh ? (
                     <p className="article-title-zh">{a.title_zh}</p>
                   ) : null}

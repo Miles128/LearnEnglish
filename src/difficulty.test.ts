@@ -1,0 +1,109 @@
+import { beforeAll, describe, expect, it } from "vitest";
+import { ensureLexiconLoaded, type DifficultyPrefs } from "./wordLevels";
+import {
+  articleDifficulty,
+  difficultyClassName,
+  difficultyFromScore,
+  difficultyLabel,
+  sentenceFactor,
+  tokenizeWords,
+  wordDifficultyWeight,
+} from "./difficulty";
+
+const PREFS: DifficultyPrefs = { cefrLevel: "B1", freqBand: 3000 };
+
+const EASY_WORDS = [
+  "the", "and", "for", "you", "that", "with", "have", "this", "from",
+  "they", "will", "would", "there", "their", "what", "about", "which",
+  "when", "make", "time", "know", "take", "think", "good", "help", "like",
+];
+
+beforeAll(async () => {
+  await ensureLexiconLoaded();
+});
+
+function repeatTo(words: string[], n: number): string {
+  const out: string[] = [];
+  while (out.length < n) out.push(...words);
+  return out.slice(0, n).join(" ") + ".";
+}
+
+describe("tokenizeWords", () => {
+  it("lowercases and keeps letters/apostrophes/hyphens", () => {
+    expect(tokenizeWords("Hello, WORLD! It's fine.")).toEqual([
+      "hello",
+      "world",
+      "it's",
+      "fine",
+    ]);
+  });
+
+  it("drops single-character tokens", () => {
+    expect(tokenizeWords("a b c d")).toEqual([]);
+  });
+});
+
+describe("wordDifficultyWeight", () => {
+  it("is zero inside the comfort zone", () => {
+    expect(wordDifficultyWeight("the", PREFS, false)).toBe(0);
+    expect(wordDifficultyWeight("time", PREFS, false)).toBe(0);
+  });
+
+  it("charges more for words further outside the band", () => {
+    const learning = wordDifficultyWeight("time", PREFS, true);
+    expect(learning).toBe(1.5);
+    // OOV words are weak evidence, not difficulty.
+    expect(wordDifficultyWeight("zzzqqq", PREFS, false)).toBe(0.5);
+  });
+});
+
+describe("sentenceFactor", () => {
+  it("stays close to 1 and is clamped", () => {
+    expect(sentenceFactor(18)).toBeCloseTo(1);
+    expect(sentenceFactor(60)).toBeLessThanOrEqual(1.25);
+    expect(sentenceFactor(2)).toBeGreaterThanOrEqual(0.9);
+  });
+});
+
+describe("difficultyFromScore", () => {
+  it("maps the score ramp to the five levels", () => {
+    expect(difficultyFromScore(0.005)).toBe("easy");
+    expect(difficultyFromScore(0.03)).toBe("normal");
+    expect(difficultyFromScore(0.07)).toBe("hard");
+    expect(difficultyFromScore(0.12)).toBe("harder");
+    expect(difficultyFromScore(0.5)).toBe("hardest");
+  });
+});
+
+describe("articleDifficulty", () => {
+  it("returns null for tiny samples", () => {
+    expect(articleDifficulty("the cat sat on the mat", [], PREFS)).toBeNull();
+  });
+
+  it("rates common prose as easy", () => {
+    const result = articleDifficulty(repeatTo(EASY_WORDS, 120), [], PREFS);
+    expect(result).not.toBeNull();
+    expect(result!.level).toBe("easy");
+  });
+
+  it("rates dense hard vocabulary higher", () => {
+    const hard = "ubiquitous bureaucratic idiosyncratic juxtaposition "
+      .trim()
+      .split(" ");
+    const result = articleDifficulty(repeatTo(hard, 120), [], PREFS);
+    expect(result).not.toBeNull();
+    expect(["hard", "harder", "hardest"]).toContain(result!.level);
+  });
+
+  it("never gets easier when the freq band narrows", () => {
+    const body = repeatTo(EASY_WORDS, 150);
+    const wide = articleDifficulty(body, [], { cefrLevel: "B1", freqBand: 20000 });
+    const narrow = articleDifficulty(body, [], { cefrLevel: "A1", freqBand: 1000 });
+    expect(wide!.score).toBeLessThanOrEqual(narrow!.score);
+  });
+
+  it("exposes label and css class", () => {
+    expect(difficultyLabel("hardest")).toBe("极难");
+    expect(difficultyClassName("hard")).toContain("d-hard");
+  });
+});

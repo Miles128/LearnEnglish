@@ -71,6 +71,8 @@ struct DownloadStats {
     skipped_short: usize,
     skipped_non_english: usize,
     skipped_duplicate: usize,
+    /// Entries older than the retention window — never ingested.
+    skipped_old: usize,
     /// Entries whose RSS body was trusted full-text without a page fetch.
     rss_fulltext_hits: usize,
     /// Entries considered for new content (denominator of fulltext_ratio).
@@ -84,6 +86,7 @@ impl Default for DownloadStats {
             skipped_short: 0,
             skipped_non_english: 0,
             skipped_duplicate: 0,
+            skipped_old: 0,
             rss_fulltext_hits: 0,
             evaluated: 0,
         }
@@ -522,6 +525,7 @@ pub fn refresh_feeds(
                         &known_urls,
                         &known_lengths,
                         &upgraded,
+                        cfg.article_retention_days,
                     );
                 done_feeds.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
@@ -590,7 +594,8 @@ pub fn refresh_feeds(
                                         );
                                     }
                                     let mut result = shared.lock().expect("refresh lock");
-                                    result.skipped_existing += stats.skipped_existing;
+                                    result.skipped_existing +=
+                                        stats.skipped_existing + stats.skipped_old;
                                     result.skipped_short += stats.skipped_short;
                                     result.skipped_non_english += stats.skipped_non_english;
                                     result.skipped_duplicate += stats.skipped_duplicate;
@@ -761,6 +766,7 @@ fn download_feed_articles(
     known_urls: &std::sync::Mutex<HashSet<String>>,
     known_lengths: &HashMap<String, usize>,
     upgraded: &std::sync::Mutex<HashSet<String>>,
+    retention_days: u32,
 ) -> Result<FeedDownload, AppError> {
     let mut stats = DownloadStats::default();
     let request = client.get(&feed.url);
@@ -821,6 +827,20 @@ fn download_feed_articles(
             .title
             .map(|t| t.content)
             .unwrap_or_else(|| "Untitled".into());
+
+        // Retention: never ingest entries older than the configured window
+        // (otherwise the purge/reseed loop re-adds them every refresh).
+        let published = entry.published.or(entry.updated);
+        if retention_days > 0 {
+            if let Some(published_at) = published {
+                let cutoff =
+                    Utc::now() - chrono::Duration::days(retention_days as i64);
+                if published_at < cutoff {
+                    stats.skipped_old += 1;
+                    continue;
+                }
+            }
+        }
 
         let raw_html = entry
             .content

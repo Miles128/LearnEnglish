@@ -352,26 +352,80 @@ fn chat(cfg: &AppConfig, system: &str, user: &str) -> Result<String, AppError> {
         ]
     });
 
-    let resp = CHAT_CLIENT
-        .post(&url)
-        .bearer_auth(&cfg.api_key)
-        .json(&body)
-        .send()
-        ?
-        .error_for_status()
-        .map_err(|e| format!("LLM {e}"))?;
+    let send = || -> Result<String, AppError> {
+        let resp = CHAT_CLIENT
+            .post(&url)
+            .bearer_auth(&cfg.api_key)
+            .json(&body)
+            .send()?
+            .error_for_status()
+            .map_err(|e| AppError::msg(format!("LLM {e}")))?;
+        let parsed: ChatResponse = resp.json()?;
+        parsed
+            .choices
+            .first()
+            .and_then(|c| c.message.content.clone())
+            .ok_or_else(|| AppError::msg("LLM returned empty content"))
+    };
+    with_retry(send, CHAT_ATTEMPTS)
+}
 
-    let parsed: ChatResponse = resp.json()?;
-    parsed
-        .choices
-        .first()
-        .and_then(|c| c.message.content.clone())
-        .ok_or_else(|| "LLM returned empty content".into())
+/// Transient failures worth retrying: timeouts, connection issues, server
+/// hiccups (429 / 5xx), and undecodable responses. Client mistakes (401/404…)
+/// and our own messages are not.
+pub(crate) fn is_retryable(err: &AppError) -> bool {
+    match err {
+        AppError::Json(_) => true,
+        AppError::Http(e) => {
+            e.is_timeout()
+                || e.is_connect()
+                || e.is_request()
+                || e.status().is_some_and(|s| {
+                    s.as_u16() == 429 || s.as_u16() >= 500
+                })
+        }
+        _ => false,
+    }
+}
+
+/// Exponential backoff between attempts: 0.6s, 1.2s, …
+pub(crate) fn backoff_ms(attempt: u32) -> u64 {
+    600u64 << attempt.min(4)
+}
+
+const CHAT_ATTEMPTS: u32 = 3;
+
+/// Retry loop for transient LLM failures. A retryable error re-arms the
+/// closure after a backoff sleep; anything else surfaces immediately.
+pub(crate) fn with_retry<T, F>(mut attempt: F, max_attempts: u32) -> Result<T, AppError>
+where
+    F: FnMut() -> Result<T, AppError>,
+{
+    let mut last: Option<AppError> = None;
+    for i in 0..max_attempts {
+        match attempt() {
+            Ok(value) => return Ok(value),
+            Err(e) => {
+                if i + 1 < max_attempts && is_retryable(&e) {
+                    last = Some(e);
+                    std::thread::sleep(std::time::Duration::from_millis(backoff_ms(i)));
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| AppError::msg("retry loop ended without an error")))
 }
 
 #[cfg(test)]
 mod clip_tests {
-    use super::{chat_completions_url, clip_zh};
+    use super::{backoff_ms, chat_completions_url, clip_zh, is_retryable, with_retry};
+    use crate::error::AppError;
+
+    fn json_err() -> AppError {
+        AppError::Json(serde_json::from_str::<serde_json::Value>("not json").unwrap_err())
+    }
 
     #[test]
     fn deepseek_root_gets_v1() {
@@ -383,6 +437,67 @@ mod clip_tests {
             chat_completions_url("https://api.deepseek.com/v1"),
             "https://api.deepseek.com/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn retryable_matrix() {
+        assert!(is_retryable(&json_err()));
+        assert!(!is_retryable(&AppError::msg("请先配置 API Key")));
+        assert!(!is_retryable(&AppError::Locked));
+    }
+
+    #[test]
+    fn with_retry_recovers_after_transient_failure() {
+        let mut calls = 0;
+        let out: Result<i32, AppError> = with_retry(
+            || {
+                calls += 1;
+                if calls == 1 {
+                    Err(json_err())
+                } else {
+                    Ok(7)
+                }
+            },
+            3,
+        );
+        assert_eq!(out.unwrap(), 7);
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn with_retry_surfaces_permanent_errors_immediately() {
+        let mut calls = 0;
+        let out: Result<i32, AppError> = with_retry(
+            || {
+                calls += 1;
+                Err(AppError::msg("no key"))
+            },
+            3,
+        );
+        assert!(out.unwrap_err().to_string().contains("no key"));
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn with_retry_gives_up_after_max_attempts() {
+        let mut calls = 0;
+        let out: Result<i32, AppError> = with_retry(
+            || {
+                calls += 1;
+                Err(json_err())
+            },
+            2,
+        );
+        assert!(out.is_err());
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn backoff_is_exponential() {
+        assert_eq!(backoff_ms(0), 600);
+        assert_eq!(backoff_ms(1), 1200);
+        assert_eq!(backoff_ms(2), 2400);
+        assert_eq!(backoff_ms(20), 600 << 4, "capped");
     }
 
 

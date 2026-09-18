@@ -56,6 +56,7 @@ pub struct RefreshResult {
     pub skipped_existing: usize,
     pub skipped_short: usize,
     pub skipped_non_english: usize,
+    pub skipped_duplicate: usize,
     pub feeds_unchanged: usize,
     pub titles_translated: usize,
     pub errors: Vec<String>,
@@ -65,6 +66,7 @@ struct DownloadStats {
     skipped_existing: usize,
     skipped_short: usize,
     skipped_non_english: usize,
+    skipped_duplicate: usize,
     /// Entries whose RSS body was trusted full-text without a page fetch.
     rss_fulltext_hits: usize,
     /// Entries considered for new content (denominator of fulltext_ratio).
@@ -77,6 +79,7 @@ impl Default for DownloadStats {
             skipped_existing: 0,
             skipped_short: 0,
             skipped_non_english: 0,
+            skipped_duplicate: 0,
             rss_fulltext_hits: 0,
             evaluated: 0,
         }
@@ -174,6 +177,138 @@ pub fn partition_new_urls(candidates: &[String], known: &HashSet<String>) -> (Ve
 
 pub(crate) fn select_enabled_feeds(feeds: Vec<FeedSource>) -> Vec<FeedSource> {
     feeds.into_iter().filter(|f| f.enabled).collect()
+}
+
+/// Tracking parameters stripped by [`canonical_article_url`].
+const TRACKING_PARAMS: &[&str] = &[
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id",
+    "fbclid", "gclid", "gclsrc", "dclid", "msclkid", "twclid", "igshid",
+    "ref", "ref_src", "ref_url", "mc_cid", "mc_eid", "yclid",
+    "_hsenc", "_hsmi", "vero_id", "pk_campaign", "pk_kwd", "si",
+];
+
+/// Canonical form of an article URL for dedup: drops fragment + tracking
+/// params and a trailing slash. Only http(s); other schemes pass through.
+pub(crate) fn canonical_article_url(raw: &str) -> String {
+    let Ok(mut u) = url::Url::parse(raw) else {
+        return raw.to_string();
+    };
+    if u.scheme() != "http" && u.scheme() != "https" {
+        return raw.to_string();
+    }
+    u.set_fragment(None);
+    if u.query().is_some() {
+        let kept: Vec<(String, String)> = u
+            .query_pairs()
+            .filter(|(k, _)| !TRACKING_PARAMS.contains(&k.as_ref()))
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        u.set_query(None);
+        if !kept.is_empty() {
+            u.query_pairs_mut().extend_pairs(kept);
+        }
+    }
+    if u.path().len() > 1 && u.path().ends_with('/') {
+        let trimmed = u.path().trim_end_matches('/').to_string();
+        u.set_path(&trimmed);
+    }
+    u.to_string()
+}
+
+/// Lowercase alphanumeric tokens of a title — the fuzzy-dedup key.
+pub(crate) fn title_tokens(title: &str) -> Vec<String> {
+    title
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Near-duplicate headline test across sources:
+/// - exact match after normalization always counts;
+/// - otherwise Jaccard ≥ 0.85 on token sets, but only for headline-sized
+///   titles (≥8 tokens) so short unrelated headlines can't collide.
+pub(crate) fn is_near_duplicate_title(a: &str, b: &str) -> bool {
+    let ta = title_tokens(a);
+    let tb = title_tokens(b);
+    if ta.is_empty() || tb.is_empty() {
+        return false;
+    }
+    if ta == tb {
+        return true;
+    }
+    if ta.len() < 8 || tb.len() < 8 {
+        return false;
+    }
+    let sa: std::collections::HashSet<&String> = ta.iter().collect();
+    let sb: std::collections::HashSet<&String> = tb.iter().collect();
+    let inter = sa.intersection(&sb).count();
+    let union = sa.union(&sb).count();
+    union > 0 && (inter as f64) / (union as f64) >= 0.85
+}
+
+/// In-memory title index for cross-source dedup during one refresh.
+struct TitleIndex {
+    exact: std::collections::HashSet<String>,
+    fuzzy: Vec<(String, Vec<String>)>,
+}
+
+impl TitleIndex {
+    fn new(rows: Vec<(String, String)>) -> Self {
+        let mut index = Self {
+            exact: std::collections::HashSet::new(),
+            fuzzy: Vec::new(),
+        };
+        for (title, _url) in rows {
+            index.insert(&title);
+        }
+        index
+    }
+
+    fn insert(&mut self, title: &str) {
+        let tokens = title_tokens(title);
+        if tokens.is_empty() {
+            return;
+        }
+        self.exact.insert(tokens.join(" "));
+        self.fuzzy.push((title.to_string(), tokens));
+    }
+
+    fn is_dup(&self, title: &str) -> bool {
+        let tokens = title_tokens(title);
+        if tokens.is_empty() {
+            return false;
+        }
+        if self.exact.contains(&tokens.join(" ")) {
+            return true;
+        }
+        self.fuzzy
+            .iter()
+            .any(|(existing, _)| is_near_duplicate_title(title, existing))
+    }
+}
+
+/// Bodies ending in these markers were cut off — a teaser or a truncated
+/// extract, never the whole story.
+const TRUNCATION_TAIL_MARKERS: &[&str] = &[
+    "continue reading",
+    "read more",
+    "read the rest",
+    "read the full",
+    "view the full",
+    "full story at",
+    "[…]",
+    "…]",
+];
+
+/// True when the tail of a body looks cut off (feed teasers / truncated extracts).
+pub(crate) fn looks_truncated(text: &str) -> bool {
+    let char_count = text.chars().count();
+    let skip = char_count.saturating_sub(100);
+    let tail: String = text.chars().skip(skip).collect();
+    let lower = tail.to_ascii_lowercase();
+    TRUNCATION_TAIL_MARKERS.iter().any(|m| lower.contains(m))
 }
 
 /// Per-feed trust bar for RSS bodies, adapted by the feed's observed
@@ -289,11 +424,22 @@ pub fn refresh_feeds(
     let known_urls = std::sync::Mutex::new({
         let conn = db.lock_write()?;
         db::list_article_urls(&conn)?
+            .into_iter()
+            .map(|u| canonical_article_url(&u))
+            .collect::<HashSet<String>>()
     });
+    // Dedup window: only recent titles, so recurring same-name features
+    // (daily briefings, link roundups) are never swallowed forever.
+    let dedup_since = (Utc::now() - chrono::Duration::days(14)).to_rfc3339();
+    let title_index = std::sync::Mutex::new(TitleIndex::new({
+        let conn = db.lock_read()?;
+        db::list_article_titles(&conn, Some(&dedup_since))?
+    }));
     let known_lengths = {
         let conn = db.lock_read()?;
         db::list_article_content_lengths(&conn)?
     };
+    let upgraded = std::sync::Mutex::<HashSet<String>>::new(HashSet::new());
 
     let next_index = std::sync::atomic::AtomicUsize::new(0);
     let done_feeds = std::sync::atomic::AtomicUsize::new(0);
@@ -320,7 +466,14 @@ pub fn refresh_feeds(
 
                 let trust_chars = rss_trust_chars(feed.fulltext_ratio);
                 let outcome =
-                    download_feed_articles(&HTTP, feed, trust_chars, &known_urls, &known_lengths);
+                    download_feed_articles(
+                        &HTTP,
+                        feed,
+                        trust_chars,
+                        &known_urls,
+                        &known_lengths,
+                        &upgraded,
+                    );
                 done_feeds.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
                 let mut ok = true;
@@ -343,12 +496,24 @@ pub fn refresh_feeds(
                                 Ok(conn) => {
                                     let mut stats = stats;
                                     for article in &download.articles {
+                                        if title_index
+                                            .lock()
+                                            .expect("title index lock")
+                                            .is_dup(&article.title)
+                                        {
+                                            stats.skipped_duplicate += 1;
+                                            continue;
+                                        }
                                         match db::insert_article_if_new(&conn, article) {
                                             Ok(true) => {
                                                 known_urls
                                                     .lock()
                                                     .expect("known urls lock")
                                                     .insert(article.url.clone());
+                                                title_index
+                                                    .lock()
+                                                    .expect("title index lock")
+                                                    .insert(&article.title);
                                                 (shared.lock().expect("refresh lock"))
                                                     .added_or_updated += 1;
                                             }
@@ -379,6 +544,7 @@ pub fn refresh_feeds(
                                     result.skipped_existing += stats.skipped_existing;
                                     result.skipped_short += stats.skipped_short;
                                     result.skipped_non_english += stats.skipped_non_english;
+                                    result.skipped_duplicate += stats.skipped_duplicate;
                                 }
                             }
                         }
@@ -542,6 +708,7 @@ fn download_feed_articles(
     trust_chars: usize,
     known_urls: &std::sync::Mutex<HashSet<String>>,
     known_lengths: &HashMap<String, usize>,
+    upgraded: &std::sync::Mutex<HashSet<String>>,
 ) -> Result<FeedDownload, AppError> {
     let mut stats = DownloadStats::default();
     let request = client.get(&feed.url);
@@ -596,6 +763,7 @@ fn download_feed_articles(
         if url.is_empty() {
             continue;
         }
+        let url = canonical_article_url(&url);
 
         let title = entry
             .title
@@ -618,9 +786,18 @@ fn download_feed_articles(
             stats.evaluated += 1;
             if rss_text.chars().count() >= trust_chars
                 && is_readable_article_body(&rss_text)
+                && !looks_truncated(&rss_text)
                 && rss_text.split_whitespace().count() >= MIN_ARTICLE_WORDS
                 && rss_text.chars().count() > stored_len
             {
+                // Two parallel workers can see the same URL from different
+                // feeds; only the first upgrade wins.
+                let mut upgraded = upgraded.lock().map_err(|_| "upgraded set poisoned")?;
+                if !upgraded.insert(url.clone()) {
+                    stats.skipped_existing += 1;
+                    continue;
+                }
+                drop(upgraded);
                 stats.rss_fulltext_hits += 1;
                 updates.push(fulltext_article(
                     String::new(), // not used by refresh_article_content
@@ -642,10 +819,11 @@ fn download_feed_articles(
             continue;
         }
 
-        // Full-text RSS can be trusted; teaser / chrome / tag-wall bodies must
-        // fetch the article page. If the page is also junk, skip.
+        // Full-text RSS can be trusted; teaser / chrome / tag-wall / truncated
+        // bodies must fetch the article page. If the page is also junk, skip.
         let content_text = if rss_text.chars().count() >= trust_chars
             && is_readable_article_body(&rss_text)
+            && !looks_truncated(&rss_text)
         {
             stats.evaluated += 1;
             stats.rss_fulltext_hits += 1;
@@ -1001,12 +1179,17 @@ pub fn import_article_from_url(db: &DbState, url: &str) -> Result<Article, AppEr
         }
     }
 
-    let extracted = extract_article_page(&HTTP, url)?;
+    let url: String = canonical_article_url(url);
+
+    let extracted = extract_article_page(&HTTP, &url)?;
     if looks_like_paywall(&extracted.text) {
         return Err("疑似付费墙，已跳过".into());
     }
     if !is_english_article(None, &extracted.title, &extracted.text) {
         return Err("看起来不是英文文章".into());
+    }
+    if looks_truncated(&extracted.text) {
+        return Err("正文疑似被截断，已跳过".into());
     }
 
     let article = Article {
@@ -1014,7 +1197,7 @@ pub fn import_article_from_url(db: &DbState, url: &str) -> Result<Article, AppEr
         url: url.to_string(),
         title: extracted.title,
         title_zh: String::new(),
-        source: source_from_url(url),
+        source: source_from_url(&url),
         category: "other".into(),
         published_at: None,
         word_count: extracted.text.split_whitespace().count() as i64,
@@ -1034,7 +1217,7 @@ pub fn import_article_from_url(db: &DbState, url: &str) -> Result<Article, AppEr
     {
         let conn = db.lock_write()?;
         if !db::insert_article_if_new(&conn, &article)? {
-            return db::get_article_by_url(&conn, url)?
+            return db::get_article_by_url(&conn, &url)?
                 .ok_or_else(|| "导入失败：文章未写入".into());
         }
     }
@@ -1093,12 +1276,16 @@ fn looks_like_paywall(text: &str) -> bool {
 /// - Otherwise only accept a page extract that is real prose (not a teaser,
 ///   nav/tag wall, or link dump). Never keep chrome just because it is long.
 fn choose_article_body(rss_text: &str, page_text: Option<&str>) -> Option<String> {
-    if rss_text.chars().count() >= TRUST_RSS_FULLTEXT_CHARS && is_readable_article_body(rss_text)
+    if rss_text.chars().count() >= TRUST_RSS_FULLTEXT_CHARS
+        && is_readable_article_body(rss_text)
+        && !looks_truncated(rss_text)
     {
         return Some(rss_text.to_string());
     }
     match page_text {
-        Some(page) if is_readable_article_body(page) => Some(page.to_string()),
+        Some(page) if is_readable_article_body(page) && !looks_truncated(page) => {
+            Some(page.to_string())
+        }
         _ => None,
     }
 }
@@ -1153,6 +1340,80 @@ mod tests {
             "unknown ratio keeps the default"
         );
         assert_eq!(rss_trust_chars(0.5), TRUST_RSS_FULLTEXT_CHARS);
+    }
+
+    #[test]
+    fn canonical_url_strips_tracking_and_noise() {
+        assert_eq!(
+            canonical_article_url(
+                "https://example.com/story?utm_source=rss&utm_medium=feed&id=7#more"
+            ),
+            "https://example.com/story?id=7"
+        );
+        assert_eq!(
+            canonical_article_url("https://Example.com/story/?fbclid=abc"),
+            "https://example.com/story"
+        );
+        assert_eq!(
+            canonical_article_url("https://example.com/a?gclid=x&fbclid=y"),
+            "https://example.com/a"
+        );
+        // Non-http schemes and unparseable input pass through untouched.
+        assert_eq!(canonical_article_url("mailto:a@b.c"), "mailto:a@b.c");
+        assert_eq!(canonical_article_url("not a url"), "not a url");
+    }
+
+    #[test]
+    fn near_duplicate_title_rules() {
+        assert!(is_near_duplicate_title(
+            "Fed Signals Open Door to Rate Cuts",
+            "fed signals open door to rate cuts"
+        ));
+        assert!(is_near_duplicate_title(
+            "Fed Signals Open Door to Rate Cuts in September Meeting Minutes",
+            "Fed Signals Open Door to Rate Cuts in September Meeting Minutes"
+        ));
+        // Long headlines differing by a couple of words.
+        let a = "The Federal Reserve Signaled It Could Cut Interest Rates at Its September Policy Meeting";
+        let b = "The Federal Reserve Signaled It Might Cut Interest Rates at Its September Policy Meeting";
+        assert!(is_near_duplicate_title(a, b));
+        // Short headlines need exact matches.
+        assert!(!is_near_duplicate_title(
+            "Markets slide again",
+            "Markets slide today"
+        ));
+        // Unrelated long headlines stay apart.
+        assert!(!is_near_duplicate_title(
+            "How remote work reshaped suburban housing markets across America",
+            "A deep dive into the history of jazz piano in New Orleans"
+        ));
+        assert!(!is_near_duplicate_title("", "anything"));
+    }
+
+    #[test]
+    fn title_index_dedups_across_sources() {
+        let mut index = TitleIndex::new(vec![]);
+        index.insert("Fed Signals Open Door to Rate Cuts in September Meeting Minutes");
+        assert!(index.is_dup("fed signals open door to rate cuts in september meeting minutes"));
+        assert!(!index.is_dup("Earnings Season Begins With a Whimper"));
+        index.insert("Earnings Season Begins With a Whimper Amid Rate Anxiety This Quarter");
+        assert!(index.is_dup("Earnings Season Begins With a Whimper Amid Rate Anxiety This Quarter"));
+    }
+
+    #[test]
+    fn truncated_tails_force_page_fetch() {
+        let body = "word ".repeat(500) + "Continue reading…";
+        assert!(looks_truncated(&body));
+        // Long readable body ending with a read-more marker is NOT trusted.
+        assert!(choose_article_body(&body, None).is_none());
+        // A clean page extract is still accepted.
+        let full = "word ".repeat(500);
+        assert!(choose_article_body(&body, Some(&full)).is_some());
+        // Clean fulltext is unaffected.
+        let clean = "word ".repeat(500);
+        assert!(!looks_truncated(&clean));
+        assert!(choose_article_body(&clean, None).is_some());
+        assert!(!looks_truncated("short"));
     }
 
     #[test]

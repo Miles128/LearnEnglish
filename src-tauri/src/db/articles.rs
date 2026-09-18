@@ -287,21 +287,24 @@ pub fn set_article_quality(
 }
 
 /// Accumulate visible reading time and optionally mark the article as read to the end.
+/// Delta is clamped so a buggy client can't inflate a session in one call.
 pub fn add_article_reading_progress(
     conn: &Connection,
     id: &str,
     dwell_ms_delta: i64,
     read_completed: bool,
 ) -> Result<(), AppError> {
+    const MAX_DWELL_DELTA_MS: i64 = 120_000;
+    let delta = dwell_ms_delta.clamp(-MAX_DWELL_DELTA_MS, MAX_DWELL_DELTA_MS);
     let changed = conn
         .execute(
             "UPDATE articles
              SET dwell_ms = MAX(0, dwell_ms + ?1),
                  read_completed = CASE WHEN ?2 THEN 1 ELSE read_completed END
              WHERE id=?3",
-            params![dwell_ms_delta, read_completed, id],
+            params![delta, read_completed, id],
         )
-        ?;
+        .map_err(AppError::from)?;
     if changed == 0 {
         return Err(AppError::msg("article not found"));
     }
@@ -319,6 +322,28 @@ pub fn set_article_liked(conn: &Connection, id: &str, liked: bool) -> Result<(),
         return Err(AppError::msg("article not found"));
     }
     Ok(())
+}
+
+/// `(title, url)` of articles ingested within the dedup window — the seed for
+/// the refresh-time title-dedup index. Windowed so recurring same-name
+/// features (daily briefings, link roundups) are never swallowed forever.
+pub fn list_article_titles(
+    conn: &Connection,
+    since: Option<&str>,
+) -> Result<Vec<(String, String)>, AppError> {
+    let (sql, args): (&str, Vec<&str>) = match since {
+        Some(s) => ("SELECT title, url FROM articles WHERE fetched_at >= ?1", vec![s]),
+        None => ("SELECT title, url FROM articles", vec![]),
+    };
+    let mut stmt = conn.prepare(sql).map_err(AppError::from)?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(args.iter()), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(AppError::from)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(AppError::from)?;
+    Ok(rows)
 }
 
 /// All-time open counts grouped by source and by category — the affinity

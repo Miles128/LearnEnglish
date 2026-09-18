@@ -150,6 +150,7 @@ export default function Home() {
       setMessage(
         `新增 ${result.added_or_updated}` +
           (result.skipped_existing ? ` · 已有 ${result.skipped_existing}` : "") +
+          (result.skipped_duplicate ? ` · 去重 ${result.skipped_duplicate}` : "") +
           (result.feeds_unchanged ? ` · ${result.feeds_unchanged} 源无更新` : "") +
           (result.titles_translated ? ` · 译题/简介 ${result.titles_translated}` : "") +
           (result.errors.length ? ` · ${result.errors.length} 个问题` : ""),

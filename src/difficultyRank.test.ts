@@ -27,6 +27,7 @@ function item(id: string, rankScore: number): ArticleListItem {
     dwell_ms: 0,
     read_completed: false,
     liked: false,
+    tags: [],
   };
 }
 

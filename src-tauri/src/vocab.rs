@@ -181,6 +181,55 @@ tags is 2–3 short lowercase English topic tags (e.g. ["economy","central-bank"
         .collect())
 }
 
+/// Tags-only pass for backfilling existing articles — no title/summary
+/// output tokens are paid for.
+#[derive(Deserialize, Default)]
+pub struct ArticleTagsOut {
+    #[serde(default)]
+    pub tags: Vec<String>,
+}
+
+pub fn assign_article_tags(
+    cfg: &AppConfig,
+    cards: &[ArticleCardIn],
+) -> Result<Vec<Vec<String>>, AppError> {
+    if cards.is_empty() {
+        return Ok(vec![]);
+    }
+    ensure_configured(cfg)?;
+    let system = r#"You label English news/articles for a language learner's feed.
+Given a JSON array of objects {title, excerpt}, return ONLY a JSON array of the same length.
+Each item must be {"tags":["<tag1>","<tag2>"]}.
+tags is 2-3 short lowercase English topic tags describing the subject (e.g. ["economy","central-bank"]). Prefer specific topics over generic ones (avoid "news").
+No markdown fences, no commentary."#;
+    let payload = serde_json::to_string(cards)?;
+    let out: Vec<ArticleTagsOut> = chat_json(cfg, system, &payload, "article tags")?;
+    if out.len() != cards.len() {
+        return Err(AppError::msg(format!(
+            "article tag count mismatch: got {} expected {}",
+            out.len(),
+            cards.len()
+        )));
+    }
+    Ok(out.into_iter().map(|row| normalize_tags(row.tags)).collect())
+}
+
+/// Lowercase, trim, dedupe, cap at 3 tags.
+pub fn normalize_tags(tags: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for tag in tags {
+        let t = tag.trim().to_lowercase();
+        if t.is_empty() || out.contains(&t) {
+            continue;
+        }
+        out.push(t);
+        if out.len() >= 3 {
+            break;
+        }
+    }
+    out
+}
+
 pub fn enrich_vocab(cfg: &AppConfig, term: &str, context: &str) -> Result<VocabEnrichment, AppError> {
     ensure_configured(cfg)?;
     let system = r#"You help English learners. Given a word/phrase and its context sentence, return ONLY valid JSON with keys:

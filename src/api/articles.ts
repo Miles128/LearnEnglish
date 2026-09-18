@@ -15,12 +15,20 @@ export const apiArticles = {
       limit: limit ?? null,
       offset: offset ?? null,
     }),
-  listArticlesRanked: (category?: string, limit?: number, offset?: number) =>
+  listArticlesRanked: (
+    category?: string,
+    tags?: string[],
+    limit?: number,
+    offset?: number,
+  ) =>
     invoke<ArticleListItem[]>("list_articles_ranked", {
       category: category ?? null,
+      tags: tags && tags.length > 0 ? tags : null,
       limit: limit ?? null,
       offset: offset ?? null,
     }),
+  fillMissingTags: (limit?: number) =>
+    invoke<number>("fill_missing_tags", { limit: limit ?? null }),
   getArticleView: (id: string) =>
     invoke<ArticleView | null>("get_article_view", { id }),
   markArticleOpened: (id: string) =>

@@ -22,6 +22,7 @@ function item(id: string, opened: boolean): ArticleListItem {
     dwell_ms: 0,
     read_completed: false,
     liked: false,
+    tags: [],
   };
 }
 

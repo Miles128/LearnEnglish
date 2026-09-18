@@ -82,6 +82,9 @@ export default function SourceBoard({ section, categories, difficultyById }: Pro
                     <p className="article-title-zh">{a.title_zh}</p>
                   ) : null}
                   {blurb ? <p className="article-summary-zh">{blurb}</p> : null}
+                  {a.tags.length > 0 ? (
+                    <p className="article-tags muted">{a.tags.join(" · ")}</p>
+                  ) : null}
                 </Link>
               </li>
             );

@@ -17,8 +17,23 @@ import { applyDifficultyOrder } from "../difficultyRank";
 
 const PAGE_SIZE = 60;
 
+/** Tag chips shown in the filter row: most frequent first, capped. */
+export function topTags(articles: ArticleListItem[], max: number = 12): string[] {
+  const counts = new Map<string, number>();
+  for (const a of articles) {
+    for (const tag of a.tags ?? []) {
+      counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    }
+  }
+  return [...counts.entries()]
+    .sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))
+    .slice(0, max)
+    .map(([tag]) => tag);
+}
+
 export default function Home() {
   const [category, setCategory] = useState("all");
+  const [activeTags, setActiveTags] = useState<string[]>([]);
   const [categories, setCategories] = useState<FeedCategory[]>([]);
   const [articles, setArticles] = useState<ArticleListItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -43,6 +58,7 @@ export default function Home() {
       const [list, cats, stats] = await Promise.all([
         api.listArticlesRanked(
           category === "all" ? undefined : category,
+          activeTags,
           PAGE_SIZE,
           0,
         ),
@@ -59,7 +75,7 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, [category]);
+  }, [category, activeTags]);
 
   useEffect(() => {
     didBackfill.current = false;
@@ -80,6 +96,22 @@ export default function Home() {
     }
   }, [load]);
 
+  // Tag backfill shares the once-per-mount guard with the card backfill.
+  useEffect(() => {
+    if (didBackfill.current) return;
+    if (!hasLlm || loading || articles.length === 0) return;
+    if (!articles.some((a) => a.tags.length === 0)) return;
+    didBackfill.current = true;
+    void (async () => {
+      try {
+        const n = await api.fillMissingTags(100);
+        if (n > 0) await load();
+      } catch {
+        didBackfill.current = false;
+      }
+    })();
+  }, [articles, hasLlm, loading, load]);
+
   useEffect(() => {
     if (didBackfill.current) return;
     if (!hasLlm || loading || articles.length === 0) return;
@@ -94,6 +126,7 @@ export default function Home() {
     try {
       const next = await api.listArticlesRanked(
         category === "all" ? undefined : category,
+        activeTags,
         PAGE_SIZE,
         articles.length,
       );
@@ -107,6 +140,10 @@ export default function Home() {
       setLoadingMore(false);
     }
   }
+
+  // Tag chips come from the loaded window; keeping the filter row stable
+  // while filtered results are shown requires remembering them.
+  const availableTags = useMemo(() => topTags(articles), [articles]);
 
   const tabCategories = useMemo(() => {
     const tabs = [{ id: "all", label: "全部" }];
@@ -201,6 +238,39 @@ export default function Home() {
           </button>
         ))}
       </div>
+
+      {availableTags.length > 0 && (
+        <div className="tag-filter">
+          {availableTags.map((tag) => {
+            const on = activeTags.includes(tag);
+            return (
+              <button
+                key={tag}
+                type="button"
+                className={on ? "tag-chip active" : "tag-chip"}
+                onClick={() =>
+                  setActiveTags((prev) =>
+                    prev.includes(tag)
+                      ? prev.filter((t) => t !== tag)
+                      : [...prev, tag],
+                  )
+                }
+              >
+                {tag}
+              </button>
+            );
+          })}
+          {activeTags.length > 0 && (
+            <button
+              type="button"
+              className="tag-chip clear"
+              onClick={() => setActiveTags([])}
+            >
+              清除筛选
+            </button>
+          )}
+        </div>
+      )}
 
       {learningStats && (
         <p className="learning-insight">{formatLearningInsight(learningStats)}</p>

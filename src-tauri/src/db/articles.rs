@@ -3,7 +3,7 @@ use super::{Article, ArticleListItem};
 use rusqlite::{params, Connection, OptionalExtension};
 
 const ARTICLE_COLS: &str =
-    "id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin,summary_zh,last_opened_at,open_count,word_count,quality,extraction_source,dwell_ms,read_completed,liked";
+    "id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin,summary_zh,last_opened_at,open_count,word_count,quality,extraction_source,dwell_ms,read_completed,liked,tags_json";
 
 /// Home list only needs an excerpt (known% + blurb). Full body stays on get_article.
 pub const LIST_EXCERPT_CHARS: i32 = 6000;
@@ -14,15 +14,41 @@ pub fn list_articles(
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<ArticleListItem>, AppError> {
+    list_articles_filtered(conn, category, &[], limit, offset)
+}
+
+/// List with an optional tag filter (OR semantics across the given tags).
+pub fn list_articles_filtered(
+    conn: &Connection,
+    category: Option<&str>,
+    tags: &[String],
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<ArticleListItem>, AppError> {
     let mut sql = format!(
-        "SELECT id,url,title,title_zh,source,category,published_at,SUBSTR(content_text,1,{LIST_EXCERPT_CHARS}),fetched_at,origin,summary_zh,last_opened_at,open_count,word_count,quality,extraction_source,dwell_ms,read_completed,liked FROM articles"
+        "SELECT id,url,title,title_zh,source,category,published_at,SUBSTR(content_text,1,{LIST_EXCERPT_CHARS}),fetched_at,origin,summary_zh,last_opened_at,open_count,word_count,quality,extraction_source,dwell_ms,read_completed,liked,tags_json FROM articles"
     );
     let mut params: Vec<rusqlite::types::Value> = vec![];
+    let mut clauses: Vec<String> = vec![];
     if let Some(cat) = category {
         if cat != "all" {
-            sql.push_str(" WHERE category=?");
+            clauses.push("category=?".into());
             params.push(rusqlite::types::Value::Text(cat.to_string()));
         }
+    }
+    if !tags.is_empty() {
+        let ors: Vec<String> = tags
+            .iter()
+            .map(|_| "EXISTS (SELECT 1 FROM json_each(tags_json) WHERE value=?)".to_string())
+            .collect();
+        clauses.push(format!("({})", ors.join(" OR ")));
+        for tag in tags {
+            params.push(rusqlite::types::Value::Text(tag.clone()));
+        }
+    }
+    if !clauses.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&clauses.join(" AND "));
     }
     sql.push_str(" ORDER BY source ASC, fetched_at DESC, published_at DESC, id ASC");
     sql.push_str(" LIMIT ? OFFSET ?");
@@ -58,6 +84,7 @@ pub fn map_article_list_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<Articl
         dwell_ms: row.get(16)?,
         read_completed: row.get::<_, i64>(17)? != 0,
         liked: row.get::<_, i64>(18)? != 0,
+        tags: parse_tags_json(&row.get::<_, String>(19)?),
     })
 }
 
@@ -82,6 +109,7 @@ pub fn map_article(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
         dwell_ms: row.get(16)?,
         read_completed: row.get::<_, i64>(17)? != 0,
         liked: row.get::<_, i64>(18)? != 0,
+        tags: parse_tags_json(&row.get::<_, String>(19)?),
     })
 }
 
@@ -410,6 +438,82 @@ pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<(), AppErro
     )
     .map_err(AppError::from)?;
     Ok(())
+}
+
+/// Parse the stored tags JSON; malformed/empty → no tags.
+pub fn parse_tags_json(raw: &str) -> Vec<String> {
+    if raw.trim().is_empty() {
+        return vec![];
+    }
+    serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
+}
+
+/// Articles that still lack topic tags (for the one-time / rolling backfill).
+pub fn articles_missing_tags(conn: &Connection, limit: usize) -> Result<Vec<Article>, AppError> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {ARTICLE_COLS} FROM articles
+             WHERE IFNULL(tags_json,'') = '' AND quality='fulltext'
+             ORDER BY fetched_at DESC
+             LIMIT ?1"
+        ))
+        .map_err(AppError::from)?;
+    let rows = stmt
+        .query_map(params![limit as i64], map_article)
+        .map_err(AppError::from)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(AppError::from)?;
+    Ok(rows)
+}
+
+/// Interest profile inputs for tag-based ranking:
+/// - `user_weights`: tag → engagement weight (liked 2.0, read-to-end 1.0)
+/// - `doc_counts`: tag → number of articles carrying it
+/// - `docs`: number of tagged articles (IDF denominator)
+pub fn tag_profile(
+    conn: &Connection,
+) -> Result<
+    (
+        std::collections::HashMap<String, f64>,
+        std::collections::HashMap<String, i64>,
+        i64,
+    ),
+    AppError,
+> {
+    let mut stmt = conn
+        .prepare("SELECT tags_json, liked, read_completed FROM articles")
+        .map_err(AppError::from)?;
+    let mut rows = stmt.query([]).map_err(AppError::from)?;
+
+    let mut user_weights: std::collections::HashMap<String, f64> =
+        std::collections::HashMap::new();
+    let mut doc_counts: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
+    let mut docs = 0i64;
+
+    while let Some(row) = rows.next().map_err(AppError::from)? {
+        let tags = parse_tags_json(&row.get::<_, String>(0).map_err(AppError::from)?);
+        if tags.is_empty() {
+            continue;
+        }
+        docs += 1;
+        let liked: i64 = row.get(1).map_err(AppError::from)?;
+        let completed: i64 = row.get(2).map_err(AppError::from)?;
+        let weight = if liked != 0 {
+            2.0
+        } else if completed != 0 {
+            1.0
+        } else {
+            0.0
+        };
+        for tag in tags {
+            *doc_counts.entry(tag.clone()).or_insert(0) += 1;
+            if weight > 0.0 {
+                *user_weights.entry(tag).or_insert(0.0) += weight;
+            }
+        }
+    }
+    Ok((user_weights, doc_counts, docs))
 }
 
 /// All-time open counts grouped by source and by category — the affinity

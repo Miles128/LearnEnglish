@@ -50,19 +50,37 @@ const RANK_WINDOW: i64 = 400;
 pub async fn list_articles_ranked(
     app: AppHandle,
     category: Option<String>,
+    tags: Option<Vec<String>>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<ArticleListItem>, AppError> {
+    let tags = tags.unwrap_or_default();
     crate::commands::spawn_db(app, move |state| {
         let items = {
             let conn = state.lock_read()?;
-            db::list_articles(&conn, category.as_deref(), Some(RANK_WINDOW), Some(0))?
+            db::list_articles_filtered(
+                &conn,
+                category.as_deref(),
+                &tags,
+                Some(RANK_WINDOW),
+                Some(0),
+            )?
         };
         let (source_opens, category_opens) = {
             let conn = state.lock_read()?;
             db::affinity_open_counts(&conn)?
         };
-        let affinity = crate::rank::Affinity::from_maps(source_opens, category_opens);
+        let (tag_weights, tag_doc_counts, tagged_docs) = {
+            let conn = state.lock_read()?;
+            db::tag_profile(&conn)?
+        };
+        let affinity = crate::rank::Affinity::from_maps(
+            source_opens,
+            category_opens,
+            tag_weights,
+            tag_doc_counts,
+            tagged_docs,
+        );
         let now = chrono::Utc::now();
         let day_key = i64::from(now.num_days_from_ce());
         let ranked = crate::rank::rank_articles(items, &affinity, now, day_key);
@@ -73,6 +91,19 @@ pub async fn list_articles_ranked(
             .skip(start)
             .take(take)
             .collect())
+    })
+    .await
+}
+
+/// Backfill topic tags (bounded per call; refresh also runs a batch).
+#[tauri::command]
+pub async fn fill_missing_tags(app: AppHandle, limit: Option<usize>) -> Result<usize, AppError> {
+    let cfg = crate::config::load_config()?;
+    if cfg.api_key.trim().is_empty() {
+        return Ok(0);
+    }
+    crate::commands::spawn_db(app, move |state| {
+        Ok(feeds::fill_missing_tags(state, &cfg, limit.unwrap_or(200), |_, _| {})?)
     })
     .await
 }

@@ -95,6 +95,9 @@ pub struct Article {
     pub read_completed: bool,
     #[serde(default)]
     pub liked: bool,
+    /// Lowercase English topic tags from card translation (semantic profile input).
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// Home-list row: excerpt only. Full body stays on `Article` / get_article.
@@ -134,6 +137,9 @@ pub struct ArticleListItem {
     pub read_completed: bool,
     #[serde(default)]
     pub liked: bool,
+    /// Lowercase English topic tags (for filtering + interest profile).
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

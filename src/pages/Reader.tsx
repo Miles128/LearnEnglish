@@ -25,6 +25,7 @@ import { useAppConfig, useVocab } from "../store";
 import { useArticle } from "../useArticle";
 import { useTts } from "../useTts";
 import { useEscapeKey } from "../useEscapeKey";
+import { loadScroll, rememberLastArticle, saveScroll } from "../lastArticle";
 import {
   applyTranslateProgress,
   categoryLabel,
@@ -156,12 +157,34 @@ export default function Reader() {
     };
   }, [id]);
 
-  // Read-to-the-end detection: near the bottom of the article body.
+  // Remember the article so other pages can offer "continue reading".
+  useEffect(() => {
+    if (id) rememberLastArticle(id);
+  }, [id]);
+
+  // Restore the previous scroll offset once the body is on screen.
+  const restoredRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!id || view !== "ready" || restoredRef.current === id) return;
+    restoredRef.current = id;
+    const y = loadScroll(id);
+    if (y && y > 0) {
+      requestAnimationFrame(() => window.scrollTo({ top: y, behavior: "auto" }));
+    }
+  }, [id, view]);
+
+  // Read-to-the-end detection + scroll memory.
   useEffect(() => {
     if (!id) return;
     readCompletedRef.current = false;
     setLikedOverride(null);
+    let lastSaved = 0;
     const onScroll = () => {
+      const now = Date.now();
+      if (now - lastSaved > 500) {
+        lastSaved = now;
+        saveScroll(id, window.scrollY);
+      }
       if (readCompletedRef.current) return;
       const doc = document.documentElement;
       if (window.innerHeight + window.scrollY >= doc.scrollHeight - 400) {
@@ -171,7 +194,10 @@ export default function Reader() {
     };
     window.addEventListener("scroll", onScroll, { passive: true });
     onScroll();
-    return () => window.removeEventListener("scroll", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      saveScroll(id, window.scrollY);
+    };
   }, [id]);
 
   function toggleLiked() {

@@ -9,6 +9,7 @@ import {
 } from "./placement/engine";
 import { useAppConfig } from "./store";
 import { applyTheme, isThemePref } from "./theme";
+import { lastArticlePath } from "./lastArticle";
 import { api, type RefreshResult } from "./api";
 import { type RefreshProgress } from "./api";
 import ManageFeedsDrawer from "./components/ManageFeedsDrawer";
@@ -44,6 +45,15 @@ function IconVocab() {
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
       <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+    </svg>
+  );
+}
+
+function IconResume() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 21a9 9 0 1 0-9-9" />
+      <path d="M3 3v6h6" />
     </svg>
   );
 }
@@ -165,6 +175,8 @@ export default function App() {
     }
   }
 
+  const resumePath = lastArticlePath();
+
   const forcePlacement = shouldForcePlacement(cfg);
   const hideNav = shouldHideAppNav({
     ready,
@@ -209,6 +221,17 @@ export default function App() {
         )}
         {!hideNav && (
           <div className="topbar-actions">
+            {resumePath && location.pathname !== resumePath && (
+              <button
+                type="button"
+                className="topbar-btn"
+                onClick={() => navigate(resumePath)}
+                title="继续上次阅读"
+                aria-label="继续上次阅读"
+              >
+                <IconResume />
+              </button>
+            )}
             <button
               type="button"
               className={`topbar-btn${refreshing ? " spin" : ""}`}

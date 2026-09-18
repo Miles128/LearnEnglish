@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { defaultAppConfig, type AppConfig } from "../api";
 import { normalizeConfig, useAppConfig } from "../store";
+import { isThemePref, THEME_LABELS, THEME_PREFS, type ThemePref } from "../theme";
 import {
   READER_FONTS,
   READER_FONT_SIZES,
@@ -61,6 +62,25 @@ export default function Settings() {
 
       {msg && <p className="banner ok">{msg}</p>}
       {error && <p className="banner err">{error}</p>}
+
+      <section className="settings-section">
+        <h2>外观</h2>
+        <label>
+          主题
+          <select
+            value={isThemePref(cfg.theme) ? cfg.theme : "system"}
+            onChange={(e) =>
+              setCfg({ ...cfg, theme: e.target.value as ThemePref })
+            }
+          >
+            {THEME_PREFS.map((p) => (
+              <option key={p} value={p}>
+                {THEME_LABELS[p]}
+              </option>
+            ))}
+          </select>
+        </label>
+      </section>
 
       <section className="settings-section">
         <h2>阅读难度</h2>

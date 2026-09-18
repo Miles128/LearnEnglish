@@ -7,12 +7,8 @@
  */
 
 import {
-  CEFR_LEVELS,
   FREQ_BANDS,
-  isHardWord,
   lookupWord,
-  type CefrLevel,
-  type DifficultyPrefs,
   type FreqBand,
 } from "./wordLevels";
 
@@ -33,15 +29,6 @@ export const DIFFICULTY_LABELS: Record<DifficultyLevel, string> = {
   hardest: "极难",
 };
 
-const CEFR_INDEX: Record<CefrLevel, number> = {
-  A1: 0,
-  A2: 1,
-  B1: 2,
-  B2: 3,
-  C1: 4,
-  C2: 5,
-};
-
 const BAND_INDEX: Record<FreqBand, number> = {
   1000: 0,
   3000: 1,
@@ -50,13 +37,55 @@ const BAND_INDEX: Record<FreqBand, number> = {
   20000: 4,
 };
 
-/** Bucket edges on the difficulty score (density × sentence factor). */
-const LEVEL_EDGES: [number, DifficultyLevel][] = [
-  [0.02, "easy"],
-  [0.05, "normal"],
-  [0.1, "hard"],
-  [0.18, "harder"],
+/** Default bucket edges on the difficulty score (density × sentence factor). */
+export const DEFAULT_EDGES: readonly [number, number, number, number] = [
+  0.02, 0.05, 0.1, 0.18,
 ];
+export type DifficultyEdges = readonly [number, number, number, number];
+
+/** Minimum sample before calibration is trusted at all. */
+const MIN_CALIBRATION_SAMPLES = 40;
+/** How much weight the observed distribution gets vs the default edges. */
+const CALIBRATION_BLEND = 0.5;
+/** Bucket targets: 15% easy, 25% normal, 30% hard, 20% harder, rest hardest. */
+const CALIBRATION_QUANTILES = [0.15, 0.4, 0.7, 0.9] as const;
+
+function quantile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return 0;
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  if (lo === hi) return sorted[lo]!;
+  const t = pos - lo;
+  return sorted[lo]! * (1 - t) + sorted[hi]! * t;
+}
+
+/**
+ * Calibrate the five bucket edges against the learner's own library so
+ * 简单/普通/较难 mean "relative to what you actually read". Blends the
+ * observed quantiles with the defaults to stay stable on small samples.
+ */
+export function calibrateEdges(scores: number[]): DifficultyEdges {
+  const sorted = scores.filter((s) => Number.isFinite(s)).sort((a, b) => a - b);
+  if (sorted.length < MIN_CALIBRATION_SAMPLES) {
+    return DEFAULT_EDGES;
+  }
+  const observed = CALIBRATION_QUANTILES.map((q) =>
+    quantile(sorted, q),
+  ) as unknown as DifficultyEdges;
+  const blended = observed.map(
+    (v, i) => v * CALIBRATION_BLEND + DEFAULT_EDGES[i]! * (1 - CALIBRATION_BLEND),
+  ) as unknown as DifficultyEdges;
+  // Keep the edges strictly increasing and above zero.
+  const out: number[] = [];
+  let floor = 0.001;
+  for (const edge of blended) {
+    const next = Math.max(edge, floor);
+    out.push(next);
+    floor = next + 0.001;
+  }
+  return out as unknown as DifficultyEdges;
+}
 
 const WORD_RE = /[A-Za-z][A-Za-z'-]*/g;
 const SENTENCE_RE = /[^.!?]+[.!?]*/g;
@@ -83,10 +112,15 @@ function bandOf(rank: number): FreqBand {
   return FREQ_BANDS[FREQ_BANDS.length - 1]!;
 }
 
+/** Learner profile for the local difficulty index: word-frequency size only. */
+export type DifficultyPrefs = {
+  freqBand: FreqBand;
+};
+
 /**
- * Weight of a word outside the comfort zone:
- * `1 + 0.5·(bands above) + 0.5·(CEFR steps above)`; 0 inside; 0.5 for OOV
- * (names / unlisted words are not evidence of difficulty).
+ * Weight of a word outside the comfort zone, by frequency alone:
+ * `1 + 0.5·(bands above)`; 0 inside; 0.5 for OOV (names / unlisted words
+ * are not evidence of difficulty).
  */
 export function wordDifficultyWeight(
   term: string,
@@ -96,16 +130,12 @@ export function wordDifficultyWeight(
   if (learning) return 1.5;
   const entry = lookupWord(term);
   if (!entry) return 0.5;
-  if (!isHardWord(entry, prefs)) return 0;
+  if (entry.rank <= prefs.freqBand) return 0;
   const bandSteps = Math.max(
     0,
     BAND_INDEX[bandOf(entry.rank)] - BAND_INDEX[prefs.freqBand],
   );
-  const cefrSteps = Math.max(
-    0,
-    CEFR_INDEX[entry.cefr] - CEFR_INDEX[prefs.cefrLevel],
-  );
-  return 1 + 0.5 * bandSteps + 0.5 * cefrSteps;
+  return 1 + 0.5 * bandSteps;
 }
 
 /** Long sentences add a little difficulty — deliberately a low weight. */
@@ -115,15 +145,19 @@ export function sentenceFactor(avgSentenceWords: number): number {
   return Math.max(0.9, Math.min(1.25, raw));
 }
 
-export function difficultyFromScore(score: number): DifficultyLevel {
-  for (const [edge, level] of LEVEL_EDGES) {
-    if (score < edge) return level;
-  }
+export function difficultyFromScore(
+  score: number,
+  edges: DifficultyEdges = DEFAULT_EDGES,
+): DifficultyLevel {
+  if (score < edges[0]) return "easy";
+  if (score < edges[1]) return "normal";
+  if (score < edges[2]) return "hard";
+  if (score < edges[3]) return "harder";
   return "hardest";
 }
 
 export type DifficultyResult = {
-  level: DifficultyLevel;
+  /** Raw score; bucket it with `difficultyFromScore` + calibrated edges. */
   score: number;
   avgSentenceWords: number;
 };
@@ -159,7 +193,7 @@ export function articleDifficulty(
     sentences.length > 0 ? tokens.length / sentences.length : tokens.length;
 
   const score = density * sentenceFactor(avgSentenceWords);
-  return { level: difficultyFromScore(score), score, avgSentenceWords };
+  return { score, avgSentenceWords };
 }
 
 export function difficultyLabel(level: DifficultyLevel): string {
@@ -171,4 +205,3 @@ export function difficultyClassName(level: DifficultyLevel): string {
   return `difficulty-badge d-${level}`;
 }
 
-export { CEFR_LEVELS };

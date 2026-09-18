@@ -43,6 +43,9 @@ pub struct AppConfig {
     /// Reader measure preset (narrow / medium / wide / full).
     #[serde(default = "default_reader_line_width")]
     pub reader_line_width: String,
+    /// UI theme preference: system | light | dark.
+    #[serde(default = "default_theme")]
+    pub theme: String,
     /// Auto-ingested articles older than this many days are purged on refresh.
     /// 0 = keep forever. Liked articles and user imports are always kept.
     #[serde(default = "default_article_retention_days")]
@@ -77,6 +80,10 @@ fn default_article_retention_days() -> u32 {
     14
 }
 
+fn default_theme() -> String {
+    "system".into()
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -95,6 +102,7 @@ impl Default for AppConfig {
             reader_line_height: default_reader_line_height(),
             reader_line_width: default_reader_line_width(),
             article_retention_days: default_article_retention_days(),
+            theme: default_theme(),
         }
     }
 }

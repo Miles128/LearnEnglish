@@ -20,15 +20,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            let dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|e| e.to_string())?;
+            let dir = app.path().app_data_dir()?;
             let state = db::DbState::open(db::db_path(dir))?;
             {
                 let mut cfg = config::load_config()?;
                 if !cfg.disabled_feeds.is_empty() {
-                    let conn = state.lock_write().map_err(|e| e.to_string())?;
+                    let conn = state.lock_write()?;
                     db::apply_legacy_disabled_feeds(&conn, &cfg.disabled_feeds)?;
                     drop(conn);
                     cfg.disabled_feeds.clear();

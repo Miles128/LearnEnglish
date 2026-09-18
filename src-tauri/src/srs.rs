@@ -1,4 +1,5 @@
 use crate::db::VocabItem;
+use crate::error::AppError;
 use chrono::{Duration, Utc};
 
 #[derive(Debug, Clone, Copy)]
@@ -9,12 +10,12 @@ pub enum Rating {
 }
 
 impl Rating {
-    pub fn from_str(s: &str) -> Result<Self, String> {
+    pub fn from_str(s: &str) -> Result<Self, AppError> {
         match s {
             "again" | "不认识" => Ok(Self::Again),
             "hard" | "模糊" => Ok(Self::Hard),
             "easy" | "认识" => Ok(Self::Easy),
-            _ => Err(format!("unknown rating: {s}")),
+            _ => Err(AppError::msg(format!("unknown rating: {s}"))),
         }
     }
 }

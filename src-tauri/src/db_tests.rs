@@ -383,6 +383,43 @@ fn collect_non_english_ids_does_not_delete() {
 }
 
 #[test]
+fn purge_word_threshold_drops_short_rss_keeps_imports() {
+    let path = temp_dir().join(format!("le-word-threshold-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    let mut short = sample_article("short");
+    short.word_count = 100;
+    short.quality = "fulltext".into();
+    let mut long = sample_article("long");
+    long.word_count = 800;
+    long.quality = "fulltext".into();
+    let mut unknown = sample_article("unknown");
+    unknown.word_count = 0;
+    let mut imported_short = sample_article("imported");
+    imported_short.word_count = 50;
+    imported_short.origin = "file".into();
+
+    for a in [&short, &long, &unknown, &imported_short] {
+        db::insert_article_if_new(&conn, a).unwrap();
+    }
+
+    let removed = feeds::purge_rss_below_word_threshold(&conn).unwrap();
+    assert_eq!(removed, 1, "only the stamped 100-word RSS article goes");
+    assert!(db::get_article(&conn, "short").unwrap().is_none());
+    assert!(db::get_article(&conn, "long").unwrap().is_some());
+    assert!(
+        db::get_article(&conn, "unknown").unwrap().is_some(),
+        "unassessed rows must be handled by assessment, not blind word purge"
+    );
+    assert!(
+        db::get_article(&conn, "imported").unwrap().is_some(),
+        "user imports are never deleted by threshold purges"
+    );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn refresh_article_content_updates_longer_body() {
     let path = temp_dir().join(format!("le-refresh-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");
@@ -668,7 +705,7 @@ fn vocab_term_unique_index_rejects_case_insensitive_dup() {
     let err = db::insert_vocab(&conn, &sample_vocab("v2", "focus", "2020-01-02T00:00:00Z"))
         .expect_err("duplicate term");
     assert!(
-        err.to_lowercase().contains("unique"),
+        err.to_string().to_lowercase().contains("unique"),
         "expected unique violation, got {err}"
     );
     let _ = std::fs::remove_file(path);
@@ -763,7 +800,7 @@ fn article_foreign_keys_cascade_and_reject_orphans() {
     let err = db::save_translation(&conn, "missing", "paragraph", "0", "x", "y", "test")
         .expect_err("orphan translation");
     assert!(
-        err.to_lowercase().contains("foreign key"),
+        err.to_string().to_lowercase().contains("foreign key"),
         "expected FK failure, got {err}"
     );
 

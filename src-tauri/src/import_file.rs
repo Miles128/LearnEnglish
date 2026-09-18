@@ -1,6 +1,7 @@
 //! Import local `.txt` / `.pdf` / `.docx` files as articles.
 
 use crate::db::{self, Article, DbState};
+use crate::error::AppError;
 use crate::feeds::{self, MIN_FULLTEXT_CHARS};
 use chrono::Utc;
 use regex::Regex;
@@ -13,7 +14,7 @@ const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
 
 static RE_BLANK_RUN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").unwrap());
 
-pub fn import_article_from_file(db: &DbState, path: &str) -> Result<Article, String> {
+pub fn import_article_from_file(db: &DbState, path: &str) -> Result<Article, AppError> {
     let path = PathBuf::from(path.trim());
     if path.as_os_str().is_empty() {
         return Err("未选择文件".into());
@@ -106,14 +107,14 @@ fn normalize_whitespace(text: &str) -> String {
     RE_BLANK_RUN.replace_all(collapsed.trim(), "\n\n").into_owned()
 }
 
-fn extract_txt(bytes: &[u8]) -> Result<String, String> {
+fn extract_txt(bytes: &[u8]) -> Result<String, AppError> {
     match std::str::from_utf8(bytes) {
         Ok(s) => Ok(s.to_string()),
         Err(_) => Ok(String::from_utf8_lossy(bytes).into_owned()),
     }
 }
 
-fn extract_pdf(bytes: &[u8]) -> Result<String, String> {
+fn extract_pdf(bytes: &[u8]) -> Result<String, AppError> {
     let text = pdf_extract::extract_text_from_mem(bytes)
         .map_err(|e| format!("PDF 解析失败：{e}"))?;
     let trimmed = text.trim().to_string();
@@ -123,7 +124,7 @@ fn extract_pdf(bytes: &[u8]) -> Result<String, String> {
     Ok(trimmed)
 }
 
-fn extract_docx(bytes: &[u8]) -> Result<String, String> {
+fn extract_docx(bytes: &[u8]) -> Result<String, AppError> {
     let cursor = std::io::Cursor::new(bytes);
     let mut archive =
         zip::ZipArchive::new(cursor).map_err(|_| "不是有效的 .docx 文件".to_string())?;
@@ -268,7 +269,7 @@ mod tests {
         let db_path = dir.join("t.sqlite");
         let db = db::DbState::open(db_path).unwrap();
         let err = import_article_from_file(&db, path.to_str().unwrap()).unwrap_err();
-        assert!(err.contains("太短"), "{err}");
+        assert!(err.to_string().contains("太短"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

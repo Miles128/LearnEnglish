@@ -1,11 +1,12 @@
 use crate::config::AppConfig;
+use crate::error::AppError;
 use crate::db::{self, Article, DbState, FeedSource};
 use crate::vocab;
 use chrono::Utc;
 use feed_rs::parser;
 use regex::Regex;
 use reqwest::blocking::Client;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -13,6 +14,10 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 pub(crate) const MIN_FULLTEXT_CHARS: usize = 400;
+/// Articles whose body is shorter than this many words are dropped for RSS
+/// sources: a real learning session needs substance, not a blurb.
+/// User imports (url/file) are never deleted.
+pub(crate) const MIN_ARTICLE_WORDS: usize = 400;
 /// RSS bodies at or above this length are treated as full-text feeds (no page required).
 /// Shorter bodies are teasers/summaries — page fetch must succeed or the entry is skipped.
 const TRUST_RSS_FULLTEXT_CHARS: usize = 2000;
@@ -190,7 +195,7 @@ pub(crate) fn rss_trust_chars(fulltext_ratio: f64) -> usize {
 /// that predates the quality column). Deletes non-English / junk bodies and
 /// stamps the rest as 'fulltext'. Assessed rows are never re-derived later,
 /// so refresh cost stays proportional to new data.
-pub(crate) fn assess_unassessed_articles(conn: &Connection) -> Result<(usize, usize), String> {
+pub(crate) fn assess_unassessed_articles(conn: &Connection) -> Result<(usize, usize), AppError> {
     let unassessed = db::list_unassessed_rss_articles(conn)?;
     let mut del_non_english = 0usize;
     let mut del_short = 0usize;
@@ -209,6 +214,18 @@ pub(crate) fn assess_unassessed_articles(conn: &Connection) -> Result<(usize, us
     Ok((del_non_english, del_short))
 }
 
+/// Enforce [`MIN_ARTICLE_WORDS`] on stored RSS bodies (idempotent, cheap).
+/// Runs every refresh so a raised threshold backfills against stamped rows.
+pub(crate) fn purge_rss_below_word_threshold(conn: &Connection) -> Result<usize, AppError> {
+    let changed = conn
+        .execute(
+            "DELETE FROM articles WHERE origin='rss' AND word_count > 0 AND word_count < ?1",
+            params![MIN_ARTICLE_WORDS as i64],
+        )
+        ?;
+    Ok(changed)
+}
+
 /// How many feeds download concurrently. Bounded to keep polite to servers
 /// and to preserve per-feed progress ordering in the UI.
 const PARALLEL_FEEDS: usize = 4;
@@ -217,7 +234,7 @@ pub fn refresh_feeds(
     db: &DbState,
     cfg: &AppConfig,
     mut on_progress: impl FnMut(RefreshProgress) + Send + 'static,
-) -> Result<RefreshResult, String> {
+) -> Result<RefreshResult, AppError> {
     let feeds = {
         let conn = db.lock_read()?;
         db::list_feeds(&conn)?
@@ -267,6 +284,7 @@ pub fn refresh_feeds(
         let (del_non_english, del_short) = assess_unassessed_articles(&conn)?;
         result.skipped_non_english += del_non_english;
         result.skipped_short += del_short;
+        result.skipped_short += purge_rss_below_word_threshold(&conn)?;
     }
     let known_urls = std::sync::Mutex::new({
         let conn = db.lock_write()?;
@@ -457,7 +475,7 @@ pub fn fill_missing_card_zh(
     cfg: &AppConfig,
     limit: usize,
     mut on_progress: impl FnMut(usize, usize),
-) -> Result<usize, String> {
+) -> Result<usize, AppError> {
     let missing = {
         let conn = db.lock_read()?;
         db::articles_missing_card_zh(&conn, limit)?
@@ -509,7 +527,7 @@ pub fn fill_missing_card_zh(
     }
     if done == 0 {
         if let Some(e) = last_err {
-            return Err(e);
+            return Err(AppError::msg(e));
         }
     }
     Ok(done)
@@ -524,7 +542,7 @@ fn download_feed_articles(
     trust_chars: usize,
     known_urls: &std::sync::Mutex<HashSet<String>>,
     known_lengths: &HashMap<String, usize>,
-) -> Result<FeedDownload, String> {
+) -> Result<FeedDownload, AppError> {
     let mut stats = DownloadStats::default();
     let request = client.get(&feed.url);
     let request = if feed.etag.is_empty() {
@@ -532,7 +550,7 @@ fn download_feed_articles(
     } else {
         request.header(reqwest::header::IF_NONE_MATCH, feed.etag.as_str())
     };
-    let resp = request.send().map_err(|e| e.to_string())?;
+    let resp = request.send()?;
     if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
         return Ok(FeedDownload {
             articles: vec![],
@@ -549,11 +567,11 @@ fn download_feed_articles(
         .map(|s| s.to_string());
     let bytes = resp
         .error_for_status()
-        .map_err(|e| e.to_string())?
+        ?
         .bytes()
-        .map_err(|e| e.to_string())?;
+        ?;
 
-    let parsed = parser::parse(&bytes[..]).map_err(|e| e.to_string())?;
+    let parsed = parser::parse(&bytes[..]).map_err(|e| AppError::msg(e.to_string()))?;
     let feed_language = parsed.language.clone();
     let mut articles = Vec::new();
     let mut updates = Vec::new();
@@ -600,6 +618,7 @@ fn download_feed_articles(
             stats.evaluated += 1;
             if rss_text.chars().count() >= trust_chars
                 && is_readable_article_body(&rss_text)
+                && rss_text.split_whitespace().count() >= MIN_ARTICLE_WORDS
                 && rss_text.chars().count() > stored_len
             {
                 stats.rss_fulltext_hits += 1;
@@ -649,6 +668,11 @@ fn download_feed_articles(
         };
 
         if looks_like_paywall(&content_text) {
+            stats.skipped_short += 1;
+            continue;
+        }
+
+        if content_text.split_whitespace().count() < MIN_ARTICLE_WORDS {
             stats.skipped_short += 1;
             continue;
         }
@@ -773,7 +797,7 @@ fn looks_like_english(title: &str, content: &str) -> bool {
 }
 
 #[cfg(test)]
-pub(crate) fn collect_non_english_rss_ids(conn: &Connection) -> Result<Vec<String>, String> {
+pub(crate) fn collect_non_english_rss_ids(conn: &Connection) -> Result<Vec<String>, AppError> {
     Ok(db::list_unassessed_rss_articles(conn)?
         .into_iter()
         .filter(|article| !is_english_article(None, &article.title, &article.content_text))
@@ -782,7 +806,7 @@ pub(crate) fn collect_non_english_rss_ids(conn: &Connection) -> Result<Vec<Strin
 }
 
 #[cfg(test)]
-pub(crate) fn delete_articles(conn: &Connection, ids: &[String]) -> Result<usize, String> {
+pub(crate) fn delete_articles(conn: &Connection, ids: &[String]) -> Result<usize, AppError> {
     let mut removed = 0usize;
     for id in ids {
         db::delete_article(conn, id)?;
@@ -792,7 +816,7 @@ pub(crate) fn delete_articles(conn: &Connection, ids: &[String]) -> Result<usize
 }
 
 #[cfg(test)]
-pub(crate) fn purge_non_english_articles(conn: &Connection) -> Result<usize, String> {
+pub(crate) fn purge_non_english_articles(conn: &Connection) -> Result<usize, AppError> {
     let (non_english, _) = assess_unassessed_articles(conn)?;
     Ok(non_english)
 }
@@ -844,7 +868,7 @@ fn prose_char_count(text: &str) -> usize {
 }
 
 #[cfg(test)]
-pub(crate) fn purge_summary_only_articles(conn: &Connection) -> Result<usize, String> {
+pub(crate) fn purge_summary_only_articles(conn: &Connection) -> Result<usize, AppError> {
     let (_, short) = assess_unassessed_articles(conn)?;
     Ok(short)
 }
@@ -892,8 +916,8 @@ struct ExtractedPage {
 }
 
 /// Fetch a public article URL and extract title + main text (no paywall bypass).
-fn extract_article_page(client: &Client, url: &str) -> Result<ExtractedPage, String> {
-    let parsed = url::Url::parse(url).map_err(|e| e.to_string())?;
+fn extract_article_page(client: &Client, url: &str) -> Result<ExtractedPage, AppError> {
+    let parsed = url::Url::parse(url).map_err(|e| AppError::msg(e.to_string()))?;
     let html = client
         .get(url)
         .header(
@@ -901,11 +925,11 @@ fn extract_article_page(client: &Client, url: &str) -> Result<ExtractedPage, Str
             "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
         )
         .send()
-        .map_err(|e| e.to_string())?
+        ?
         .error_for_status()
-        .map_err(|e| e.to_string())?
+        ?
         .text()
-        .map_err(|e| e.to_string())?;
+        ?;
 
     if looks_like_paywall(&html) {
         return Err("疑似付费墙，已跳过".into());
@@ -955,12 +979,12 @@ fn extract_article_page(client: &Client, url: &str) -> Result<ExtractedPage, Str
 }
 
 /// Fetch a public article URL and extract main text (no paywall bypass).
-fn fetch_article_page(client: &Client, url: &str) -> Result<String, String> {
+fn fetch_article_page(client: &Client, url: &str) -> Result<String, AppError> {
     Ok(extract_article_page(client, url)?.text)
 }
 
 /// Import one public article URL into the local library.
-pub fn import_article_from_url(db: &DbState, url: &str) -> Result<Article, String> {
+pub fn import_article_from_url(db: &DbState, url: &str) -> Result<Article, AppError> {
     let url = url.trim();
     if url.is_empty() {
         return Err("请输入文章链接".into());
@@ -1025,7 +1049,7 @@ pub fn fill_article_card_zh(
     db: &DbState,
     cfg: &AppConfig,
     article: &mut Article,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     if !article.title_zh.is_empty() && !article.summary_zh.is_empty() {
         return Ok(());
     }

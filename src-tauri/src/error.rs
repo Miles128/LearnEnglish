@@ -1,12 +1,28 @@
 use serde::{Serialize, Serializer};
 
 /// Unified application error, surfaced to the frontend as its display string.
+/// Typed variants carry the underlying library error; user-facing messages
+/// use [`AppError::msg`].
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("{0}")]
     Msg(String),
     #[error("数据源状态被占用，请稍后重试")]
     Locked,
+    #[error("数据库错误：{0}")]
+    Db(#[from] rusqlite::Error),
+    #[error("IO 错误：{0}")]
+    Io(#[from] std::io::Error),
+    #[error("JSON 错误：{0}")]
+    Json(#[from] serde_json::Error),
+    #[error("网络请求失败：{0}")]
+    Http(#[from] reqwest::Error),
+}
+
+impl AppError {
+    pub fn msg(s: impl Into<String>) -> Self {
+        AppError::Msg(s.into())
+    }
 }
 
 impl Serialize for AppError {

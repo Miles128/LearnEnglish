@@ -3,6 +3,7 @@
 
 use crate::config::AppConfig;
 use crate::db::{self, DbState, TranslationRow};
+use crate::error::AppError;
 use crate::feeds;
 use crate::vocab;
 use serde::Serialize;
@@ -43,15 +44,15 @@ pub fn translate_and_cache(
     scope: &str,
     scope_key: &str,
     text: &str,
-) -> Result<TranslationRow, String> {
+) -> Result<TranslationRow, AppError> {
     {
-        let conn = state.lock_read().map_err(|e| e.to_string())?;
+        let conn = state.lock_read()?;
         if let Some(existing) = db::get_translation(&conn, article_id, scope, scope_key)? {
             return Ok(existing);
         }
     }
     let translated = vocab::translate_text(cfg, text)?;
-    let conn = state.lock_write().map_err(|e| e.to_string())?;
+    let conn = state.lock_write()?;
     db::save_translation(
         &conn,
         article_id,
@@ -68,9 +69,9 @@ pub fn translate_full_article(
     cfg: &AppConfig,
     article_id: &str,
     mut on_progress: impl FnMut(&TranslateProgress),
-) -> Result<FullTranslateResult, String> {
+) -> Result<FullTranslateResult, AppError> {
     let paragraphs = {
-        let conn = state.lock_read().map_err(|e| e.to_string())?;
+        let conn = state.lock_read()?;
         let article = db::get_article(&conn, article_id)?.ok_or_else(|| "article not found".to_string())?;
         feeds::split_paragraphs(&article.content_text)
     };
@@ -86,7 +87,7 @@ pub fn translate_full_article(
         for &i in &indices {
             let scope_key = i.to_string();
             let existing = {
-                let conn = state.lock_read().map_err(|e| e.to_string())?;
+                let conn = state.lock_read()?;
                 db::get_translation(&conn, article_id, "paragraph", &scope_key)?
             };
             match existing {
@@ -105,7 +106,7 @@ pub fn translate_full_article(
                 for (i, text) in missing.iter().zip(translated.iter()) {
                     let scope_key = i.to_string();
                     let row = {
-                        let conn = state.lock_write().map_err(|e| e.to_string())?;
+                        let conn = state.lock_write()?;
                         db::save_translation(
                             &conn,
                             article_id,

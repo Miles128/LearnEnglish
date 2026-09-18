@@ -1,8 +1,9 @@
+use crate::error::AppError;
 use super::{curated_feeds, FeedCategory, FeedSource};
 use rusqlite::{params, Connection, OptionalExtension};
 use uuid::Uuid;
 
-pub(crate) fn seed_feed_categories(conn: &Connection) -> Result<(), String> {
+pub(crate) fn seed_feed_categories(conn: &Connection) -> Result<(), AppError> {
     let builtins = [
         ("tech", "科技"),
         ("finance", "财经"),
@@ -14,17 +15,17 @@ pub(crate) fn seed_feed_categories(conn: &Connection) -> Result<(), String> {
             "INSERT OR IGNORE INTO feed_categories (id, label, builtin) VALUES (?1,?2,1)",
             params![id, label],
         )
-        .map_err(|e| e.to_string())?;
+        ?;
         conn.execute(
             "UPDATE feed_categories SET label=?1, builtin=1 WHERE id=?2",
             params![label, id],
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     }
     Ok(())
 }
 
-pub(crate) fn seed_feeds(conn: &Connection) -> Result<(), String> {
+pub(crate) fn seed_feeds(conn: &Connection) -> Result<(), AppError> {
     let seeds = curated_feeds();
     // Insert newly curated feeds; IGNORE keeps existing enable/disable.
     for f in &seeds {
@@ -32,50 +33,50 @@ pub(crate) fn seed_feeds(conn: &Connection) -> Result<(), String> {
             "INSERT OR IGNORE INTO feed_sources (id, name, category, url, enabled, origin, description) VALUES (?1,?2,?3,?4,1,'curated','')",
             params![f.id, f.name, f.category, f.url],
         )
-        .map_err(|e| e.to_string())?;
+        ?;
         // Keep name/category/url/origin in sync if we retarget a curated id.
         conn.execute(
             "UPDATE feed_sources SET name=?1, category=?2, url=?3, origin='curated' WHERE id=?4",
             params![f.name, f.category, f.url, f.id],
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     }
     // Drop obsolete curated sources only — never delete user subscriptions.
     let keep: std::collections::HashSet<&str> = seeds.iter().map(|f| f.id.as_str()).collect();
     for existing in list_feeds(conn)? {
         if existing.origin != "user" && !keep.contains(existing.id.as_str()) {
             conn.execute("DELETE FROM feed_sources WHERE id=?1", params![existing.id])
-                .map_err(|e| e.to_string())?;
+                ?;
         }
     }
     Ok(())
 }
 
-pub fn list_feeds(conn: &Connection) -> Result<Vec<FeedSource>, String> {
+pub fn list_feeds(conn: &Connection) -> Result<Vec<FeedSource>, AppError> {
     let mut stmt = conn
         .prepare(
             "SELECT id,name,category,url,enabled,origin,description,etag,last_fetched_at,fulltext_ratio FROM feed_sources ORDER BY category,name",
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     let rows = stmt
         .query_map([], map_feed)
-        .map_err(|e| e.to_string())?
+        ?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
-pub fn set_feed_enabled(conn: &Connection, id: &str, enabled: bool) -> Result<(), String> {
+pub fn set_feed_enabled(conn: &Connection, id: &str, enabled: bool) -> Result<(), AppError> {
     conn.execute(
         "UPDATE feed_sources SET enabled=?1 WHERE id=?2",
         params![if enabled { 1 } else { 0 }, id],
     )
-    .map_err(|e| e.to_string())?;
+    ?;
     Ok(())
 }
 
 /// One-shot import of the legacy `config.disabled_feeds` list onto DB `enabled`.
-pub fn apply_legacy_disabled_feeds(conn: &Connection, ids: &[String]) -> Result<(), String> {
+pub fn apply_legacy_disabled_feeds(conn: &Connection, ids: &[String]) -> Result<(), AppError> {
     for id in ids {
         let id = id.trim();
         if !id.is_empty() {
@@ -85,27 +86,27 @@ pub fn apply_legacy_disabled_feeds(conn: &Connection, ids: &[String]) -> Result<
     Ok(())
 }
 
-pub fn list_feed_categories(conn: &Connection) -> Result<Vec<FeedCategory>, String> {
+pub fn list_feed_categories(conn: &Connection) -> Result<Vec<FeedCategory>, AppError> {
     let mut stmt = conn
         .prepare("SELECT id,label,builtin FROM feed_categories ORDER BY builtin DESC, label")
-        .map_err(|e| e.to_string())?;
+        ?;
     let rows = stmt
         .query_map([], map_category)
-        .map_err(|e| e.to_string())?
+        ?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
 /// Add a user category. `id` is slugified from label if empty.
-pub fn add_feed_category(conn: &Connection, label: &str) -> Result<FeedCategory, String> {
+pub fn add_feed_category(conn: &Connection, label: &str) -> Result<FeedCategory, AppError> {
     let label = label.trim();
     if label.is_empty() {
-        return Err("分类名不能为空".into());
+        return Err(AppError::msg("分类名不能为空"));
     }
     let id = slugify_id(label);
     if id.is_empty() {
-        return Err("无法生成分类 id".into());
+        return Err(AppError::msg("无法生成分类 id"));
     }
     conn.execute(
         "INSERT INTO feed_categories (id, label, builtin) VALUES (?1,?2,0)",
@@ -125,14 +126,15 @@ pub fn add_feed_category(conn: &Connection, label: &str) -> Result<FeedCategory,
     })
 }
 
-pub fn get_feed_category(conn: &Connection, id: &str) -> Result<Option<FeedCategory>, String> {
+pub fn get_feed_category(conn: &Connection, id: &str) -> Result<Option<FeedCategory>, AppError> {
     conn.query_row(
         "SELECT id,label,builtin FROM feed_categories WHERE id=?1",
         params![id],
         map_category,
     )
     .optional()
-    .map_err(|e| e.to_string())
+    .map_err(AppError::from)
+    
 }
 
 /// Subscribe or re-enable a user feed. If URL exists, enable and refresh metadata.
@@ -142,15 +144,15 @@ pub fn subscribe_feed(
     category: &str,
     url: &str,
     description: &str,
-) -> Result<FeedSource, String> {
+) -> Result<FeedSource, AppError> {
     let name = name.trim();
     let url = url.trim();
     let category = category.trim();
     if name.is_empty() || url.is_empty() || category.is_empty() {
-        return Err("名称、分类与 URL 不能为空".into());
+        return Err(AppError::msg("名称、分类与 URL 不能为空"));
     }
     if get_feed_category(conn, category)?.is_none() {
-        return Err(format!("未知分类：{category}"));
+        return Err(AppError::msg(format!("未知分类：{category}")));
     }
 
     // Existing by URL?
@@ -159,7 +161,7 @@ pub fn subscribe_feed(
             "UPDATE feed_sources SET name=?1, category=?2, description=?3, enabled=1 WHERE id=?4",
             params![name, category, description, existing.id],
         )
-        .map_err(|e| e.to_string())?;
+        ?;
         return Ok(FeedSource {
             id: existing.id,
             name: name.into(),
@@ -183,7 +185,7 @@ pub fn subscribe_feed(
         "INSERT INTO feed_sources (id, name, category, url, enabled, origin, description) VALUES (?1,?2,?3,?4,1,'user',?5)",
         params![id, name, category, url, description],
     )
-    .map_err(|e| e.to_string())?;
+    ?;
 
     Ok(FeedSource {
         id,
@@ -197,24 +199,25 @@ pub fn subscribe_feed(
     })
 }
 
-fn find_feed_by_url(conn: &Connection, url: &str) -> Result<Option<FeedSource>, String> {
+fn find_feed_by_url(conn: &Connection, url: &str) -> Result<Option<FeedSource>, AppError> {
     conn.query_row(
         "SELECT id,name,category,url,enabled,origin,description,etag,last_fetched_at,fulltext_ratio FROM feed_sources WHERE url=?1",
         params![url],
         map_feed,
     )
     .optional()
-    .map_err(|e| e.to_string())
+    .map_err(AppError::from)
+    
 }
 
-fn feed_id_exists(conn: &Connection, id: &str) -> Result<bool, String> {
+fn feed_id_exists(conn: &Connection, id: &str) -> Result<bool, AppError> {
     let n: i64 = conn
         .query_row(
             "SELECT COUNT(1) FROM feed_sources WHERE id=?1",
             params![id],
             |row| row.get(0),
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(n > 0)
 }
 
@@ -242,7 +245,7 @@ pub fn set_feed_refresh_meta(
     etag: Option<&str>,
     last_fetched_at: &str,
     fulltext_ratio: Option<f64>,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     conn.execute(
         "UPDATE feed_sources
          SET etag = COALESCE(?2, etag),
@@ -251,7 +254,7 @@ pub fn set_feed_refresh_meta(
          WHERE id=?1",
         params![id, etag, last_fetched_at, fulltext_ratio],
     )
-    .map_err(|e| e.to_string())?;
+    ?;
     Ok(())
 }
 

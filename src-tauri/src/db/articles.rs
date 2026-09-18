@@ -1,3 +1,4 @@
+use crate::error::AppError;
 use super::{Article, ArticleListItem};
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -12,7 +13,7 @@ pub fn list_articles(
     category: Option<&str>,
     limit: Option<i64>,
     offset: Option<i64>,
-) -> Result<Vec<ArticleListItem>, String> {
+) -> Result<Vec<ArticleListItem>, AppError> {
     let mut sql = format!(
         "SELECT id,url,title,title_zh,source,category,published_at,SUBSTR(content_text,1,{LIST_EXCERPT_CHARS}),fetched_at,origin,summary_zh,last_opened_at,open_count,word_count,quality,extraction_source,dwell_ms,read_completed,liked FROM articles"
     );
@@ -28,12 +29,12 @@ pub fn list_articles(
     params.push(rusqlite::types::Value::Integer(limit.unwrap_or(60)));
     params.push(rusqlite::types::Value::Integer(offset.unwrap_or(0)));
 
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map(rusqlite::params_from_iter(params.iter()), map_article_list_item)
-        .map_err(|e| e.to_string())?
+        ?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
@@ -84,21 +85,21 @@ pub fn map_article(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
     })
 }
 
-pub fn mark_article_opened(conn: &Connection, id: &str) -> Result<(), String> {
+pub fn mark_article_opened(conn: &Connection, id: &str) -> Result<(), AppError> {
     let now = chrono::Utc::now().to_rfc3339();
     let changed = conn
         .execute(
             "UPDATE articles SET last_opened_at=?1, open_count=open_count+1 WHERE id=?2",
             params![now, id],
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     if changed == 0 {
-        return Err("article not found".into());
+        return Err(AppError::msg("article not found"));
     }
     Ok(())
 }
 
-pub fn learning_stats(conn: &Connection) -> Result<super::LearningStats, String> {
+pub fn learning_stats(conn: &Connection) -> Result<super::LearningStats, AppError> {
     let since = (chrono::Utc::now() - chrono::Duration::days(7)).to_rfc3339();
     let opened_total: i64 = conn
         .query_row(
@@ -106,14 +107,14 @@ pub fn learning_stats(conn: &Connection) -> Result<super::LearningStats, String>
             [],
             |row| row.get(0),
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     let opened_7d: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM articles WHERE last_opened_at >= ?1",
             params![since],
             |row| row.get(0),
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     let top_source = conn
         .query_row(
             "SELECT source FROM articles WHERE last_opened_at IS NOT NULL
@@ -122,7 +123,8 @@ pub fn learning_stats(conn: &Connection) -> Result<super::LearningStats, String>
             |row| row.get(0),
         )
         .optional()
-        .map_err(|e| e.to_string())?;
+    .map_err(AppError::from)
+        ?;
     let top_category = conn
         .query_row(
             "SELECT category FROM articles WHERE last_opened_at IS NOT NULL
@@ -131,21 +133,22 @@ pub fn learning_stats(conn: &Connection) -> Result<super::LearningStats, String>
             |row| row.get(0),
         )
         .optional()
-        .map_err(|e| e.to_string())?;
+    .map_err(AppError::from)
+        ?;
     let vocab_created_7d: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM vocab WHERE created_at >= ?1",
             params![since],
             |row| row.get(0),
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     let vocab_learning: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM vocab WHERE status='learning'",
             [],
             |row| row.get(0),
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(super::LearningStats {
         opened_total,
         opened_7d,
@@ -156,56 +159,58 @@ pub fn learning_stats(conn: &Connection) -> Result<super::LearningStats, String>
     })
 }
 
-pub fn get_article(conn: &Connection, id: &str) -> Result<Option<Article>, String> {
+pub fn get_article(conn: &Connection, id: &str) -> Result<Option<Article>, AppError> {
     conn.query_row(
         &format!("SELECT {ARTICLE_COLS} FROM articles WHERE id=?1"),
         params![id],
         map_article,
     )
     .optional()
-    .map_err(|e| e.to_string())
+    .map_err(AppError::from)
+    
 }
 
-pub fn get_article_by_url(conn: &Connection, url: &str) -> Result<Option<Article>, String> {
+pub fn get_article_by_url(conn: &Connection, url: &str) -> Result<Option<Article>, AppError> {
     conn.query_row(
         &format!("SELECT {ARTICLE_COLS} FROM articles WHERE url=?1"),
         params![url],
         map_article,
     )
     .optional()
-    .map_err(|e| e.to_string())
+    .map_err(AppError::from)
+    
 }
 
-pub fn list_article_urls(conn: &Connection) -> Result<std::collections::HashSet<String>, String> {
+pub fn list_article_urls(conn: &Connection) -> Result<std::collections::HashSet<String>, AppError> {
     let mut stmt = conn
         .prepare("SELECT url FROM articles")
-        .map_err(|e| e.to_string())?;
+        ?;
     let rows = stmt
         .query_map([], |row| row.get::<_, String>(0))
-        .map_err(|e| e.to_string())?
+        ?
         .collect::<Result<std::collections::HashSet<_>, _>>()
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
 /// url → stored body length in bytes (used to refresh stale RSS bodies).
 pub fn list_article_content_lengths(
     conn: &Connection,
-) -> Result<std::collections::HashMap<String, usize>, String> {
+) -> Result<std::collections::HashMap<String, usize>, AppError> {
     let mut stmt = conn
         .prepare("SELECT url, LENGTH(content_text) FROM articles")
-        .map_err(|e| e.to_string())?;
+        ?;
     let rows = stmt
         .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize)))
-        .map_err(|e| e.to_string())?
+        ?
         .collect::<Result<std::collections::HashMap<_, _>, _>>()
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
 /// Insert only when `url` is new. Returns `true` if inserted, `false` if already present.
 /// Idempotent: never overwrites existing content / translations.
-pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, String> {
+pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, AppError> {
     let changed = conn
         .execute(
             "INSERT INTO articles (id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin,summary_zh,word_count,quality,extraction_source)
@@ -228,7 +233,7 @@ pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, Str
                 a.extraction_source,
             ],
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(changed > 0)
 }
 
@@ -237,7 +242,7 @@ pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, Str
 /// (the RSS refresh path does exactly that).
 /// Keeps id / url / title_zh / source / category / published_at / origin intact.
 /// Clears `summary_zh` so the refresh pipeline regenerates it for the new body.
-pub fn refresh_article_content(conn: &Connection, a: &Article) -> Result<bool, String> {
+pub fn refresh_article_content(conn: &Connection, a: &Article) -> Result<bool, AppError> {
     let changed = conn
         .execute(
             "UPDATE articles SET title=?1, content_text=?2, fetched_at=?3, summary_zh='',
@@ -245,23 +250,23 @@ pub fn refresh_article_content(conn: &Connection, a: &Article) -> Result<bool, S
              WHERE url=?6 AND origin='rss' AND content_text <> ?2",
             params![a.title, a.content_text, a.fetched_at, a.word_count, a.extraction_source, a.url],
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(changed > 0)
 }
 
 /// RSS articles whose body quality has not been assessed yet (`quality=''`).
 /// Legacy rows get assessed once during refresh; new rows are stamped on insert.
-pub fn list_unassessed_rss_articles(conn: &Connection) -> Result<Vec<Article>, String> {
+pub fn list_unassessed_rss_articles(conn: &Connection) -> Result<Vec<Article>, AppError> {
     let mut stmt = conn
         .prepare(&format!(
             "SELECT {ARTICLE_COLS} FROM articles WHERE origin='rss' AND quality=''"
         ))
-        .map_err(|e| e.to_string())?;
+        ?;
     let rows = stmt
         .query_map([], map_article)
-        .map_err(|e| e.to_string())?
+        ?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
@@ -272,12 +277,12 @@ pub fn set_article_quality(
     quality: &str,
     extraction_source: &str,
     word_count: i64,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     conn.execute(
         "UPDATE articles SET quality=?1, extraction_source=?2, word_count=?3 WHERE id=?4",
         params![quality, extraction_source, word_count, id],
     )
-    .map_err(|e| e.to_string())?;
+    ?;
     Ok(())
 }
 
@@ -287,7 +292,7 @@ pub fn add_article_reading_progress(
     id: &str,
     dwell_ms_delta: i64,
     read_completed: bool,
-) -> Result<(), String> {
+) -> Result<(), AppError> {
     let changed = conn
         .execute(
             "UPDATE articles
@@ -296,22 +301,22 @@ pub fn add_article_reading_progress(
              WHERE id=?3",
             params![dwell_ms_delta, read_completed, id],
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     if changed == 0 {
-        return Err("article not found".into());
+        return Err(AppError::msg("article not found"));
     }
     Ok(())
 }
 
-pub fn set_article_liked(conn: &Connection, id: &str, liked: bool) -> Result<(), String> {
+pub fn set_article_liked(conn: &Connection, id: &str, liked: bool) -> Result<(), AppError> {
     let changed = conn
         .execute(
             "UPDATE articles SET liked=?1 WHERE id=?2",
             params![liked, id],
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     if changed == 0 {
-        return Err("article not found".into());
+        return Err(AppError::msg("article not found"));
     }
     Ok(())
 }
@@ -320,15 +325,15 @@ pub fn set_article_liked(conn: &Connection, id: &str, liked: bool) -> Result<(),
 /// signal for article ranking.
 pub fn affinity_open_counts(
     conn: &Connection,
-) -> Result<(std::collections::HashMap<String, i64>, std::collections::HashMap<String, i64>), String>
+) -> Result<(std::collections::HashMap<String, i64>, std::collections::HashMap<String, i64>), AppError>
 {
-    let read = |sql: &str| -> Result<std::collections::HashMap<String, i64>, String> {
-        let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let read = |sql: &str| -> Result<std::collections::HashMap<String, i64>, AppError> {
+        let mut stmt = conn.prepare(sql)?;
         let rows = stmt
             .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
-            .map_err(|e| e.to_string())?
+            ?
             .collect::<Result<std::collections::HashMap<_, _>, _>>()
-            .map_err(|e| e.to_string())?;
+            ?;
         Ok(rows)
     };
     let by_source = read(
@@ -341,20 +346,20 @@ pub fn affinity_open_counts(
 }
 
 #[cfg(test)]
-pub fn upsert_article(conn: &Connection, a: &Article) -> Result<(), String> {
+pub fn upsert_article(conn: &Connection, a: &Article) -> Result<(), AppError> {
     // Legacy alias used by older tests; refresh path uses insert_article_if_new.
     let _ = insert_article_if_new(conn, a)?;
     Ok(())
 }
 
-pub fn delete_article(conn: &Connection, id: &str) -> Result<(), String> {
+pub fn delete_article(conn: &Connection, id: &str) -> Result<(), AppError> {
     // translations CASCADE; vocab.article_id SET NULL (schema v3).
     conn.execute("DELETE FROM articles WHERE id=?1", params![id])
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(())
 }
 
-pub fn articles_missing_card_zh(conn: &Connection, limit: usize) -> Result<Vec<Article>, String> {
+pub fn articles_missing_card_zh(conn: &Connection, limit: usize) -> Result<Vec<Article>, AppError> {
     let mut stmt = conn
         .prepare(&format!(
             "SELECT {ARTICLE_COLS} FROM articles
@@ -362,29 +367,29 @@ pub fn articles_missing_card_zh(conn: &Connection, limit: usize) -> Result<Vec<A
              ORDER BY fetched_at DESC
              LIMIT ?1"
         ))
-        .map_err(|e| e.to_string())?;
+        ?;
     let rows = stmt
         .query_map(params![limit as i64], map_article)
-        .map_err(|e| e.to_string())?
+        ?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
-pub fn set_article_title_zh(conn: &Connection, id: &str, title_zh: &str) -> Result<(), String> {
+pub fn set_article_title_zh(conn: &Connection, id: &str, title_zh: &str) -> Result<(), AppError> {
     conn.execute(
         "UPDATE articles SET title_zh=?1 WHERE id=?2",
         params![title_zh, id],
     )
-    .map_err(|e| e.to_string())?;
+    ?;
     Ok(())
 }
 
-pub fn set_article_summary_zh(conn: &Connection, id: &str, summary_zh: &str) -> Result<(), String> {
+pub fn set_article_summary_zh(conn: &Connection, id: &str, summary_zh: &str) -> Result<(), AppError> {
     conn.execute(
         "UPDATE articles SET summary_zh=?1 WHERE id=?2",
         params![summary_zh, id],
     )
-    .map_err(|e| e.to_string())?;
+    ?;
     Ok(())
 }

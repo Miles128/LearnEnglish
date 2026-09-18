@@ -1,3 +1,4 @@
+use crate::error::AppError;
 use super::TranslationRow;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -7,7 +8,7 @@ pub fn get_translation(
     article_id: &str,
     scope: &str,
     scope_key: &str,
-) -> Result<Option<TranslationRow>, String> {
+) -> Result<Option<TranslationRow>, AppError> {
     conn.query_row(
         "SELECT id,article_id,scope,scope_key,source_text,translated_text,model FROM translations
          WHERE article_id=?1 AND scope=?2 AND scope_key=?3",
@@ -15,7 +16,8 @@ pub fn get_translation(
         map_translation,
     )
     .optional()
-    .map_err(|e| e.to_string())
+    .map_err(AppError::from)
+    
 }
 
 pub fn save_translation(
@@ -26,7 +28,7 @@ pub fn save_translation(
     source_text: &str,
     translated_text: &str,
     model: &str,
-) -> Result<TranslationRow, String> {
+) -> Result<TranslationRow, AppError> {
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO translations (article_id,scope,scope_key,source_text,translated_text,model,created_at)
@@ -46,7 +48,7 @@ pub fn save_translation(
             now
         ],
     )
-    .map_err(|e| e.to_string())?;
+    ?;
     get_translation(conn, article_id, scope, scope_key)?
         .ok_or_else(|| "failed to read saved translation".into())
 }
@@ -54,18 +56,18 @@ pub fn save_translation(
 pub fn list_paragraph_translations(
     conn: &Connection,
     article_id: &str,
-) -> Result<Vec<TranslationRow>, String> {
+) -> Result<Vec<TranslationRow>, AppError> {
     let mut stmt = conn
         .prepare(
             "SELECT id,article_id,scope,scope_key,source_text,translated_text,model FROM translations
              WHERE article_id=?1 AND scope='paragraph'",
         )
-        .map_err(|e| e.to_string())?;
+        ?;
     let rows = stmt
         .query_map(params![article_id], map_translation)
-        .map_err(|e| e.to_string())?
+        ?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 

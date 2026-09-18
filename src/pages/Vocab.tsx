@@ -3,8 +3,10 @@ import { Link } from "react-router-dom";
 import { clipContext } from "../readerUtils";
 import { api, VocabItem } from "../api";
 import { useAppConfig, useVocab } from "../store";
+import PhrasesView from "../components/PhrasesView";
 
 type Tab = "learning" | "review" | "mastered";
+type Library = "vocab" | "phrases";
 
 export default function Vocab() {
   const { refreshLearningTerms } = useVocab();
@@ -13,6 +15,7 @@ export default function Vocab() {
   const placementSummary = placementDone
     ? `${Math.round(cfg.vocab_placement_l ?? cfg.freq_band)} 词`
     : null;
+  const [library, setLibrary] = useState<Library>("vocab");
   const [tab, setTab] = useState<Tab>("learning");
   const [items, setItems] = useState<VocabItem[]>([]);
   const [due, setDue] = useState<VocabItem[]>([]);
@@ -102,8 +105,8 @@ export default function Vocab() {
         <div>
           <p className="muted">
             {placementSummary
-              ? `我的词频水平：约 ${placementSummary} · 总览 / 复习 / 已掌握`
-              : "总览 · 复习 · 已掌握归档"}
+              ? `我的词频水平：约 ${placementSummary}`
+              : "生词与短语的学习与复习"}
           </p>
         </div>
         <Link className="btn small" to="/placement">
@@ -111,114 +114,153 @@ export default function Vocab() {
         </Link>
       </header>
 
-      <div className="tabs">
+      <div className="tabs library-switch">
         {(
           [
-            ["learning", "学习中"],
-            ["review", "复习"],
-            ["mastered", "已掌握"],
+            ["vocab", "生词"],
+            ["phrases", "短语组合"],
           ] as const
         ).map(([id, label]) => (
           <button
             key={id}
-            className={tab === id ? "tab active" : "tab"}
-            onClick={() => setTab(id)}
+            className={library === id ? "tab active" : "tab"}
+            onClick={() => setLibrary(id)}
           >
             {label}
           </button>
         ))}
       </div>
 
-      {error && <p className="banner err">{error}</p>}
-
-      {tab !== "review" && (
+      {library === "phrases" ? (
+        <PhrasesView />
+      ) : (
         <>
-          <input
-            className="search"
-            placeholder="搜索词条 / 释义 / 类型"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-          <ul className="vocab-list">
-            {filtered.map((v) => (
-              <li key={v.id} className="vocab-card">
-                <div className="vocab-head">
-                  <strong>{v.term}</strong>
-                  <span className="pill">{v.word_type}</span>
-                </div>
-                <p>{v.definition_zh}</p>
-                {v.collocations?.length > 0 && (
-                  <p className="muted">
-                    常见搭配：{v.collocations.join(" · ")}
-                  </p>
-                )}
-                {v.context_sentence && (
-                  <p className="context">“{clipContext(v.context_sentence)}”</p>
-                )}
-                <div className="row-actions">
-                  {tab === "learning" && (
-                    <button className="btn small" onClick={() => void markMastered(v.id)}>
-                      标记已掌握
-                    </button>
-                  )}
-                  {tab === "mastered" && (
-                    <button className="btn small" onClick={() => void restore(v.id)}>
-                      恢复学习
-                    </button>
-                  )}
-                  <button className="btn small danger" onClick={() => void remove(v.id)}>
-                    删除
-                  </button>
-                </div>
-              </li>
-            ))}
-            {filtered.length === 0 && <p className="muted">暂无词条</p>}
-          </ul>
-        </>
-      )}
-
-      {tab === "review" && (
-        <div className="review-panel">
-          {!current && <p className="muted">今日没有到期复习的词条。</p>}
-          {current && (
-            <>
-              <p className="muted">剩余 {due.length} 张</p>
+          <div className="tabs">
+            {(
+              [
+                ["learning", "学习中"],
+                ["review", "复习"],
+                ["mastered", "已掌握"],
+              ] as const
+            ).map(([id, label]) => (
               <button
-                type="button"
-                className="flashcard"
-                aria-pressed={flipped}
-                onClick={() => setFlipped((f) => !f)}
+                key={id}
+                className={tab === id ? "tab active" : "tab"}
+                onClick={() => setTab(id)}
               >
-                <div className="flash-term">{current.term}</div>
-                <p className="context">“{clipContext(current.context_sentence)}”</p>
-                {flipped ? (
-                  <div className="flash-back">
-                    <p>{current.definition_zh}</p>
-                    <p className="pill inline">{current.word_type}</p>
-                    {current.collocations?.length > 0 && (
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {error && <p className="banner err">{error}</p>}
+
+          {tab !== "review" && (
+            <>
+              <input
+                className="search"
+                placeholder="搜索词条 / 释义 / 类型"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+              />
+              <ul className="vocab-list">
+                {filtered.map((v) => (
+                  <li key={v.id} className="vocab-card">
+                    <div className="vocab-head">
+                      <strong>{v.term}</strong>
+                      <span className="pill">{v.word_type}</span>
+                    </div>
+                    <p>{v.definition_zh}</p>
+                    {v.collocations?.length > 0 && (
                       <p className="muted">
-                        常见搭配：{current.collocations.join(" · ")}
+                        常见搭配：{v.collocations.join(" · ")}
                       </p>
                     )}
-                  </div>
-                ) : (
-                  <p className="muted tip">点击或按 Enter 查看释义</p>
-                )}
-              </button>
-              <div className="rate-row">
-                <button className="btn" onClick={() => void rate("again")}>
-                  不认识
-                </button>
-                <button className="btn" onClick={() => void rate("hard")}>
-                  模糊
-                </button>
-                <button className="btn primary" onClick={() => void rate("easy")}>
-                  认识
-                </button>
-              </div>
+                    {v.context_sentence && (
+                      <p className="context">
+                        “{clipContext(v.context_sentence)}”
+                      </p>
+                    )}
+                    <div className="row-actions">
+                      {tab === "learning" && (
+                        <button
+                          className="btn small"
+                          onClick={() => void markMastered(v.id)}
+                        >
+                          标记已掌握
+                        </button>
+                      )}
+                      {tab === "mastered" && (
+                        <button
+                          className="btn small"
+                          onClick={() => void restore(v.id)}
+                        >
+                          恢复学习
+                        </button>
+                      )}
+                      <button
+                        className="btn small danger"
+                        onClick={() => void remove(v.id)}
+                      >
+                        删除
+                      </button>
+                    </div>
+                  </li>
+                ))}
+                {filtered.length === 0 && <p className="muted">暂无词条</p>}
+              </ul>
             </>
           )}
-        </div>
+
+          {tab === "review" && (
+            <div className="review-panel">
+              {!current && <p className="muted">今日没有到期复习的词条。</p>}
+              {current && (
+                <>
+                  <p className="muted">剩余 {due.length} 张</p>
+                  <button
+                    type="button"
+                    className="flashcard"
+                    aria-pressed={flipped}
+                    onClick={() => setFlipped((f) => !f)}
+                  >
+                    <div className="flash-term">{current.term}</div>
+                    <p className="context">
+                      “{clipContext(current.context_sentence)}”
+                    </p>
+                    {flipped ? (
+                      <div className="flash-back">
+                        <p>{current.definition_zh}</p>
+                        <p className="pill inline">{current.word_type}</p>
+                        {current.collocations?.length > 0 && (
+                          <p className="muted">
+                            常见搭配：{current.collocations.join(" · ")}
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="muted tip">点击或按 Enter 查看释义</p>
+                    )}
+                  </button>
+                  <div className="rate-row">
+                    <button className="btn" onClick={() => void rate("again")}>
+                      不认识
+                    </button>
+                    <button className="btn" onClick={() => void rate("hard")}>
+                      模糊
+                    </button>
+                    <button
+                      className="btn primary"
+                      onClick={() => void rate("easy")}
+                    >
+                      认识
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

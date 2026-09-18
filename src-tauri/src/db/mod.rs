@@ -314,7 +314,7 @@ const LEGACY_COLUMN_ADDITIONS: &[&str] = &[
 /// Version-gated migrations. To add one: raise `LATEST_VERSION` and apply its
 /// DDL inside `migrate` when `stored < N`. Stamp each version with its own
 /// number (never `LATEST_VERSION`) so later steps are not skipped.
-const LATEST_VERSION: i64 = 6;
+const LATEST_VERSION: i64 = 7;
 
 fn migrate(conn: &Connection) -> Result<(), AppError> {
     let mut stored: i64 = conn
@@ -419,6 +419,22 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
         conn.pragma_update(None, "user_version", 6)
             ?;
         stored = 6;
+    }
+
+    if stored < 7 {
+        // Topic tags from card translation — input for semantic interest profiling.
+        if let Err(e) = conn.execute(
+            "ALTER TABLE articles ADD COLUMN tags_json TEXT NOT NULL DEFAULT ''",
+            [],
+        ) {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                return Err(AppError::msg(msg));
+            }
+        }
+        conn.pragma_update(None, "user_version", 7)
+            .map_err(AppError::from)?;
+        stored = 7;
     }
 
     if stored < LATEST_VERSION {

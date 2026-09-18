@@ -3,6 +3,7 @@ import type { TranslateProgress } from "./api";
 import {
   applyTranslateProgress,
   categoryLabel,
+  clipContext,
   findContext,
   translateProgressLabel,
 } from "./readerUtils";
@@ -34,6 +35,35 @@ describe("findContext", () => {
 
   it("returns the term when no paragraph matches", () => {
     expect(findContext(paras, "quantum")).toBe("quantum");
+  });
+
+  it("returns a short window around the term for long paragraphs", () => {
+    const long =
+      "It was the best of times, it was the worst of times. ".repeat(20) +
+      "Here lies serendipity, and much more follows after it in this very long paragraph.";
+    const ctx = findContext([long], "serendipity");
+    expect(ctx.length).toBeLessThan(160);
+    expect(ctx).toContain("serendipity");
+  });
+});
+
+describe("clipContext", () => {
+  it("keeps short sentences untouched", () => {
+    expect(clipContext("Short and sweet.")).toBe("Short and sweet.");
+  });
+
+  it("clips long text to the last sentence end inside the window", () => {
+    const clipped = clipContext(
+      "First idea stands here. " + "Second sentence keeps going far beyond the limit. ",
+      40,
+    );
+    expect(clipped.length).toBeLessThanOrEqual(41);
+    expect(clipped.endsWith("…")).toBe(true);
+    expect(clipped.startsWith("First")).toBe(true);
+  });
+
+  it("collapses whitespace", () => {
+    expect(clipContext("a\n\n   b")).toBe("a b");
   });
 });
 

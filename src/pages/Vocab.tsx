@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { clipContext } from "../readerUtils";
 import { api, VocabItem } from "../api";
 import { useVocab } from "../store";
 
@@ -139,7 +140,7 @@ export default function Vocab() {
                   </p>
                 )}
                 {v.context_sentence && (
-                  <p className="context">“{v.context_sentence}”</p>
+                  <p className="context">“{clipContext(v.context_sentence)}”</p>
                 )}
                 <div className="row-actions">
                   {tab === "learning" && (
@@ -176,7 +177,7 @@ export default function Vocab() {
                 onClick={() => setFlipped((f) => !f)}
               >
                 <div className="flash-term">{current.term}</div>
-                <p className="context">“{current.context_sentence}”</p>
+                <p className="context">“{clipContext(current.context_sentence)}”</p>
                 {flipped ? (
                   <div className="flash-back">
                     <p>{current.definition_zh}</p>

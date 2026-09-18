@@ -656,7 +656,7 @@ pub fn fill_missing_card_zh(
     let mut last_err: Option<String> = None;
     on_progress(done, total);
 
-    for chunk in missing.chunks(8) {
+    for chunk in missing.chunks(16) {
         let cards: Vec<vocab::ArticleCardIn> = chunk
             .iter()
             .map(|a| vocab::card_from_article(&a.title, &a.content_text))
@@ -683,6 +683,9 @@ pub fn fill_missing_card_zh(
                 if article.summary_zh.is_empty() && !card.summary_zh.is_empty() {
                     db::set_article_summary_zh(&conn, &article.id, &card.summary_zh)?;
                     wrote = true;
+                }
+                if !card.tags.is_empty() {
+                    db::set_article_tags(&conn, &article.id, &card.tags)?;
                 }
                 if wrote {
                     done += 1;

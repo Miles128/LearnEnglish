@@ -10,6 +10,7 @@ import { ensureLexiconLoaded, isFreqBand, type FreqBand } from "../wordLevels";
 import SourceBoard from "../components/SourceBoard";
 import { groupBySource } from "../sourceInterest";
 import { pickTopArticles, topPickIds } from "../topPicks";
+import { applyDifficultyOrder } from "../difficultyRank";
 
 const PAGE_SIZE = 60;
 
@@ -106,15 +107,6 @@ export default function Home() {
     }
   }
 
-  const topPicks = useMemo(() => pickTopArticles(articles), [articles]);
-  const picksIds = useMemo(() => topPickIds(topPicks), [topPicks]);
-  // The backend returns articles in interest-rank order, so section order =
-  // first appearance, and articles within a board keep their rank.
-  const sections = useMemo(
-    () =>
-      groupBySource(articles.filter((a) => !picksIds.has(a.id))),
-    [articles, picksIds],
-  );
   const tabCategories = useMemo(() => {
     const tabs = [{ id: "all", label: "全部" }];
     for (const c of categories) {
@@ -134,6 +126,22 @@ export default function Home() {
     }
     return map;
   }, [articles, learningTerms, freqBand]);
+
+  // Difficulty fit nudges the backend rank: the sweet spot (a few new words
+  // per paragraph) floats up, word walls and trivially-easy pieces sink.
+  const orderedArticles = useMemo(
+    () => applyDifficultyOrder(articles, knownPctById),
+    [articles, knownPctById],
+  );
+  const topPicks = useMemo(() => pickTopArticles(orderedArticles), [orderedArticles]);
+  const picksIds = useMemo(() => topPickIds(topPicks), [topPicks]);
+  // Difficulty-adjusted rank order: section order = first appearance, and
+  // articles within a board keep their adjusted rank.
+  const sections = useMemo(
+    () =>
+      groupBySource(orderedArticles.filter((a) => !picksIds.has(a.id))),
+    [orderedArticles, picksIds],
+  );
 
   // The top bar drives refresh + feed management; Home only reacts.
   useEffect(() => {

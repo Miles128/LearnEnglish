@@ -76,6 +76,25 @@ pub fn article_age_days(published_at: Option<&str>, fetched_at: &str, now: DateT
     }
 }
 
+/// Dwell-time signals (ms of visible, focused reading).
+/// Long dwell = real engagement even if not finished; a sub-30s bounce on an
+/// opened article is a weak negative.
+pub fn dwell_adjustment(dwell_ms: i64, read_completed: bool) -> f64 {
+    if dwell_ms >= 300_000 {
+        if read_completed {
+            0.8 // deep engaged read to the end
+        } else {
+            0.6 // long dwell, unfinished
+        }
+    } else if dwell_ms >= 30_000 {
+        0.2
+    } else if dwell_ms > 0 && !read_completed {
+        -0.15 // bounced quickly
+    } else {
+        0.0
+    }
+}
+
 pub fn article_rank_score(
     article: &ArticleListItem,
     affinity: &Affinity,
@@ -100,10 +119,13 @@ pub fn article_rank_score(
     score += word_fit(article.word_count);
     if article.open_count == 0 {
         score += exploration_jitter(&article.id, day_key);
-    } else if article.read_completed {
-        score -= 0.6;
     } else {
-        score -= 0.25;
+        if article.read_completed {
+            score -= 0.6;
+        } else {
+            score -= 0.25;
+        }
+        score += dwell_adjustment(article.dwell_ms, article.read_completed);
     }
     score
 }
@@ -216,6 +238,19 @@ mod tests {
         let differs = (0..20)
             .any(|d| exploration_jitter("abc", d) != exploration_jitter("abc", d + 1));
         assert!(differs, "jitter should re-seed across days");
+    }
+
+    #[test]
+    fn dwell_signals_engagement() {
+        assert!((dwell_adjustment(0, false)).abs() < f64::EPSILON);
+        assert_eq!(dwell_adjustment(10_000, false), -0.15, "quick bounce");
+        assert_eq!(dwell_adjustment(60_000, false), 0.2, "read a minute");
+        assert_eq!(dwell_adjustment(400_000, false), 0.6, "long dwell");
+        assert_eq!(
+            dwell_adjustment(400_000, true),
+            0.8,
+            "long dwell read to the end"
+        );
     }
 
     #[test]

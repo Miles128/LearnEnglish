@@ -14,14 +14,44 @@ pub fn list_articles(
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<ArticleListItem>, AppError> {
-    list_articles_filtered(conn, category, &[], limit, offset)
+    query_articles(
+        conn,
+        &ArticleQuery {
+            category,
+            ..Default::default()
+        },
+        limit,
+        offset,
+    )
 }
 
-/// List with an optional tag filter (OR semantics across the given tags).
-pub fn list_articles_filtered(
+/// Read-state filter for the library view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReadState {
+    #[default]
+    All,
+    Unread,
+    Read,
+}
+
+/// Library / list filters. Empty fields are ignored.
+#[derive(Debug, Clone, Default)]
+pub struct ArticleQuery<'a> {
+    pub category: Option<&'a str>,
+    /// OR across tags.
+    pub tags: &'a [String],
+    /// Exact source (publication) name.
+    pub source: Option<&'a str>,
+    pub read_state: ReadState,
+    pub liked_only: bool,
+    /// Newest first (library) instead of source-grouped (default).
+    pub recent_first: bool,
+}
+
+/// Filtered article list. Tags are OR; everything else is AND.
+pub fn query_articles(
     conn: &Connection,
-    category: Option<&str>,
-    tags: &[String],
+    query: &ArticleQuery<'_>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<ArticleListItem>, AppError> {
@@ -30,37 +60,66 @@ pub fn list_articles_filtered(
     );
     let mut params: Vec<rusqlite::types::Value> = vec![];
     let mut clauses: Vec<String> = vec![];
-    if let Some(cat) = category {
-        if cat != "all" {
-            clauses.push("category=?".into());
-            params.push(rusqlite::types::Value::Text(cat.to_string()));
-        }
+    if let Some(cat) = query.category.filter(|c| *c != "all") {
+        clauses.push("category=?".into());
+        params.push(rusqlite::types::Value::Text(cat.to_string()));
     }
-    if !tags.is_empty() {
-        let ors: Vec<String> = tags
+    if !query.tags.is_empty() {
+        // json_each() errors on an empty string — articles without tags can
+        // never match a tag filter, so exclude them up front.
+        clauses.push("tags_json <> ''".into());
+        let ors: Vec<String> = query
+            .tags
             .iter()
             .map(|_| "EXISTS (SELECT 1 FROM json_each(tags_json) WHERE value=?)".to_string())
             .collect();
         clauses.push(format!("({})", ors.join(" OR ")));
-        for tag in tags {
+        for tag in query.tags {
             params.push(rusqlite::types::Value::Text(tag.clone()));
         }
+    }
+    if let Some(source) = query.source.filter(|s| !s.is_empty()) {
+        clauses.push("source=?".into());
+        params.push(rusqlite::types::Value::Text(source.to_string()));
+    }
+    match query.read_state {
+        ReadState::All => {}
+        ReadState::Unread => clauses.push("last_opened_at IS NULL".into()),
+        ReadState::Read => clauses.push("last_opened_at IS NOT NULL".into()),
+    }
+    if query.liked_only {
+        clauses.push("liked=1".into());
     }
     if !clauses.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&clauses.join(" AND "));
     }
-    sql.push_str(" ORDER BY source ASC, fetched_at DESC, published_at DESC, id ASC");
+    if query.recent_first {
+        sql.push_str(" ORDER BY fetched_at DESC, published_at DESC, id ASC");
+    } else {
+        sql.push_str(" ORDER BY source ASC, fetched_at DESC, published_at DESC, id ASC");
+    }
     sql.push_str(" LIMIT ? OFFSET ?");
     params.push(rusqlite::types::Value::Integer(limit.unwrap_or(60)));
     params.push(rusqlite::types::Value::Integer(offset.unwrap_or(0)));
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
-        .query_map(rusqlite::params_from_iter(params.iter()), map_article_list_item)
-        ?
+        .query_map(rusqlite::params_from_iter(params.iter()), map_article_list_item)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Distinct sources with article counts, busiest first (library filter).
+pub fn list_article_sources(conn: &Connection) -> Result<Vec<(String, i64)>, AppError> {
+    let mut stmt = conn
+        .prepare("SELECT source, COUNT(*) FROM articles GROUP BY source ORDER BY COUNT(*) DESC, source ASC")
+        .map_err(AppError::from)?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
+        .map_err(AppError::from)?
         .collect::<Result<Vec<_>, _>>()
-        ?;
+        .map_err(AppError::from)?;
     Ok(rows)
 }
 

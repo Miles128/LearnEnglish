@@ -51,6 +51,8 @@ pub async fn list_articles_ranked(
     app: AppHandle,
     category: Option<String>,
     tags: Option<Vec<String>>,
+    source: Option<String>,
+    unread_only: Option<bool>,
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<ArticleListItem>, AppError> {
@@ -58,10 +60,20 @@ pub async fn list_articles_ranked(
     crate::commands::spawn_db(app, move |state| {
         let items = {
             let conn = state.lock_read()?;
-            db::list_articles_filtered(
+            db::query_articles(
                 &conn,
-                category.as_deref(),
-                &tags,
+                &db::ArticleQuery {
+                    category: category.as_deref(),
+                    tags: &tags,
+                    source: source.as_deref(),
+                    read_state: if unread_only.unwrap_or(false) {
+                        db::ReadState::Unread
+                    } else {
+                        db::ReadState::All
+                    },
+                    liked_only: false,
+                    recent_first: false,
+                },
                 Some(RANK_WINDOW),
                 Some(0),
             )?
@@ -93,6 +105,52 @@ pub async fn list_articles_ranked(
             .collect())
     })
     .await
+}
+
+/// Library listing: every article with the full filter set, newest first.
+#[tauri::command]
+pub async fn list_library(
+    app: AppHandle,
+    category: Option<String>,
+    tags: Option<Vec<String>>,
+    source: Option<String>,
+    read_state: Option<String>,
+    liked_only: Option<bool>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> Result<Vec<ArticleListItem>, AppError> {
+    let tags = tags.unwrap_or_default();
+    let read_state = match read_state.as_deref() {
+        Some("unread") => db::ReadState::Unread,
+        Some("read") => db::ReadState::Read,
+        _ => db::ReadState::All,
+    };
+    crate::commands::spawn_db(app, move |state| {
+        let conn = state.lock_read()?;
+        Ok(db::query_articles(
+            &conn,
+            &db::ArticleQuery {
+                category: category.as_deref(),
+                tags: &tags,
+                source: source.as_deref(),
+                read_state,
+                liked_only: liked_only.unwrap_or(false),
+                recent_first: true,
+            },
+            limit,
+            offset,
+        )?)
+    })
+    .await
+}
+
+/// Distinct sources with counts for the library source filter.
+#[tauri::command]
+pub fn list_article_sources(
+    state: tauri::State<'_, DbState>,
+) -> Result<Vec<(String, i64)>, AppError> {
+    let conn = state.lock_read()?;
+    Ok(db::list_article_sources(&conn)?)
 }
 
 /// Backfill topic tags (bounded per call; refresh also runs a batch).

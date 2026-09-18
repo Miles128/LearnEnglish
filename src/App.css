@@ -309,6 +309,45 @@ a {
   flex-wrap: wrap;
 }
 
+.library-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.filter-select {
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  font-size: 0.78rem;
+  padding: 5px 8px;
+  border-radius: 999px;
+  max-width: 240px;
+}
+
+.article-row-source {
+  margin: 2px 0 0;
+  font-size: 0.78rem;
+}
+
+.library-list {
+  margin-top: 0;
+}
+
 .tag-filter {
   display: flex;
   flex-wrap: wrap;

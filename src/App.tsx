@@ -48,6 +48,16 @@ function IconVocab() {
   );
 }
 
+function IconLibrary() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M4 4h5v16H4z" />
+      <path d="M10.5 4h5v16h-5z" />
+      <path d="m17.5 5.5 3.2.9-4.2 15-3.2-.9z" />
+    </svg>
+  );
+}
+
 function IconFeeds() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -219,6 +229,15 @@ export default function App() {
             >
               <IconImport />
             </button>
+            <NavLink
+              to="/library"
+              className="topbar-btn"
+              title="文章库"
+              aria-label="文章库"
+              onClick={() => toggleNav("/library")}
+            >
+              <IconLibrary />
+            </NavLink>
             <NavLink
               to="/vocab"
               className="topbar-btn"

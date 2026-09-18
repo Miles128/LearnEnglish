@@ -16,6 +16,8 @@ import { pickTopArticles, topPickIds } from "../topPicks";
 import { applyDifficultyOrder } from "../difficultyRank";
 
 const PAGE_SIZE = 60;
+/** 今日推荐: the first N ranked unread articles, shown expanded. */
+const TOP_PICKS = 10;
 
 /** Tag chips shown in the filter row: most frequent first, capped. */
 export function topTags(articles: ArticleListItem[], max: number = 12): string[] {
@@ -59,6 +61,8 @@ export default function Home() {
         api.listArticlesRanked(
           category === "all" ? undefined : category,
           activeTags,
+          undefined,
+          true,
           PAGE_SIZE,
           0,
         ),
@@ -127,6 +131,8 @@ export default function Home() {
       const next = await api.listArticlesRanked(
         category === "all" ? undefined : category,
         activeTags,
+        undefined,
+        true,
         PAGE_SIZE,
         articles.length,
       );
@@ -181,7 +187,10 @@ export default function Home() {
     () => applyDifficultyOrder(articles, difficultyById),
     [articles, difficultyById],
   );
-  const topPicks = useMemo(() => pickTopArticles(orderedArticles), [orderedArticles]);
+  const topPicks = useMemo(
+    () => pickTopArticles(orderedArticles, TOP_PICKS),
+    [orderedArticles],
+  );
   const picksIds = useMemo(() => topPickIds(topPicks), [topPicks]);
   // Difficulty-adjusted rank order: section order = first appearance, and
   // articles within a board keep their adjusted rank.
@@ -313,12 +322,13 @@ export default function Home() {
         <div className="source-boards top-picks">
           <SourceBoard
             section={{
-              source: "今日精选",
+              source: "今日推荐",
               category: topPicks[0].category,
               articles: topPicks,
             }}
             categories={categories}
             difficultyById={difficultyById}
+            collapseKey="home-top-picks"
           />
         </div>
       )}

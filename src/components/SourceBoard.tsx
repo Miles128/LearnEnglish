@@ -1,14 +1,8 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
 import type { ArticleListItem, FeedCategory } from "../api";
-import { articleListBlurb } from "../articleList";
+import type { DifficultyLevel } from "../difficulty";
 import { categoryLabel } from "../readerUtils";
-import {
-  difficultyClassName,
-  difficultyLabel,
-  type DifficultyLevel,
-} from "../difficulty";
-import { articleIsRead } from "../learningStats";
+import ArticleRow from "./ArticleRow";
 import {
   loadCollapsedSources,
   saveCollapsedSources,
@@ -26,18 +20,27 @@ type Props = {
   categories: FeedCategory[];
   /** article id → local difficulty level (computed by the parent). */
   difficultyById: Map<string, DifficultyLevel | null>;
+  /** Persist collapse state under this key instead of the source name.
+   *  No stored preference = expanded (今日推荐 is open by default). */
+  collapseKey?: string;
 };
 
 /** One per-source board on the home page: header + article list. */
-export default function SourceBoard({ section, categories, difficultyById }: Props) {
-  const [collapsed, setCollapsed] = useState(
-    () => loadCollapsedSources().has(section.source),
+export default function SourceBoard({
+  section,
+  categories,
+  difficultyById,
+  collapseKey,
+}: Props) {
+  const key = collapseKey ?? section.source;
+  const [collapsed, setCollapsed] = useState(() =>
+    loadCollapsedSources().has(key),
   );
 
   function toggle() {
-    const next = toggleSourceCollapsed(loadCollapsedSources(), section.source);
+    const next = toggleSourceCollapsed(loadCollapsedSources(), key);
     saveCollapsedSources(next);
-    setCollapsed(next.has(section.source));
+    setCollapsed(next.has(key));
   }
 
   return (
@@ -59,36 +62,13 @@ export default function SourceBoard({ section, categories, difficultyById }: Pro
       </button>
       {collapsed ? null : (
         <ul className="article-list">
-          {section.articles.map((a) => {
-            const level = difficultyById.get(a.id) ?? null;
-            const blurb = articleListBlurb(a);
-            return (
-              <li key={a.id}>
-                <Link
-                  to={`/article/${a.id}`}
-                  className={
-                    articleIsRead(a) ? "article-row is-read" : "article-row"
-                  }
-                >
-                  <div className="article-title-line">
-                    <h3 className="article-title-en">{a.title}</h3>
-                    {level && (
-                      <span className={difficultyClassName(level)}>
-                        {difficultyLabel(level)}
-                      </span>
-                    )}
-                  </div>
-                  {a.title_zh ? (
-                    <p className="article-title-zh">{a.title_zh}</p>
-                  ) : null}
-                  {blurb ? <p className="article-summary-zh">{blurb}</p> : null}
-                  {a.tags.length > 0 ? (
-                    <p className="article-tags muted">{a.tags.join(" · ")}</p>
-                  ) : null}
-                </Link>
-              </li>
-            );
-          })}
+          {section.articles.map((a) => (
+            <ArticleRow
+              key={a.id}
+              article={a}
+              difficulty={difficultyById.get(a.id) ?? null}
+            />
+          ))}
         </ul>
       )}
     </section>

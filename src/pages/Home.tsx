@@ -21,6 +21,7 @@ import {
   prepareLookup,
   rememberTranslation,
 } from "../wordLookup";
+import { ensureDetailsLoaded, lookupDetail } from "../wordDetails";
 import { useTts } from "../useTts";
 import { useEscapeKey } from "../useEscapeKey";
 
@@ -252,10 +253,30 @@ export default function Home() {
   // Selection-to-translate on the home list (titles / summaries).
   const showMeaning = useCallback(
     async (text: string, x: number, y: number) => {
-      const { term, source } = prepareLookup(text);
+      const { term: ruleTerm, source } = prepareLookup(text);
+      let detail: ReturnType<typeof lookupDetail> = null;
+      try {
+        await ensureDetailsLoaded();
+        detail = lookupDetail(source) ?? lookupDetail(ruleTerm);
+      } catch {
+        // details are optional — fall through to the bundled gloss / LLM
+      }
+      const term = detail?.lemma || ruleTerm;
+      if (detail) {
+        setPopover({ x, y, text: term, source, detail, origin: "local", loading: false });
+        return;
+      }
       const gloss = bundledGloss(term) ?? cachedTranslation(term);
       if (gloss) {
-        setPopover({ x, y, text: term, source, translation: gloss, loading: false });
+        setPopover({
+          x,
+          y,
+          text: term,
+          source,
+          translation: gloss,
+          origin: "local",
+          loading: false,
+        });
         return;
       }
       setPopover({ x, y, text: term, source, loading: true });
@@ -264,7 +285,7 @@ export default function Home() {
         rememberTranslation(term, translated);
         setPopover((p) =>
           p && p.text === term
-            ? { ...p, translation: translated, loading: false }
+            ? { ...p, translation: translated, origin: "ai" as const, loading: false }
             : p,
         );
       } catch (err) {

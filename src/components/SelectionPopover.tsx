@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { SpeakTarget } from "../useTts";
+import type { WordDetail } from "../wordDetails";
 
 export type Popover = {
   x: number;
@@ -7,6 +8,10 @@ export type Popover = {
   text: string;
   /** Raw selection (before lemma reduction) — used for context sentences. */
   source?: string;
+  /** Rich local dictionary entry (senses, phonetics, examples). */
+  detail?: WordDetail | null;
+  /** Where the shown translation came from, for transparency. */
+  origin?: "local" | "ai";
   translation?: string;
   loading?: boolean;
   error?: string;
@@ -50,6 +55,15 @@ export function clampPopoverPosition(input: {
   return { x: left + popW * shiftX, y: top - gap };
 }
 
+/** Split a stored POS string ("v./n.") for display. */
+export function posLabel(pos: string): string {
+  return pos
+    .split("/")
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .join(" · ");
+}
+
 /** Floating panel shown after selecting / clicking a word. */
 export default function SelectionPopover({
   popover,
@@ -88,10 +102,43 @@ export default function SelectionPopover({
       aria-label={popover.text}
       style={{ left: pos.x, top: pos.y + 12 }}
     >
-      <div className="pop-term">{popover.text}</div>
+      <div className="pop-term">
+        {popover.text}
+        {popover.detail?.phonetic ? (
+          <span className="pop-phonetic">/ {popover.detail.phonetic} /</span>
+        ) : null}
+        {popover.detail?.pos ? (
+          <span className="pop-pos">{posLabel(popover.detail.pos)}</span>
+        ) : null}
+      </div>
       {popover.loading && <div className="muted">翻译中…</div>}
       {popover.error && <div className="err-inline">{popover.error}</div>}
-      {popover.translation && <div className="pop-zh">{popover.translation}</div>}
+
+      {popover.detail && popover.detail.senses.length > 0 ? (
+        <ol className="pop-senses">
+          {popover.detail.senses.slice(0, 4).map((sense, i) => (
+            <li key={i}>{sense}</li>
+          ))}
+        </ol>
+      ) : popover.translation ? (
+        <div className="pop-zh">{popover.translation}</div>
+      ) : null}
+
+      {popover.detail && popover.detail.examples.length > 0 && (
+        <div className="pop-examples">
+          {popover.detail.examples.map((ex, i) => (
+            <div className="pop-example" key={i}>
+              <p className="pop-ex-en">{ex.en}</p>
+              {ex.zh ? <p className="pop-ex-zh">{ex.zh}</p> : null}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {popover.origin === "local" && (
+        <div className="pop-origin muted">内置词典 · ECDICT / Tatoeba</div>
+      )}
+      {popover.origin === "ai" && <div className="pop-origin muted">AI 翻译</div>}
       <div className="pop-actions">
         <button
           className="btn small"

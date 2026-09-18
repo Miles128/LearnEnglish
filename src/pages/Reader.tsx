@@ -18,6 +18,7 @@ import {
 import { AnnotatedPara } from "../annotateText";
 import { shouldRenderMarkdown } from "../markdown";
 import { bundledGloss, prepareLookup } from "../wordLookup";
+import { ensureDetailsLoaded, lookupDetail } from "../wordDetails";
 import SelectionPopover, { type Popover } from "../components/SelectionPopover";
 import ReaderParagraph from "../components/ReaderParagraph";
 import { useAppConfig, useVocab } from "../store";
@@ -223,7 +224,19 @@ export default function Reader() {
     }) {
       const { text, x, y, bundledZh } = opts;
       // Clicking an inflected word looks it up as its base form.
-      const { term, source } = prepareLookup(text);
+      const { term: ruleTerm, source } = prepareLookup(text);
+      let detail: ReturnType<typeof lookupDetail> = null;
+      try {
+        await ensureDetailsLoaded();
+        detail = lookupDetail(source) ?? lookupDetail(ruleTerm);
+      } catch {
+        // details are optional — fall through to the bundled gloss / LLM
+      }
+      const term = detail?.lemma || ruleTerm;
+      if (detail) {
+        setPopover({ x, y, text: term, source, detail, origin: "local", loading: false });
+        return;
+      }
       const fromLexicon = bundledZh || lookupWord(term)?.zh || bundledGloss(term);
       if (fromLexicon) {
         setPopover({
@@ -232,6 +245,7 @@ export default function Reader() {
           text: term,
           source,
           translation: fromLexicon,
+          origin: "local",
           loading: false,
         });
         return;
@@ -243,7 +257,7 @@ export default function Reader() {
         const row = await api.translateSelection(id, term);
         setPopover((p) =>
           p && p.text === term
-            ? { ...p, translation: row.translated_text, loading: false }
+            ? { ...p, translation: row.translated_text, origin: "ai" as const, loading: false }
             : p,
         );
       } catch (err) {

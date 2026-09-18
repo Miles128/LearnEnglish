@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   shouldForcePlacement,
   shouldHideAppNav,
@@ -16,6 +17,16 @@ import "./App.css";
  * mounted pages (e.g. Home) listen for. */
 export function emitUiSignal(name: "feeds-changed" | "refreshed", detail?: unknown) {
   window.dispatchEvent(new CustomEvent(`shiyan:${name}`, { detail }));
+}
+
+function IconImport() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M12 3v12" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M4 19h16" />
+    </svg>
+  );
 }
 
 function IconRefresh() {
@@ -58,6 +69,8 @@ function IconSettings() {
 export default function App() {
   const [progress, setProgress] = useState<RefreshProgress | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [importingFile, setImportingFile] = useState(false);
+  const [topbarError, setTopbarError] = useState<string | null>(null);
   const [manageOpen, setManageOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
@@ -108,6 +121,33 @@ export default function App() {
   // Top-bar page buttons act as toggles: clicking the active page goes home.
   function toggleNav(to: string) {
     if (location.pathname === to) navigate("/");
+  }
+
+  async function onImportFile() {
+    if (importingFile) return;
+    setTopbarError(null);
+    let selected: string | string[] | null;
+    try {
+      selected = await open({
+        multiple: false,
+        filters: [{ name: "文档", extensions: ["txt", "pdf", "docx"] }],
+      });
+    } catch (e) {
+      setTopbarError(String(e));
+      return;
+    }
+    if (selected === null) return;
+    const path = Array.isArray(selected) ? selected[0] : selected;
+    if (!path) return;
+    setImportingFile(true);
+    try {
+      const article = await api.importArticleFile(path);
+      navigate(`/article/${article.id}`);
+    } catch (e) {
+      setTopbarError(String(e));
+    } finally {
+      setImportingFile(false);
+    }
   }
 
   const forcePlacement = shouldForcePlacement(cfg);
@@ -164,6 +204,16 @@ export default function App() {
             >
               <IconRefresh />
             </button>
+            <button
+              type="button"
+              className="topbar-btn"
+              onClick={() => void onImportFile()}
+              disabled={importingFile}
+              title="导入文件（txt / pdf / docx）"
+              aria-label="导入文件"
+            >
+              <IconImport />
+            </button>
             <NavLink
               to="/vocab"
               className="topbar-btn"
@@ -203,6 +253,7 @@ export default function App() {
             </button>
           </div>
         )}
+        {topbarError && <p className="banner err">{topbarError}</p>}
         <Outlet />
       </main>
 

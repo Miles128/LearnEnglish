@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { open } from "@tauri-apps/plugin-dialog";
 import { api, ArticleListItem, FeedCategory, LearningStats, RefreshResult } from "../api";
 import { articleNeedsCardZh } from "../articleList";
 import { formatLearningInsight } from "../learningStats";
@@ -15,14 +13,12 @@ import { applyDifficultyOrder } from "../difficultyRank";
 const PAGE_SIZE = 60;
 
 export default function Home() {
-  const navigate = useNavigate();
   const [category, setCategory] = useState("all");
   const [categories, setCategories] = useState<FeedCategory[]>([]);
   const [articles, setArticles] = useState<ArticleListItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [importing, setImporting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [learningStats, setLearningStats] = useState<LearningStats | null>(null);
@@ -175,53 +171,8 @@ export default function Home() {
     };
   }, [load]);
 
-  async function onImportFile() {
-    setMessage(null);
-    setError(null);
-    let selected: string | string[] | null;
-    try {
-      selected = await open({
-        multiple: false,
-        filters: [
-          {
-            name: "文档",
-            extensions: ["txt", "pdf", "docx"],
-          },
-        ],
-      });
-    } catch (err) {
-      setError(String(err));
-      return;
-    }
-    if (selected === null) return;
-    const path = Array.isArray(selected) ? selected[0] : selected;
-    if (!path) return;
-
-    setImporting(true);
-    try {
-      const article = await api.importArticleFile(path);
-      setMessage(`已导入：${article.title}`);
-      navigate(`/article/${article.id}`);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setImporting(false);
-    }
-  }
-
   return (
     <div className="page">
-      <div className="home-import-row">
-        <button
-          className="btn"
-          type="button"
-          disabled={importing}
-          onClick={() => void onImportFile()}
-        >
-          {importing ? "导入中…" : "导入文件"}
-        </button>
-      </div>
-
       <div className="tabs">
         {tabCategories.map((c) => (
           <button

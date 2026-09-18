@@ -630,6 +630,77 @@ fn list_article_titles_dedup_window() {
 }
 
 #[test]
+fn content_audit_removes_synopsis_only_bodies_once() {
+    let path = temp_dir().join(format!("le-audit-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    // A 500-char synopsis that ends with a read-more marker (teaser).
+    let mut teaser = sample_article("teaser");
+    teaser.content_text = format!("word {} Continue reading…", "word ".repeat(90));
+    teaser.word_count = 90;
+    // A real full-text article.
+    let mut full = sample_article("full");
+    full.content_text = "word ".repeat(600);
+    full.word_count = 600;
+
+    db::insert_article_if_new(&conn, &teaser).unwrap();
+    db::insert_article_if_new(&conn, &full).unwrap();
+
+    let removed = feeds::audit_rss_bodies_once(&conn).unwrap();
+    assert_eq!(removed, 1, "synopsis-only body should be purged");
+    assert!(db::get_article(&conn, "teaser").unwrap().is_none());
+    assert!(db::get_article(&conn, "full").unwrap().is_some());
+
+    // One-shot: a second run does nothing even if junk appears later.
+    let mut junk = sample_article("junk");
+    junk.content_text = "word ".repeat(10);
+    junk.word_count = 10;
+    db::insert_article_if_new(&conn, &junk).unwrap();
+    assert_eq!(feeds::audit_rss_bodies_once(&conn).unwrap(), 0);
+    assert!(db::get_article(&conn, "junk").unwrap().is_some());
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn retention_purge_drops_old_rss_but_keeps_liked_and_imports() {
+    let path = temp_dir().join(format!("le-retention-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    let recent = chrono::Utc::now().to_rfc3339();
+    let old = (chrono::Utc::now() - chrono::Duration::days(40)).to_rfc3339();
+
+    let mut old_rss = sample_article("old-rss");
+    old_rss.published_at = Some(old.clone());
+    let mut old_liked = sample_article("old-liked");
+    old_liked.published_at = Some(old.clone());
+    old_liked.liked = true;
+    let mut old_import = sample_article("old-import");
+    old_import.published_at = Some(old.clone());
+    old_import.origin = "url".into();
+    let mut new_rss = sample_article("new-rss");
+    new_rss.published_at = Some(recent);
+
+    for a in [&old_rss, &old_liked, &old_import, &new_rss] {
+        db::insert_article_if_new(&conn, a).unwrap();
+    }
+    // `liked` is a signal column written via its own setter, not on insert.
+    db::set_article_liked(&conn, "old-liked", true).unwrap();
+
+    let removed = feeds::purge_expired_articles(&conn, 14).unwrap();
+    assert_eq!(removed, 1, "only the old unliked RSS article goes");
+    assert!(db::get_article(&conn, "old-rss").unwrap().is_none());
+    assert!(db::get_article(&conn, "old-liked").unwrap().is_some());
+    assert!(db::get_article(&conn, "old-import").unwrap().is_some());
+    assert!(db::get_article(&conn, "new-rss").unwrap().is_some());
+
+    // 0 = keep forever.
+    assert_eq!(feeds::purge_expired_articles(&conn, 0).unwrap(), 0);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn vocab_dedup_by_term_and_delete_article_detaches() {
     let path = temp_dir().join(format!("le-vocab-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");
@@ -896,7 +967,15 @@ fn schema_adds_summary_zh_column() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
+    let meta_table: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='app_meta'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(meta_table, 1, "app_meta should exist after migrate");
     let tags_col: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_info('articles') WHERE name='tags_json'",

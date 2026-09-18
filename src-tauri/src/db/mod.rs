@@ -314,7 +314,7 @@ const LEGACY_COLUMN_ADDITIONS: &[&str] = &[
 /// Version-gated migrations. To add one: raise `LATEST_VERSION` and apply its
 /// DDL inside `migrate` when `stored < N`. Stamp each version with its own
 /// number (never `LATEST_VERSION`) so later steps are not skipped.
-const LATEST_VERSION: i64 = 7;
+const LATEST_VERSION: i64 = 8;
 
 fn migrate(conn: &Connection) -> Result<(), AppError> {
     let mut stored: i64 = conn
@@ -435,6 +435,21 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
         conn.pragma_update(None, "user_version", 7)
             .map_err(AppError::from)?;
         stored = 7;
+    }
+
+    if stored < 8 {
+        // Key/value app metadata: one-time backfill markers and similar
+        // bookkeeping that must not be re-derived every refresh.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );",
+        )
+        .map_err(AppError::from)?;
+        conn.pragma_update(None, "user_version", 8)
+            .map_err(AppError::from)?;
+        stored = 8;
     }
 
     if stored < LATEST_VERSION {

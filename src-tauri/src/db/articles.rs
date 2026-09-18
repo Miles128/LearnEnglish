@@ -362,6 +362,56 @@ pub fn list_article_titles(
     Ok(rows)
 }
 
+/// Every stored RSS article (full body) — used by one-time content audits.
+pub fn list_all_rss_articles(conn: &Connection) -> Result<Vec<Article>, AppError> {
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {ARTICLE_COLS} FROM articles WHERE origin='rss'"
+        ))
+        .map_err(AppError::from)?;
+    let rows = stmt
+        .query_map([], map_article)
+        .map_err(AppError::from)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(AppError::from)?;
+    Ok(rows)
+}
+
+/// Retention purge: drop auto-ingested articles whose publication (falling
+/// back to fetch) time is older than `cutoff`. Liked articles and user
+/// imports are kept.
+pub fn purge_old_rss_articles(conn: &Connection, cutoff_rfc3339: &str) -> Result<usize, AppError> {
+    let changed = conn
+        .execute(
+            "DELETE FROM articles
+             WHERE origin='rss' AND liked=0
+               AND julianday(COALESCE(published_at, fetched_at)) < julianday(?1)",
+            params![cutoff_rfc3339],
+        )
+        .map_err(AppError::from)?;
+    Ok(changed)
+}
+
+pub fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>, AppError> {
+    conn.query_row(
+        "SELECT value FROM app_meta WHERE key=?1",
+        params![key],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(AppError::from)
+}
+
+pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO app_meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        params![key, value],
+    )
+    .map_err(AppError::from)?;
+    Ok(())
+}
+
 /// All-time open counts grouped by source and by category — the affinity
 /// signal for article ranking.
 pub fn affinity_open_counts(

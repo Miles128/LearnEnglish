@@ -154,6 +154,8 @@ export default function Home() {
         `新增 ${detail.added_or_updated}` +
           (detail.skipped_existing ? ` · 已有 ${detail.skipped_existing}` : "") +
           (detail.skipped_duplicate ? ` · 去重 ${detail.skipped_duplicate}` : "") +
+          (detail.purged_teasers ? ` · 清理残篇 ${detail.purged_teasers}` : "") +
+          (detail.purged_old ? ` · 过期清理 ${detail.purged_old}` : "") +
           (detail.feeds_unchanged ? ` · ${detail.feeds_unchanged} 源无更新` : "") +
           (detail.titles_translated ? ` · 译题/简介 ${detail.titles_translated}` : "") +
           (detail.errors.length ? ` · ${detail.errors.length} 个问题` : ""),

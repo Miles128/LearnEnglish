@@ -57,6 +57,10 @@ pub struct RefreshResult {
     pub skipped_short: usize,
     pub skipped_non_english: usize,
     pub skipped_duplicate: usize,
+    /// One-time backfill removals of synopsis-only / truncated bodies.
+    pub purged_teasers: usize,
+    /// Retention removals (articles older than the configured window).
+    pub purged_old: usize,
     pub feeds_unchanged: usize,
     pub titles_translated: usize,
     pub errors: Vec<String>,
@@ -326,6 +330,47 @@ pub(crate) fn rss_trust_chars(fulltext_ratio: f64) -> usize {
     }
 }
 
+/// One-time backfill: re-audit every stored RSS body with the current
+/// readability rules and delete anything that is only a synopsis, a
+/// truncated extract, or below the word threshold. Runs once (guarded by
+/// `app_meta`), refreshing word counts on the survivors.
+const CONTENT_AUDIT_KEY: &str = "content_audit_v1";
+
+pub(crate) fn audit_rss_bodies_once(conn: &Connection) -> Result<usize, AppError> {
+    if db::get_meta(conn, CONTENT_AUDIT_KEY)?.is_some() {
+        return Ok(0);
+    }
+    let articles = db::list_all_rss_articles(conn)?;
+    let mut removed = 0usize;
+    for article in &articles {
+        let word_count = article.content_text.split_whitespace().count() as i64;
+        let bad = word_count < MIN_ARTICLE_WORDS as i64
+            || !is_readable_article_body(&article.content_text)
+            || looks_truncated(&article.content_text);
+        if bad {
+            db::delete_article(conn, &article.id)?;
+            removed += 1;
+        } else if article.word_count != word_count {
+            db::set_article_quality(conn, &article.id, "fulltext", "rss", word_count)?;
+        }
+    }
+    db::set_meta(conn, CONTENT_AUDIT_KEY, "done")?;
+    Ok(removed)
+}
+
+/// Retention: drop auto-ingested articles older than `retention_days`
+/// (0 = keep forever). Liked articles and user imports are never touched.
+pub(crate) fn purge_expired_articles(
+    conn: &Connection,
+    retention_days: u32,
+) -> Result<usize, AppError> {
+    if retention_days == 0 {
+        return Ok(0);
+    }
+    let cutoff = (Utc::now() - chrono::Duration::days(retention_days as i64)).to_rfc3339();
+    db::purge_old_rss_articles(conn, &cutoff)
+}
+
 /// Assess rows whose quality was never stamped (legacy rows and anything
 /// that predates the quality column). Deletes non-English / junk bodies and
 /// stamps the rest as 'fulltext'. Assessed rows are never re-derived later,
@@ -420,6 +465,10 @@ pub fn refresh_feeds(
         result.skipped_non_english += del_non_english;
         result.skipped_short += del_short;
         result.skipped_short += purge_rss_below_word_threshold(&conn)?;
+        // One-time body audit: synopsis-only / truncated bodies out.
+        result.purged_teasers += audit_rss_bodies_once(&conn)?;
+        // Retention window from settings.
+        result.purged_old += purge_expired_articles(&conn, cfg.article_retention_days)?;
     }
     let known_urls = std::sync::Mutex::new({
         let conn = db.lock_write()?;

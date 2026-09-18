@@ -203,6 +203,31 @@ export default function Settings() {
       </section>
 
       <section className="settings-section">
+        <h2>文章缓存</h2>
+        <label>
+          自动收录文章保留天数
+          <input
+            type="number"
+            min={0}
+            max={365}
+            value={cfg.article_retention_days}
+            onChange={(e) =>
+              setCfg({
+                ...cfg,
+                article_retention_days: Math.max(
+                  0,
+                  Math.min(365, Number(e.target.value) || 0),
+                ),
+              })
+            }
+          />
+        </label>
+        <p className="muted">
+          刷新时自动删除发布时间早于该天数的收录文章（0 = 永久保留）。你收藏的文章和手动导入的文件/链接不会被清理。默认 14 天。
+        </p>
+      </section>
+
+      <section className="settings-section">
         <h2>大模型（OpenAI 兼容）</h2>
         <label>
           Base URL

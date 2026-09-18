@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ArticleListItem, FeedCategory, LearningStats, RefreshResult } from "../api";
 import { articleNeedsCardZh } from "../articleList";
 import { formatLearningInsight } from "../learningStats";
-import { estimateKnownPercent } from "../knownPercent";
+import { articleDifficulty, type DifficultyLevel } from "../difficulty";
 import { useAppConfig, useVocab } from "../store";
-import { ensureLexiconLoaded, isFreqBand, type FreqBand } from "../wordLevels";
+import { ensureLexiconLoaded, isCefrLevel, isFreqBand, type FreqBand } from "../wordLevels";
 import SourceBoard from "../components/SourceBoard";
 import { groupBySource } from "../sourceInterest";
 import { pickTopArticles, topPickIds } from "../topPicks";
@@ -111,23 +111,32 @@ export default function Home() {
     return tabs;
   }, [categories]);
 
-  // Recompute known% only when the inputs change, not on every re-render.
-  const knownPctById = useMemo(() => {
-    const map = new Map<string, number | null>();
+  // Local difficulty index per article: density of words outside this
+  // learner's comfort zone (freq band + CEFR + learning terms).
+  const difficultyPrefs = useMemo(
+    () => ({
+      cefrLevel: isCefrLevel(cfg.cefr_level) ? cfg.cefr_level : ("B1" as const),
+      freqBand,
+    }),
+    [cfg.cefr_level, freqBand],
+  );
+  const difficultyById = useMemo(() => {
+    const map = new Map<string, DifficultyLevel | null>();
     for (const a of articles) {
       map.set(
         a.id,
-        estimateKnownPercent(a.excerpt, learningTerms, freqBand),
+        articleDifficulty(a.excerpt, learningTerms, difficultyPrefs)?.level ??
+          null,
       );
     }
     return map;
-  }, [articles, learningTerms, freqBand]);
+  }, [articles, learningTerms, difficultyPrefs]);
 
   // Difficulty fit nudges the backend rank: the sweet spot (a few new words
   // per paragraph) floats up, word walls and trivially-easy pieces sink.
   const orderedArticles = useMemo(
-    () => applyDifficultyOrder(articles, knownPctById),
-    [articles, knownPctById],
+    () => applyDifficultyOrder(articles, difficultyById),
+    [articles, difficultyById],
   );
   const topPicks = useMemo(() => pickTopArticles(orderedArticles), [orderedArticles]);
   const picksIds = useMemo(() => topPickIds(topPicks), [topPicks]);
@@ -233,7 +242,7 @@ export default function Home() {
               articles: topPicks,
             }}
             categories={categories}
-            knownPctById={knownPctById}
+            difficultyById={difficultyById}
           />
         </div>
       )}
@@ -244,7 +253,7 @@ export default function Home() {
             key={sec.source}
             section={sec}
             categories={categories}
-            knownPctById={knownPctById}
+            difficultyById={difficultyById}
           />
         ))}
       </div>

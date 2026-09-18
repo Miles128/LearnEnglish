@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ArticleListItem } from "./api/types";
+import type { DifficultyLevel } from "./difficulty";
 import {
   adjustedScore,
   applyDifficultyOrder,
@@ -30,33 +31,35 @@ function item(id: string, rankScore: number): ArticleListItem {
 }
 
 describe("difficultyAdjustment", () => {
-  it("rewards the sweet spot and demotes extremes", () => {
-    expect(difficultyAdjustment(90)).toBe(0.3);
-    expect(difficultyAdjustment(85)).toBe(0.3);
-    expect(difficultyAdjustment(90)).toBeGreaterThan(difficultyAdjustment(75));
-    expect(difficultyAdjustment(75)).toBe(-0.4);
-    expect(difficultyAdjustment(100)).toBe(-0.3);
+  it("floats the sweet spot and sinks the extremes", () => {
+    expect(difficultyAdjustment("normal")).toBe(0.3);
+    expect(difficultyAdjustment("hard")).toBe(0.2);
+    expect(difficultyAdjustment("easy")).toBe(-0.3);
+    expect(difficultyAdjustment("harder")).toBe(-0.2);
+    expect(difficultyAdjustment("hardest")).toBe(-0.5);
     expect(difficultyAdjustment(null)).toBe(0);
+    expect(difficultyAdjustment("hard")).toBeGreaterThan(
+      difficultyAdjustment("hardest"),
+    );
   });
 
   it("adjustedScore adds the delta to the backend rank", () => {
-    expect(adjustedScore(item("a", 1.0), 90)).toBeCloseTo(1.3);
+    expect(adjustedScore(item("a", 1.0), "normal")).toBeCloseTo(1.3);
     expect(adjustedScore(item("a", 1.0), null)).toBeCloseTo(1.0);
   });
 });
 
 describe("applyDifficultyOrder", () => {
-  it("re-sorts by adjusted score, unknown difficulty keeps rank order", () => {
-    const known = new Map<string, number | null>([
-      ["hard", 70],
-      ["sweet", 90],
-      ["plain", null],
+  it("re-sorts by adjusted score; unknown difficulty keeps rank order", () => {
+    const levels = new Map<string, DifficultyLevel | null>([
+      ["wall", "hardest"], // 2.0 - 0.5 = 1.5
+      ["sweet", "normal"], // 0.5 + 0.3 = 0.8
+      ["plain", null], // 1.0
     ]);
     const ordered = applyDifficultyOrder(
-      [item("hard", 2.0), item("plain", 1.0), item("sweet", 0.5)],
-      known,
+      [item("wall", 2.0), item("plain", 1.0), item("sweet", 0.5)],
+      levels,
     );
-    // sweet gets +0.3 (0.8), plain stays 1.0, hard drops to 1.6 → hard first.
-    expect(ordered.map((a) => a.id)).toEqual(["hard", "plain", "sweet"]);
+    expect(ordered.map((a) => a.id)).toEqual(["wall", "plain", "sweet"]);
   });
 });

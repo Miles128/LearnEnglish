@@ -319,10 +319,48 @@ a {
   font-size: 1.2rem;
 }
 
-.article-title-en {
+.article-title-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
   margin: 0 0 4px;
-  font-size: 1.15rem;
-  line-height: 1.35;
+}
+
+.article-title-line .article-title-en {
+  margin: 0;
+  min-width: 0;
+}
+
+/* Difficulty index badge — right-aligned to the title. */
+.difficulty-badge {
+  flex: none;
+  font-size: 0.74rem;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: #fff;
+}
+
+.difficulty-badge.d-easy {
+  background: #3f8f5f;
+}
+
+.difficulty-badge.d-normal {
+  background: #7aa93c;
+}
+
+.difficulty-badge.d-hard {
+  background: #c9a227;
+}
+
+.difficulty-badge.d-harder {
+  background: #d07a2b;
+}
+
+.difficulty-badge.d-hardest {
+  background: #c0453b;
 }
 
 .article-title-zh {
@@ -673,22 +711,6 @@ mark.vocab-hit:hover {
   text-align: justify;
   text-justify: inter-word;
   hyphens: auto;
-}
-
-.known-pct {
-  display: inline-flex;
-  align-items: center;
-  font-size: 0.82rem;
-  color: var(--accent);
-  margin-left: 8px;
-  white-space: nowrap;
-}
-
-.article-row-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 6px;
 }
 
 .source-link {

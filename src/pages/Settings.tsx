@@ -50,9 +50,8 @@ export default function Settings() {
 
   return (
     <div className="page">
-      <header className="page-header">
+      <header className="page-header page-header-slim">
         <div>
-          <h1>设置</h1>
           <p className="muted">难度、排版与 LLM（写入本地 config.local.json）</p>
         </div>
         <button className="btn primary" onClick={() => void save()}>

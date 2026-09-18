@@ -91,9 +91,8 @@ export default function Vocab() {
 
   return (
     <div className="page">
-      <header className="page-header">
+      <header className="page-header page-header-slim">
         <div>
-          <h1>生词库</h1>
           <p className="muted">总览 · 复习 · 已掌握归档</p>
         </div>
       </header>

@@ -406,32 +406,10 @@ export default function Reader() {
       ref={rootRef}
       style={readingCssVars(reading)}
     >
-      <header className="page-header">
-        <div>
-          <Link to="/" className="back">
-            ← 返回
-          </Link>
-          <h1>
-            {lexReady ? (
-              <AnnotatedPara
-                text={title}
-                prefs={prefs}
-                learningTerms={vocabTerms}
-                onHardClick={onHardWordClick}
-              />
-            ) : (
-              title
-            )}
-          </h1>
-          {article.title_zh && <p className="article-title-zh">{article.title_zh}</p>}
-          {article.summary_zh && (
-            <p className="article-summary-zh">{article.summary_zh}</p>
-          )}
-          <p className="muted">
-            {article.source} · {categoryLabel(article.category, categories)} · 难度{" "}
-            {prefs.cefrLevel} / {prefs.freqBand / 1000}k
-          </p>
-        </div>
+      <header className="page-header page-header-slim">
+        <Link to="/" className="back">
+          ← 返回
+        </Link>
         <div className="page-header-actions">
           <button
             className="btn"
@@ -464,6 +442,28 @@ export default function Reader() {
       {toast && <p className="banner ok">{toast}</p>}
 
       <article className="article-body" onMouseUp={onMouseUp}>
+        <div className="reader-heading">
+          <h1>
+            {lexReady ? (
+              <AnnotatedPara
+                text={title}
+                prefs={prefs}
+                learningTerms={vocabTerms}
+                onHardClick={onHardWordClick}
+              />
+            ) : (
+              title
+            )}
+          </h1>
+          {article.title_zh && <p className="article-title-zh">{article.title_zh}</p>}
+          {article.summary_zh && (
+            <p className="article-summary-zh">{article.summary_zh}</p>
+          )}
+          <p className="muted">
+            {article.source} · {categoryLabel(article.category, categories)} · 难度{" "}
+            {prefs.cefrLevel} / {prefs.freqBand / 1000}k
+          </p>
+        </div>
         {paragraphs.map((p, i) => (
           <ReaderParagraph
             key={i}

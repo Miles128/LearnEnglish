@@ -7,11 +7,58 @@ import {
   shouldShowPlacementNav,
 } from "./placement/engine";
 import { useAppConfig } from "./store";
+import { api, type RefreshResult } from "./api";
 import { type RefreshProgress } from "./api";
+import ManageFeedsDrawer from "./components/ManageFeedsDrawer";
 import "./App.css";
+
+/** Frontend-only signal bus: the top bar triggers cross-page actions that
+ * mounted pages (e.g. Home) listen for. */
+export function emitUiSignal(name: "feeds-changed" | "refreshed", detail?: unknown) {
+  window.dispatchEvent(new CustomEvent(`shiyan:${name}`, { detail }));
+}
+
+function IconRefresh() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+      <path d="M21 3v6h-6" />
+    </svg>
+  );
+}
+
+function IconVocab() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+      <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+    </svg>
+  );
+}
+
+function IconFeeds() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M4 11a9 9 0 0 1 9 9" />
+      <path d="M4 4a16 16 0 0 1 16 16" />
+      <circle cx="5" cy="19" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function IconSettings() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.06l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .06-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.06-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.06H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.06l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.06 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
 
 export default function App() {
   const [progress, setProgress] = useState<RefreshProgress | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const { cfg, ready, loadError, refresh } = useAppConfig();
@@ -45,6 +92,24 @@ export default function App() {
     }
   }, [cfg, ready, loadError, location.pathname, navigate]);
 
+  async function onRefresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const result: RefreshResult = await api.refreshFeeds();
+      emitUiSignal("refreshed", result);
+    } catch (e) {
+      emitUiSignal("refreshed", { error: String(e) });
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  // Top-bar page buttons act as toggles: clicking the active page goes home.
+  function toggleNav(to: string) {
+    if (location.pathname === to) navigate("/");
+  }
+
   const forcePlacement = shouldForcePlacement(cfg);
   const hideNav = shouldHideAppNav({
     ready,
@@ -61,26 +126,74 @@ export default function App() {
 
   return (
     <div className={`app-shell${progress ? " refreshing" : ""}`}>
-      <aside className="sidebar">
-        <div className="brand">
-          拾言
-          <span className="brand-en">Shiyan</span>
-        </div>
+      <header className="topbar" data-tauri-drag-region>
         {!hideNav && (
-          <nav>
-            <NavLink to="/" end>
+          <nav className="topbar-nav">
+            <span className="brand-mini" data-tauri-drag-region>
+              拾言
+            </span>
+            <NavLink to="/" end className="topbar-link" data-tauri-drag-region>
               今日阅读
             </NavLink>
-            <NavLink to="/vocab">生词库</NavLink>
-            <NavLink to="/settings">设置</NavLink>
+            {showPlacementNav && (
+              <NavLink to="/placement" className="topbar-link">
+                词汇测评
+              </NavLink>
+            )}
           </nav>
         )}
-        {showPlacementNav && (
-          <nav>
-            <NavLink to="/placement">词汇测评</NavLink>
+        {hideNav && showPlacementNav && (
+          <nav className="topbar-nav">
+            <span className="brand-mini" data-tauri-drag-region>
+              拾言
+            </span>
+            <NavLink to="/placement" className="topbar-link">
+              词汇测评
+            </NavLink>
           </nav>
         )}
-      </aside>
+        {!hideNav && (
+          <div className="topbar-actions">
+            <button
+              type="button"
+              className={`topbar-btn${refreshing ? " spin" : ""}`}
+              onClick={() => void onRefresh()}
+              disabled={refreshing}
+              title="刷新订阅"
+              aria-label="刷新订阅"
+            >
+              <IconRefresh />
+            </button>
+            <NavLink
+              to="/vocab"
+              className="topbar-btn"
+              title="生词库"
+              aria-label="生词库"
+              onClick={() => toggleNav("/vocab")}
+            >
+              <IconVocab />
+            </NavLink>
+            <button
+              type="button"
+              className="topbar-btn"
+              onClick={() => setManageOpen(true)}
+              title="管理订阅"
+              aria-label="管理订阅"
+            >
+              <IconFeeds />
+            </button>
+            <NavLink
+              to="/settings"
+              className="topbar-btn"
+              title="设置"
+              aria-label="设置"
+              onClick={() => toggleNav("/settings")}
+            >
+              <IconSettings />
+            </NavLink>
+          </div>
+        )}
+      </header>
       <main className="main">
         {loadError && (
           <div className="banner err with-action" role="status">
@@ -92,6 +205,14 @@ export default function App() {
         )}
         <Outlet />
       </main>
+
+      <ManageFeedsDrawer
+        open={manageOpen}
+        onClose={() => {
+          setManageOpen(false);
+          emitUiSignal("feeds-changed");
+        }}
+      />
 
       {(showBar || showDoneBriefly) && progress && (
         <div

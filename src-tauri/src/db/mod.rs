@@ -7,11 +7,13 @@
 mod articles;
 mod curated_feeds;
 mod feeds;
+mod phrases;
 mod translations;
 mod vocab;
 
 pub use articles::*;
 pub use curated_feeds::*;
+pub use phrases::*;
 pub use feeds::*;
 pub use translations::*;
 pub use vocab::*;
@@ -231,6 +233,28 @@ pub struct VocabItem {
     pub created_at: String,
 }
 
+/// A saved phrase / collocation with its own spaced-repetition state,
+/// kept separate from the single-word `vocab` library.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PhraseItem {
+    pub id: String,
+    pub phrase: String,
+    pub meaning_zh: String,
+    /// idiom / phrasal verb / collocation / 固定搭配 …
+    pub usage: String,
+    pub context_sentence: String,
+    pub article_id: Option<String>,
+    pub status: String,
+    pub interval_days: f64,
+    #[ts(type = "number")]
+    pub reps: i64,
+    #[ts(type = "number")]
+    pub consecutive_know: i64,
+    pub next_review_at: String,
+    pub created_at: String,
+}
+
 pub fn db_path(app_data: PathBuf) -> PathBuf {
     std::fs::create_dir_all(&app_data).ok();
     app_data.join("learnenglish.db")
@@ -320,7 +344,7 @@ const LEGACY_COLUMN_ADDITIONS: &[&str] = &[
 /// Version-gated migrations. To add one: raise `LATEST_VERSION` and apply its
 /// DDL inside `migrate` when `stored < N`. Stamp each version with its own
 /// number (never `LATEST_VERSION`) so later steps are not skipped.
-const LATEST_VERSION: i64 = 8;
+const LATEST_VERSION: i64 = 9;
 
 fn migrate(conn: &Connection) -> Result<(), AppError> {
     let mut stored: i64 = conn
@@ -456,6 +480,34 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
         conn.pragma_update(None, "user_version", 8)
             .map_err(AppError::from)?;
         stored = 8;
+    }
+
+    if stored < 9 {
+        // Phrase library: saved phrases/collocations with their own SRS state.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS phrases (
+                id TEXT PRIMARY KEY,
+                phrase TEXT NOT NULL,
+                meaning_zh TEXT NOT NULL DEFAULT '',
+                usage TEXT NOT NULL DEFAULT '',
+                context_sentence TEXT NOT NULL DEFAULT '',
+                article_id TEXT,
+                status TEXT NOT NULL DEFAULT 'learning',
+                interval_days REAL NOT NULL DEFAULT 0,
+                reps INTEGER NOT NULL DEFAULT 0,
+                consecutive_know INTEGER NOT NULL DEFAULT 0,
+                next_review_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (article_id) REFERENCES articles(id) ON DELETE SET NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_phrase_lower ON phrases(lower(phrase));
+            CREATE INDEX IF NOT EXISTS idx_phrase_status ON phrases(status);
+            CREATE INDEX IF NOT EXISTS idx_phrase_next ON phrases(next_review_at);",
+        )
+        .map_err(AppError::from)?;
+        conn.pragma_update(None, "user_version", 9)
+            .map_err(AppError::from)?;
+        stored = 9;
     }
 
     if stored < LATEST_VERSION {

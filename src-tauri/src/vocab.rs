@@ -1,6 +1,6 @@
 use crate::error::AppError;
 use crate::config::AppConfig;
-use crate::db::{self, DbState, VocabItem};
+use crate::db::{self, DbState, PhraseItem, VocabItem};
 use chrono::Utc;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -380,6 +380,103 @@ URLs must look like real feed endpoints (often ending in /feed, /rss, .xml)."#;
         return Err("模型未返回可用的 RSS 候选".into());
     }
     Ok(out)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PhraseEnrichment {
+    pub meaning_zh: String,
+    pub usage: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct AddPhraseInput {
+    pub phrase: String,
+    pub context_sentence: String,
+    pub article_id: Option<String>,
+    pub meaning_zh: Option<String>,
+    pub usage: Option<String>,
+}
+
+/// Chinese meaning + category for a phrase (idiom / phrasal verb / collocation).
+pub fn enrich_phrase(
+    cfg: &AppConfig,
+    phrase: &str,
+    context: &str,
+) -> Result<PhraseEnrichment, AppError> {
+    ensure_configured(cfg)?;
+    let system = r#"You explain English phrases to Chinese learners.
+Given a phrase and its context sentence, return ONLY valid JSON with keys:
+meaning_zh (string, concise Simplified Chinese meaning of the phrase AS USED here),
+usage (string, ONE of: idiom / phrasal-verb / collocation / fixed-expression / slang).
+No markdown fences."#;
+    let user = format!("Phrase: {phrase}\nContext: {context}");
+    chat_json(cfg, system, &user, "phrase JSON")
+}
+
+/// Enrich (optional) and insert-or-merge a phrase row. LLM failure degrades.
+pub fn add_or_merge_phrase(
+    db: &DbState,
+    cfg: &AppConfig,
+    input: AddPhraseInput,
+) -> Result<PhraseItem, AppError> {
+    let phrase = input.phrase.split_whitespace().collect::<Vec<_>>().join(" ");
+    if phrase.is_empty() {
+        return Err(AppError::msg("短语不能为空"));
+    }
+    let mut meaning_zh = input.meaning_zh.clone().unwrap_or_default();
+    let mut usage = input.usage.clone().unwrap_or_default();
+    if meaning_zh.is_empty() || usage.is_empty() {
+        if let Ok(enriched) = enrich_phrase(cfg, &phrase, &input.context_sentence) {
+            if meaning_zh.is_empty() {
+                meaning_zh = enriched.meaning_zh;
+            }
+            if usage.is_empty() {
+                usage = enriched.usage;
+            }
+        }
+    }
+    let usage = if usage.is_empty() {
+        "phrase".to_string()
+    } else {
+        usage
+    };
+
+    let now = Utc::now().to_rfc3339();
+    let conn = db.lock_write()?;
+
+    if let Some(mut existing) = db::get_phrase_by_text(&conn, &phrase)? {
+        if existing.meaning_zh.is_empty() {
+            existing.meaning_zh = meaning_zh;
+        }
+        if existing.usage.is_empty() || existing.usage == "phrase" {
+            existing.usage = usage;
+        }
+        if existing.context_sentence.is_empty() {
+            existing.context_sentence = input.context_sentence.clone();
+        }
+        if existing.article_id.is_none() {
+            existing.article_id = input.article_id.clone();
+        }
+        db::update_phrase_meta(&conn, &existing)?;
+        return Ok(existing);
+    }
+
+    let item = PhraseItem {
+        id: Uuid::new_v4().to_string(),
+        phrase,
+        meaning_zh,
+        usage,
+        context_sentence: input.context_sentence,
+        article_id: input.article_id,
+        status: "learning".into(),
+        interval_days: 0.0,
+        reps: 0,
+        consecutive_know: 0,
+        next_review_at: now.clone(),
+        created_at: now,
+    };
+    db::insert_phrase(&conn, &item)?;
+    Ok(item)
 }
 
 fn ensure_configured(cfg: &AppConfig) -> Result<(), AppError> {

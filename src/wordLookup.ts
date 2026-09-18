@@ -49,3 +49,16 @@ export function cachedTranslation(term: string): string | undefined {
 export function rememberTranslation(term: string, translation: string) {
   if (term && translation) translationCache.set(term.toLowerCase(), translation);
 }
+
+/**
+ * True when a selection is a short phrase rather than a single word or a
+ * whole sentence — the cue for offering "add to phrase library".
+ */
+export function isPhraseSelection(raw: string, maxWords = 6): boolean {
+  const text = raw.trim().replace(/\s+/g, " ");
+  if (!text) return false;
+  if (/[.!?]$/.test(text)) return false;
+  const words = text.split(" ");
+  if (words.length < 2 || words.length > maxWords) return false;
+  return words.every((w) => /^[A-Za-z][A-Za-z'’-]*$/.test(w));
+}

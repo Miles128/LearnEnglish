@@ -201,8 +201,10 @@ a {
 }
 
 .page {
-  padding: 14px 36px 44px;
-  max-width: 920px;
+  /* Fluid: the content column follows the window width. */
+  padding: 14px clamp(16px, 3.5vw, 64px) 44px;
+  max-width: none;
+  width: 100%;
 }
 
 .page.reader {

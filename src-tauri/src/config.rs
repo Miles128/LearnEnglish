@@ -43,6 +43,10 @@ pub struct AppConfig {
     /// Reader measure preset (narrow / medium / wide / full).
     #[serde(default = "default_reader_line_width")]
     pub reader_line_width: String,
+    /// Auto-ingested articles older than this many days are purged on refresh.
+    /// 0 = keep forever. Liked articles and user imports are always kept.
+    #[serde(default = "default_article_retention_days")]
+    pub article_retention_days: u32,
 }
 
 fn default_cefr_level() -> String {
@@ -69,6 +73,10 @@ fn default_reader_line_width() -> String {
     "full".into()
 }
 
+fn default_article_retention_days() -> u32 {
+    14
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -86,6 +94,7 @@ impl Default for AppConfig {
             reader_font_size: default_reader_font_size(),
             reader_line_height: default_reader_line_height(),
             reader_line_width: default_reader_line_width(),
+            article_retention_days: default_article_retention_days(),
         }
     }
 }

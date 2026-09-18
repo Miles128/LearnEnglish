@@ -41,4 +41,9 @@ reader_line_height: number,
 /**
  * Reader measure preset (narrow / medium / wide / full).
  */
-reader_line_width: string, };
+reader_line_width: string, 
+/**
+ * Auto-ingested articles older than this many days are purged on refresh.
+ * 0 = keep forever. Liked articles and user imports are always kept.
+ */
+article_retention_days: number, };

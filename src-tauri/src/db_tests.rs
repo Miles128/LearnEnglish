@@ -896,7 +896,15 @@ fn schema_adds_summary_zh_column() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, 7);
+    let tags_col: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('articles') WHERE name='tags_json'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(tags_col, 1, "articles.tags_json should exist after migrate");
     let quality_col: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_info('articles') WHERE name='quality'",

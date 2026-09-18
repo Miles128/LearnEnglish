@@ -10,11 +10,36 @@ export function categoryLabel(
   return categories.find((c) => c.id === id)?.label ?? id;
 }
 
-/** Sentence (paragraph) containing `term`, or the term itself. */
+/** A short reading-window around `term`: sentence-bounded when possible,
+ * hard-clipped to ~`max` chars otherwise. Examples stay scannable. */
+export function clipContext(sentence: string, max: number = 140): string {
+  const s = sentence.replace(/\s+/g, " ").trim();
+  if (s.length <= max) return s;
+  const slice = s.slice(0, max);
+  // Cut at the last sentence end inside the window instead of mid-word.
+  const cut = Math.max(
+    slice.lastIndexOf(". "),
+    slice.lastIndexOf("! "),
+    slice.lastIndexOf("? "),
+  );
+  return (cut > max * 0.5 ? slice.slice(0, cut + 1) : slice.trimEnd()) + "…";
+}
+
+/** Short context window containing `term`, or the term itself. */
 export function findContext(paragraphs: string[], term: string): string {
   const lower = term.toLowerCase();
   const hit = paragraphs.find((p) => p.toLowerCase().includes(lower));
-  return hit ?? term;
+  if (!hit) return term;
+  const at = hit.toLowerCase().indexOf(lower);
+  if (at < 0) return clipContext(hit);
+  const start = Math.max(0, at - 60);
+  const end = Math.min(hit.length, at + term.length + 60);
+  const window = hit.slice(start, end);
+  return (
+    (start > 0 ? "…" : "") +
+    clipContext(window, 140) +
+    (end < hit.length ? "" : "")
+  );
 }
 
 /** Merge one streamed paragraph; ignore the terminal `done` event. */

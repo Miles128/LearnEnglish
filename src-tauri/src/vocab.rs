@@ -57,21 +57,25 @@ fn strip_fences(raw: &str) -> &str {
 const JSON_REMINDER: &str =
     "\n\nREMINDER: Reply with ONLY valid JSON in the exact shape requested. No markdown fences, no commentary.";
 
-/// Chat → parse JSON, with one stricter-instruction retry on parse failure.
-/// Models occasionally wrap JSON in prose/fences despite instructions; the
-/// single retry recovers most of those without burning extra calls up front.
+/// Chat → parse JSON. Uses the provider's JSON output mode so responses are
+/// parseable in one shot; the stricter-instruction retry remains as a
+/// fallback for providers without it.
 fn chat_json<T: for<'de> Deserialize<'de>>(
     cfg: &AppConfig,
     system: &str,
     user: &str,
     label: &str,
 ) -> Result<T, AppError> {
-    let raw = chat(cfg, system, user)?;
+    let raw = chat_json_mode(cfg, system, user)?;
     match serde_json::from_str(strip_fences(&raw)) {
         Ok(v) => Ok(v),
         Err(first_err) => {
-            let raw2 = chat(cfg, system, &format!("{user}{JSON_REMINDER}"))
-                .map_err(|e| format!("{label}: first attempt failed to parse ({first_err}); retry request failed: {e}"))?;
+            let raw2 =
+                chat_json_mode(cfg, system, &format!("{user}{JSON_REMINDER}")).map_err(|e| {
+                    AppError::msg(format!(
+                        "{label}: first attempt failed to parse ({first_err}); retry request failed: {e}"
+                    ))
+                })?;
             serde_json::from_str(strip_fences(&raw2))
                 .map_err(|e| {
                     AppError::msg(format!(
@@ -103,8 +107,8 @@ Translate faithfully. No markdown fences, no commentary."#;
     Ok(out)
 }
 
-pub const CARD_SUMMARY_MAX_CHARS: usize = 120;
-const CARD_EXCERPT_CHARS: usize = 400;
+pub const CARD_SUMMARY_MAX_CHARS: usize = 60;
+const CARD_EXCERPT_CHARS: usize = 200;
 
 /// Truncate to at most `max_chars` Unicode scalars, then trim.
 pub fn clip_zh(s: &str, max_chars: usize) -> String {
@@ -123,6 +127,9 @@ pub struct ArticleCardOut {
     pub title_zh: String,
     #[serde(default)]
     pub summary_zh: String,
+    /// 2–3 lowercase English topic tags for interest profiling.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 pub fn card_from_article(title: &str, content_text: &str) -> ArticleCardIn {
@@ -132,7 +139,8 @@ pub fn card_from_article(title: &str, content_text: &str) -> ArticleCardIn {
     }
 }
 
-/// Batch: Chinese title + 1–2 sentence Chinese synopsis. Input order = output order.
+/// Batch: Chinese title + one-sentence Chinese synopsis + topic tags,
+/// in one request. Input order = output order.
 pub fn translate_article_cards(
     cfg: &AppConfig,
     cards: &[ArticleCardIn],
@@ -143,10 +151,10 @@ pub fn translate_article_cards(
     ensure_configured(cfg)?;
     let system = r#"You write Simplified Chinese metadata for English articles for language learners.
 Given a JSON array of objects {title, excerpt}, return ONLY a JSON array of the same length.
-Each item must be {"title_zh":"<Chinese title>","summary_zh":"<Chinese synopsis>"}.
+Each item must be {"title_zh":"<Chinese title>","summary_zh":"<Chinese synopsis>","tags":["<tag1>","<tag2>"]}.
 title_zh is a natural Chinese rendering of the title (not pinyin).
-summary_zh is 1–2 complete Simplified Chinese sentences (about 40–120 characters) that say what the article is about. No ellipsis padding, no quotes, no English.
-No markdown fences, no commentary."#;
+summary_zh is ONE complete Simplified Chinese sentence (about 30–60 characters) that says what the article is about. No ellipsis padding, no quotes, no English.
+tags is 2–3 short lowercase English topic tags (e.g. ["economy","central-bank"]). No markdown fences, no commentary."#;
     let payload = serde_json::to_string(cards)?;
     let out: Vec<ArticleCardOut> = chat_json(cfg, system, &payload, "article cards")?;
     if out.len() != cards.len() {
@@ -161,6 +169,13 @@ No markdown fences, no commentary."#;
         .map(|mut c| {
             c.title_zh = c.title_zh.trim().to_string();
             c.summary_zh = clip_zh(&c.summary_zh, CARD_SUMMARY_MAX_CHARS);
+            c.tags = c
+                .tags
+                .iter()
+                .map(|t| t.trim().to_lowercase())
+                .filter(|t| !t.is_empty())
+                .take(3)
+                .collect();
             c
         })
         .collect())
@@ -342,8 +357,18 @@ pub fn chat_completions_url(base_url: &str) -> String {
 }
 
 fn chat(cfg: &AppConfig, system: &str, user: &str) -> Result<String, AppError> {
+    chat_body(cfg, system, user, false)
+}
+
+/// Chat with the provider's JSON output mode — one-shot parseable responses,
+/// no parse-failure retry round-trips (the retry stays as a fallback).
+fn chat_json_mode(cfg: &AppConfig, system: &str, user: &str) -> Result<String, AppError> {
+    chat_body(cfg, system, user, true)
+}
+
+fn chat_body(cfg: &AppConfig, system: &str, user: &str, json_mode: bool) -> Result<String, AppError> {
     let url = chat_completions_url(&cfg.base_url);
-    let body = json!({
+    let mut body = json!({
         "model": cfg.model,
         "temperature": 0.2,
         "messages": [
@@ -351,6 +376,9 @@ fn chat(cfg: &AppConfig, system: &str, user: &str) -> Result<String, AppError> {
             {"role": "user", "content": user}
         ]
     });
+    if json_mode {
+        body["response_format"] = json!({"type": "json_object"});
+    }
 
     let send = || -> Result<String, AppError> {
         let resp = CHAT_CLIENT
@@ -513,7 +541,7 @@ mod clip_tests {
             clip_zh(&two_sentences, super::CARD_SUMMARY_MAX_CHARS)
                 .chars()
                 .count(),
-            120
+            super::CARD_SUMMARY_MAX_CHARS
         );
     }
 }

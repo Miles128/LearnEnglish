@@ -24,7 +24,7 @@ pub fn list_articles(
             params.push(rusqlite::types::Value::Text(cat.to_string()));
         }
     }
-    sql.push_str(" ORDER BY source ASC, fetched_at DESC, published_at DESC");
+    sql.push_str(" ORDER BY source ASC, fetched_at DESC, published_at DESC, id ASC");
     sql.push_str(" LIMIT ? OFFSET ?");
     params.push(rusqlite::types::Value::Integer(limit.unwrap_or(60)));
     params.push(rusqlite::types::Value::Integer(offset.unwrap_or(0)));
@@ -268,6 +268,22 @@ pub fn list_unassessed_rss_articles(conn: &Connection) -> Result<Vec<Article>, A
         .collect::<Result<Vec<_>, _>>()
         ?;
     Ok(rows)
+}
+
+/// Store topic tags (lowercase English) produced by card translation.
+/// Empty string = no tags yet; overwritten wholesale on refresh.
+pub fn set_article_tags(conn: &Connection, id: &str, tags: &[String]) -> Result<(), AppError> {
+    let json = if tags.is_empty() {
+        String::new()
+    } else {
+        serde_json::to_string(tags)?
+    };
+    conn.execute(
+        "UPDATE articles SET tags_json=?1 WHERE id=?2",
+        params![json, id],
+    )
+    .map_err(AppError::from)?;
+    Ok(())
 }
 
 /// Stamp the body-quality verdict on an article (once; never re-derived later).

@@ -10,11 +10,23 @@ export type LookupTarget = {
 };
 
 /**
+ * ALL-CAPS selections are acronyms / initialisms (NATO, AI, GDP): they keep
+ * their case instead of being lowercased and lemma-reduced.
+ */
+export function isAllCaps(raw: string, minLength = 2): boolean {
+  const text = raw.trim().replace(/['’]s$/, "");
+  if (text.length < minLength) return false;
+  return /^[A-Z][A-Z0-9.\-&/]*$/.test(text);
+}
+
+/**
  * Normalize a selection: single words reduce to their base form so `cities`,
  * `running`, `went` all look up as `city` / `run` / `go`; phrases pass through.
+ * ALL-CAPS terms are kept verbatim so they translate as acronyms.
  */
 export function prepareLookup(raw: string): LookupTarget {
   const source = raw.trim().replace(/\s+/g, " ");
+  if (isAllCaps(source)) return { term: source, source };
   const isSingleWord = /^[A-Za-z][A-Za-z'-]*$/.test(source);
   return {
     term: isSingleWord ? toLemma(source) : source,

@@ -144,6 +144,66 @@ pub struct ArticleListItem {
     pub tags: Vec<String>,
 }
 
+/// One day of reading activity (UTC date, `YYYY-MM-DD`).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReadingDay {
+    pub date: String,
+    #[ts(type = "number")]
+    pub articles: i64,
+    #[ts(type = "number")]
+    pub minutes: i64,
+    #[ts(type = "number")]
+    pub words: i64,
+}
+
+/// A source's share of reading (by time).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SourceStat {
+    pub name: String,
+    #[ts(type = "number")]
+    pub articles: i64,
+    #[ts(type = "number")]
+    pub minutes: i64,
+}
+
+/// Reading statistics for the stats page.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReadingStats {
+    /// Last 14 days, oldest first (UTC dates).
+    pub days: Vec<ReadingDay>,
+    /// Consecutive days ending today/yesterday with at least one article opened.
+    #[ts(type = "number")]
+    pub streak_days: i64,
+    #[ts(type = "number")]
+    pub articles_total: i64,
+    #[ts(type = "number")]
+    pub articles_7d: i64,
+    #[ts(type = "number")]
+    pub completed_total: i64,
+    #[ts(type = "number")]
+    pub liked_total: i64,
+    #[ts(type = "number")]
+    pub minutes_total: i64,
+    #[ts(type = "number")]
+    pub minutes_7d: i64,
+    #[ts(type = "number")]
+    pub words_total: i64,
+    #[ts(type = "number")]
+    pub vocab_learning: i64,
+    #[ts(type = "number")]
+    pub vocab_mastered: i64,
+    #[ts(type = "number")]
+    pub phrases_learning: i64,
+    #[ts(type = "number")]
+    pub phrases_mastered: i64,
+    #[ts(type = "number")]
+    pub due_today: i64,
+    pub top_sources: Vec<SourceStat>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct LearningStats {

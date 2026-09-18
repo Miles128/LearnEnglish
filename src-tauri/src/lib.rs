@@ -47,6 +47,7 @@ pub fn run() {
             commands::articles::mark_article_progress,
             commands::articles::set_article_liked,
             commands::articles::get_learning_stats,
+            commands::articles::get_reading_stats,
             commands::feeds::list_feeds,
             commands::feeds::set_feed_enabled,
             commands::feeds::list_feed_categories,

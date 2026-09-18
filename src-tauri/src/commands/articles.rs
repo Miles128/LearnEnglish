@@ -219,6 +219,15 @@ pub fn mark_article_opened(
     Ok(db::mark_article_opened(&conn, &id)?)
 }
 
+/// Reading statistics for the stats page.
+#[tauri::command]
+pub fn get_reading_stats(
+    state: tauri::State<'_, DbState>,
+) -> Result<crate::db::ReadingStats, AppError> {
+    let conn = state.lock_read()?;
+    Ok(db::reading_stats(&conn)?)
+}
+
 #[tauri::command]
 pub fn get_learning_stats(
     state: tauri::State<'_, DbState>,

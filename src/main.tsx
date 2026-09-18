@@ -9,7 +9,6 @@ import Reader from "./pages/Reader";
 import Vocab from "./pages/Vocab";
 import Settings from "./pages/Settings";
 import Library from "./pages/Library";
-import Phrases from "./pages/Phrases";
 import Placement from "./pages/Placement";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
@@ -24,7 +23,6 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
                 <Route path="article/:id" element={<Reader />} />
                 <Route path="vocab" element={<Vocab />} />
                 <Route path="library" element={<Library />} />
-                <Route path="phrases" element={<Phrases />} />
                 <Route path="settings" element={<Settings />} />
                 <Route path="placement" element={<Placement />} />
                 <Route path="*" element={<Navigate to="/" replace />} />

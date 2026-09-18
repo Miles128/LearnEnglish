@@ -17,8 +17,8 @@ function usageLabel(usage: string): string {
   return USAGE_LABELS[usage] ?? usage;
 }
 
-/** 短语组合: saved phrases with their own spaced-repetition state. */
-export default function Phrases() {
+/** 短语组合 view, embedded in the学习界面 (Vocab page). */
+export default function PhrasesView() {
   const [tab, setTab] = useState<Tab>("learning");
   const [items, setItems] = useState<PhraseItem[]>([]);
   const [due, setDue] = useState<PhraseItem[]>([]);
@@ -89,13 +89,7 @@ export default function Phrases() {
   }
 
   return (
-    <div className="page">
-      <header className="page-header page-header-slim">
-        <div>
-          <p className="muted">短语组合 · 常用搭配与惯用语，独立于生词库</p>
-        </div>
-      </header>
-
+    <>
       <div className="tabs">
         {(
           [
@@ -208,6 +202,6 @@ export default function Phrases() {
           )}
         </div>
       )}
-    </div>
+    </>
   );
 }

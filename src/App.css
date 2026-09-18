@@ -223,7 +223,13 @@ a {
 }
 
 .page.reader h1,
-.page.reader .article-title-zh {
+.page.reader .article-tags {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.01em;
+}
+
+.article-title-zh {
   font-family: var(--reader-font);
 }
 
@@ -301,6 +307,41 @@ a {
   gap: 8px;
   margin-bottom: 12px;
   flex-wrap: wrap;
+}
+
+.tag-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+
+.tag-chip {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 5px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.tag-chip:hover {
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+
+.tag-chip.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.tag-chip.clear {
+  color: var(--danger);
+  border-color: transparent;
 }
 
 .tab {

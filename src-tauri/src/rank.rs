@@ -9,22 +9,67 @@ use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-/// Aggregated open counts by source / category.
+/// Aggregated open counts by source / category, plus the tag interest profile.
 #[derive(Debug, Default, Clone)]
 pub struct Affinity {
     pub source_opens: HashMap<String, i64>,
     pub category_opens: HashMap<String, i64>,
+    /// tag → engagement weight (liked = 2, read-to-end = 1).
+    pub tag_weights: HashMap<String, f64>,
+    /// tag → number of tagged articles that carry it (IDF denominator).
+    pub tag_doc_counts: HashMap<String, i64>,
+    /// number of tagged articles.
+    pub tagged_docs: i64,
 }
 
 impl Affinity {
     pub fn from_maps(
         source_opens: HashMap<String, i64>,
         category_opens: HashMap<String, i64>,
+        tag_weights: HashMap<String, f64>,
+        tag_doc_counts: HashMap<String, i64>,
+        tagged_docs: i64,
     ) -> Self {
         Self {
             source_opens,
             category_opens,
+            tag_weights,
+            tag_doc_counts,
+            tagged_docs,
         }
+    }
+
+    /// IDF: rare tags carry more signal than tags on almost every article.
+    pub fn tag_idf(&self, tag: &str) -> f64 {
+        let df = *self.tag_doc_counts.get(tag).unwrap_or(&0);
+        ((1.0 + self.tagged_docs as f64) / (1.0 + df as f64)).ln().max(0.0)
+    }
+
+    /// Total weighted interest mass of the learner's tag profile.
+    pub fn tag_profile_mass(&self) -> f64 {
+        self.tag_weights
+            .iter()
+            .map(|(tag, w)| w * self.tag_idf(tag))
+            .sum()
+    }
+
+    /// Cosine-like tag similarity in [0, 1]: how much of the learner's
+    /// weighted interest this article's tags cover.
+    pub fn tag_similarity(&self, tags: &[String]) -> f64 {
+        if tags.is_empty() {
+            return 0.0;
+        }
+        let mass = self.tag_profile_mass();
+        if mass <= 0.0 {
+            return 0.0;
+        }
+        let hit: f64 = tags
+            .iter()
+            .map(|tag| {
+                self.tag_weights.get(tag).copied().unwrap_or(0.0) * self.tag_idf(tag)
+            })
+            .sum();
+        (hit / mass).min(1.0)
     }
 }
 
@@ -117,6 +162,11 @@ pub fn article_rank_score(
         score += 2.5;
     }
     score += word_fit(article.word_count);
+    // Semantic profile: tags the learner engages with, IDF-weighted so
+    // generic tags don't dominate. Only active once a profile exists.
+    if affinity.tag_profile_mass() > 0.0 {
+        score += 0.8 * affinity.tag_similarity(&article.tags);
+    }
     if article.open_count == 0 {
         score += exploration_jitter(&article.id, day_key);
     } else {
@@ -174,6 +224,7 @@ mod tests {
             dwell_ms: 0,
             read_completed: false,
             liked: false,
+            tags: vec![],
         }
     }
 
@@ -250,6 +301,66 @@ mod tests {
             dwell_adjustment(400_000, true),
             0.8,
             "long dwell read to the end"
+        );
+    }
+
+    #[test]
+    fn tag_profile_similarity_is_idf_weighted() {
+        // Learner engaged with economy (weight 3) and weather (weight 1).
+        // "ai" is on every article (low IDF), "economy" is rare (high IDF).
+        let affinity = Affinity::from_maps(
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::from([("economy".to_string(), 3.0), ("weather".to_string(), 1.0)]),
+            HashMap::from([
+                ("economy".to_string(), 2),
+                ("weather".to_string(), 10),
+                ("ai".to_string(), 100),
+            ]),
+            100,
+        );
+        let economy_match = affinity.tag_similarity(&["economy".to_string()]);
+        let weather_match = affinity.tag_similarity(&["weather".to_string()]);
+        assert!(
+            economy_match > weather_match,
+            "rare interest beats common one: {economy_match} vs {weather_match}"
+        );
+        assert_eq!(affinity.tag_similarity(&[]), 0.0);
+        assert_eq!(affinity.tag_similarity(&["sports".to_string()]), 0.0);
+        assert!(economy_match <= 1.0);
+    }
+
+    #[test]
+    fn tag_similarity_boosts_matching_articles() {
+        let now = Utc::now();
+        let mut affinity = Affinity::default();
+        affinity.tag_weights.insert("semiconductors".into(), 4.0);
+        affinity.tag_doc_counts.insert("semiconductors".into(), 3);
+        affinity.tagged_docs = 50;
+
+        let mut matching = item("a");
+        matching.tags = vec!["semiconductors".into()];
+        let plain = item("b");
+
+        let score_match = article_rank_score(&matching, &affinity, now, 1);
+        let score_plain = article_rank_score(&plain, &affinity, now, 1);
+        assert!(score_match > score_plain);
+        assert!((score_match - score_plain) > 0.5);
+    }
+
+    #[test]
+    fn no_profile_means_no_tag_bonus() {
+        let now = Utc::now();
+        let affinity = Affinity::default();
+        let plain = item("a");
+        let mut tagged = item("a");
+        tagged.tags = vec!["economy".into()];
+        // Same id → same jitter, so the only possible delta is the tag bonus.
+        assert!(
+            (article_rank_score(&tagged, &affinity, now, 1)
+                - article_rank_score(&plain, &affinity, now, 1))
+            .abs()
+                < 1e-9
         );
     }
 

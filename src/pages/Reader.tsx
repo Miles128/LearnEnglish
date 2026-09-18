@@ -115,8 +115,9 @@ export default function Reader() {
   const title = useMemo(() => article?.title ?? "阅读", [article]);
   const liked = likedOverride ?? article?.liked ?? false;
 
-  // Reading-time tracking: flush while the window is visible, on switching
-  // away, and on unmount. Capped per flush so sleep/resume can't inflate it.
+  // Reading-time tracking: flush while the window is visible AND focused,
+  // on losing focus/hiding, and on unmount. Capped per flush so sleep/resume
+  // can't inflate it.
   useEffect(() => {
     if (!id) return;
     let flushedAt = Date.now();
@@ -130,15 +131,26 @@ export default function Reader() {
           .catch(() => undefined);
       }
     };
-    const timer = window.setInterval(flush, 15_000);
-    const onVisibility = () => {
-      if (document.hidden) flush();
+    const isCounting = () => !document.hidden && document.hasFocus();
+    const flushIfCounting = () => {
+      if (isCounting()) flush();
     };
-    document.addEventListener("visibilitychange", onVisibility);
+    const flushIfNotCounting = () => {
+      if (!isCounting()) flush();
+    };
+    const timer = window.setInterval(flushIfCounting, 15_000);
+    document.addEventListener("visibilitychange", flushIfNotCounting);
+    window.addEventListener("blur", flushIfNotCounting);
+    const onFocus = () => {
+      flushedAt = Date.now();
+    };
+    window.addEventListener("focus", onFocus);
     return () => {
       window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-      flush();
+      document.removeEventListener("visibilitychange", flushIfNotCounting);
+      window.removeEventListener("blur", flushIfNotCounting);
+      window.removeEventListener("focus", onFocus);
+      if (!document.hidden && document.hasFocus()) flush();
     };
   }, [id]);
 

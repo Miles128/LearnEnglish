@@ -119,7 +119,23 @@ pub fn config_path() -> PathBuf {
     PathBuf::from("config.local.json")
 }
 
+/// In-process config cache: paragraph-level LLM calls used to re-read the
+/// file on every command. Saves update the cache; call
+/// [`invalidate_config_cache`] to force the next load to re-read the file.
+static CONFIG_CACHE: std::sync::LazyLock<std::sync::Mutex<Option<AppConfig>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
+
 pub fn load_config() -> Result<AppConfig, AppError> {
+    let mut cache = CONFIG_CACHE.lock().map_err(|_| AppError::Locked)?;
+    if let Some(cfg) = cache.as_ref() {
+        return Ok(cfg.clone());
+    }
+    let cfg = read_config_file()?;
+    *cache = Some(cfg.clone());
+    Ok(cfg)
+}
+
+fn read_config_file() -> Result<AppConfig, AppError> {
     let path = config_path();
     if !path.exists() {
         return Ok(AppConfig::default());
@@ -146,7 +162,17 @@ pub fn save_config(cfg: &AppConfig) -> Result<(), AppError> {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
     }
+    *CONFIG_CACHE.lock().map_err(|_| AppError::Locked)? = Some(cfg.clone());
     Ok(())
+}
+
+/// Drop the cached config so the next `load_config` re-reads the file
+/// (external edits to config.local.json; ops/debug helper).
+#[allow(dead_code)]
+pub fn invalidate_config_cache() {
+    if let Ok(mut cache) = CONFIG_CACHE.lock() {
+        *cache = None;
+    }
 }
 
 #[cfg(test)]

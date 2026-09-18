@@ -603,6 +603,33 @@ fn list_articles_paginates() {
 }
 
 #[test]
+fn list_article_titles_dedup_window() {
+    let path = temp_dir().join(format!("le-dedup-window-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    let mut recurring_old = sample_article("old-briefing");
+    recurring_old.fetched_at = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
+    let mut recurring_new = sample_article("new-briefing");
+    recurring_new.fetched_at = chrono::Utc::now().to_rfc3339();
+
+    db::insert_article_if_new(&conn, &recurring_old).unwrap();
+    db::insert_article_if_new(&conn, &recurring_new).unwrap();
+
+    let since = (chrono::Utc::now() - chrono::Duration::days(14)).to_rfc3339();
+    let recent = db::list_article_titles(&conn, Some(&since)).unwrap();
+    assert_eq!(
+        recent.len(),
+        1,
+        "windowed dedup seed must exclude stale rows"
+    );
+    assert_eq!(recent[0].0, "new-briefing");
+    let all = db::list_article_titles(&conn, None).unwrap();
+    assert_eq!(all.len(), 2);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn vocab_dedup_by_term_and_delete_article_detaches() {
     let path = temp_dir().join(format!("le-vocab-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");

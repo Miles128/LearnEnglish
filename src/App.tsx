@@ -78,6 +78,17 @@ function IconFeeds() {
   );
 }
 
+function IconStats() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M4 20V10" />
+      <path d="M10 20V4" />
+      <path d="M16 20v-7" />
+      <path d="M22 20H2" />
+    </svg>
+  );
+}
+
 function IconSettings() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -279,6 +290,15 @@ export default function App() {
             >
               <IconFeeds />
             </button>
+            <NavLink
+              to="/stats"
+              className="topbar-btn"
+              title="阅读统计"
+              aria-label="阅读统计"
+              onClick={() => toggleNav("/stats")}
+            >
+              <IconStats />
+            </NavLink>
             <NavLink
               to="/settings"
               className="topbar-btn"

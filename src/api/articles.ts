@@ -5,6 +5,7 @@ import type {
   ArticleView,
   FullTranslateResult,
   LearningStats,
+  ReadingStats,
   TranslationRow,
 } from "./types";
 
@@ -66,6 +67,7 @@ export const apiArticles = {
   setArticleLiked: (id: string, liked: boolean) =>
     invoke<void>("set_article_liked", { id, liked }),
   getLearningStats: () => invoke<LearningStats>("get_learning_stats"),
+  getReadingStats: () => invoke<ReadingStats>("get_reading_stats"),
   fillMissingCardZh: () => invoke<number>("fill_missing_card_zh"),
   importArticleUrl: (url: string) =>
     invoke<Article>("import_article_url", { url }),

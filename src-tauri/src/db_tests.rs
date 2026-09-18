@@ -603,6 +603,56 @@ fn list_articles_paginates() {
 }
 
 #[test]
+fn reading_stats_counts_days_streak_and_time() {
+    let path = temp_dir().join(format!("le-stats-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    let mut a = sample_article("today");
+    a.source = "NPR".into();
+    a.word_count = 900;
+    let mut b = sample_article("yesterday");
+    b.source = "NPR".into();
+    b.word_count = 500;
+    let mut c = sample_article("old");
+    c.source = "BBC".into();
+    c.word_count = 700;
+    for article in [&a, &b, &c] {
+        db::insert_article_if_new(&conn, article).unwrap();
+    }
+
+    let fmt = |offset: i64| {
+        (chrono::Utc::now() - chrono::Duration::days(offset))
+            .to_rfc3339()
+    };
+    let set_opened = |id: &str, at: &str, dwell: i64, completed: i64| {
+        conn.execute(
+            "UPDATE articles SET last_opened_at=?1, dwell_ms=?2, read_completed=?3, open_count=1 WHERE id=?4",
+            rusqlite::params![at, dwell, completed, id],
+        )
+        .unwrap();
+    };
+    set_opened("today", &fmt(0), 6 * 60_000 * 2, 1); // 12 min
+    set_opened("yesterday", &fmt(1), 3 * 60_000 * 2, 0); // 6 min
+    set_opened("old", &fmt(4), 2 * 60_000 * 2, 0); // 4 min, breaks the streak
+
+    let stats = db::reading_stats(&conn).unwrap();
+    assert_eq!(stats.articles_total, 3);
+    assert_eq!(stats.completed_total, 1);
+    assert_eq!(stats.streak_days, 2, "today + yesterday");
+    assert_eq!(stats.minutes_total, 22);
+    assert!(stats.minutes_7d >= 22);
+    assert_eq!(stats.words_total, 900 + 500 + 700);
+    assert_eq!(stats.days.len(), 14);
+    assert_eq!(stats.days.last().unwrap().articles, 1, "today");
+    assert_eq!(stats.days.last().unwrap().minutes, 12);
+    assert_eq!(stats.days[13 - 1].articles, 1, "yesterday row");
+    assert_eq!(stats.top_sources.first().unwrap().name, "NPR");
+    assert_eq!(stats.top_sources.first().unwrap().minutes, 18);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn list_article_titles_dedup_window() {
     let path = temp_dir().join(format!("le-dedup-window-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");

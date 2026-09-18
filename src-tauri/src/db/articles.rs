@@ -246,6 +246,196 @@ pub fn learning_stats(conn: &Connection) -> Result<super::LearningStats, AppErro
     })
 }
 
+/// Reading statistics for the stats page (last 14 days + totals).
+pub fn reading_stats(conn: &Connection) -> Result<super::ReadingStats, AppError> {
+    const DAILY_DAYS: i64 = 14;
+
+    // `last_opened_at` is RFC3339 UTC, so the first 10 chars are the date.
+    let mut days: Vec<super::ReadingDay> = Vec::new();
+    {
+        let mut stmt = conn
+            .prepare(
+                "SELECT date(substr(last_opened_at,1,10)) AS d,
+                        COUNT(*),
+                        CAST(IFNULL(SUM(dwell_ms),0)/60000 AS INTEGER),
+                        IFNULL(SUM(word_count),0)
+                 FROM articles
+                 WHERE last_opened_at IS NOT NULL
+                 GROUP BY d",
+            )
+            .map_err(AppError::from)?;
+        let by_date: std::collections::HashMap<String, super::ReadingDay> = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    super::ReadingDay {
+                        date: String::new(),
+                        articles: row.get(1)?,
+                        minutes: row.get(2)?,
+                        words: row.get(3)?,
+                    },
+                ))
+            })
+            .map_err(AppError::from)?
+            .collect::<Result<std::collections::HashMap<_, _>, _>>()
+            .map_err(AppError::from)?;
+
+        let today = chrono::Utc::now().date_naive();
+        for offset in (0..DAILY_DAYS).rev() {
+            let date = (today - chrono::Duration::days(offset))
+                .format("%Y-%m-%d")
+                .to_string();
+            days.push(
+                by_date
+                    .get(&date)
+                    .map(|d| super::ReadingDay { date: date.clone(), ..d.clone() })
+                    .unwrap_or(super::ReadingDay {
+                        date,
+                        articles: 0,
+                        minutes: 0,
+                        words: 0,
+                    }),
+            );
+        }
+    }
+
+    // Streak: consecutive days with activity, starting today or yesterday.
+    let streak_days: i64 = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT DISTINCT date(substr(last_opened_at,1,10)) AS d
+                 FROM articles WHERE last_opened_at IS NOT NULL ORDER BY d DESC",
+            )
+            .map_err(AppError::from)?;
+        let dates: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(AppError::from)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(AppError::from)?;
+        let present: std::collections::HashSet<&str> = dates.iter().map(|s| s.as_str()).collect();
+        let today = chrono::Utc::now().date_naive();
+        let start = if present.contains(today.format("%Y-%m-%d").to_string().as_str()) {
+            today
+        } else if present
+            .contains((today - chrono::Duration::days(1)).format("%Y-%m-%d").to_string().as_str())
+        {
+            today - chrono::Duration::days(1)
+        } else {
+            return Ok(build_stats(conn, days, 0)?);
+        };
+        let mut streak = 0i64;
+        let mut cursor = start;
+        while present.contains(cursor.format("%Y-%m-%d").to_string().as_str()) {
+            streak += 1;
+            cursor -= chrono::Duration::days(1);
+        }
+        streak
+    };
+
+    build_stats(conn, days, streak_days)
+}
+
+fn build_stats(
+    conn: &Connection,
+    days: Vec<super::ReadingDay>,
+    streak_days: i64,
+) -> Result<super::ReadingStats, AppError> {
+    let since = (chrono::Utc::now() - chrono::Duration::days(7)).to_rfc3339();
+    let scalar = |sql: &str, params: &[&dyn rusqlite::ToSql]| -> Result<i64, AppError> {
+        conn.query_row(sql, params, |row| row.get::<_, i64>(0))
+            .map_err(AppError::from)
+    };
+
+    let read_filter = "last_opened_at IS NOT NULL";
+    let articles_total = scalar(
+        &format!("SELECT COUNT(*) FROM articles WHERE {read_filter}"),
+        &[],
+    )?;
+    let articles_7d = scalar(
+        &format!("SELECT COUNT(*) FROM articles WHERE {read_filter} AND last_opened_at >= ?1"),
+        &[&since],
+    )?;
+    let completed_total = scalar(
+        "SELECT COUNT(*) FROM articles WHERE read_completed = 1",
+        &[],
+    )?;
+    let liked_total = scalar("SELECT COUNT(*) FROM articles WHERE liked = 1", &[])?;
+    let minutes_total = scalar(
+        &format!("SELECT IFNULL(SUM(dwell_ms),0)/60000 FROM articles WHERE {read_filter}"),
+        &[],
+    )?;
+    let minutes_7d = scalar(
+        &format!(
+            "SELECT IFNULL(SUM(dwell_ms),0)/60000 FROM articles WHERE {read_filter} AND last_opened_at >= ?1"
+        ),
+        &[&since],
+    )?;
+    let words_total = scalar(
+        &format!("SELECT IFNULL(SUM(word_count),0) FROM articles WHERE {read_filter}"),
+        &[],
+    )?;
+
+    let by_status = |table: &str, status: &str| -> Result<i64, AppError> {
+        conn.query_row(
+            &format!("SELECT COUNT(*) FROM {table} WHERE status=?1"),
+            rusqlite::params![status],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(AppError::from)
+    };
+    let vocab_learning = by_status("vocab", "learning")?;
+    let vocab_mastered = by_status("vocab", "mastered")?;
+    let phrases_learning = by_status("phrases", "learning")?;
+    let phrases_mastered = by_status("phrases", "mastered")?;
+
+    let due_since = chrono::Utc::now().to_rfc3339();
+    let due_today = scalar(
+        "SELECT (SELECT COUNT(*) FROM vocab WHERE status='learning' AND next_review_at <= ?1)
+              + (SELECT COUNT(*) FROM phrases WHERE status='learning' AND next_review_at <= ?1)",
+        &[&due_since],
+    )?;
+
+    let top_sources = {
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT source, COUNT(*), CAST(IFNULL(SUM(dwell_ms),0)/60000 AS INTEGER)
+                 FROM articles WHERE {read_filter}
+                 GROUP BY source ORDER BY SUM(dwell_ms) DESC, COUNT(*) DESC LIMIT 6"
+            ))
+            .map_err(AppError::from)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(super::SourceStat {
+                    name: row.get(0)?,
+                    articles: row.get(1)?,
+                    minutes: row.get(2)?,
+                })
+            })
+            .map_err(AppError::from)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(AppError::from)?;
+        rows
+    };
+
+    Ok(super::ReadingStats {
+        days,
+        streak_days,
+        articles_total,
+        articles_7d,
+        completed_total,
+        liked_total,
+        minutes_total,
+        minutes_7d,
+        words_total,
+        vocab_learning,
+        vocab_mastered,
+        phrases_learning,
+        phrases_mastered,
+        due_today,
+        top_sources,
+    })
+}
+
 pub fn get_article(conn: &Connection, id: &str) -> Result<Option<Article>, AppError> {
     conn.query_row(
         &format!("SELECT {ARTICLE_COLS} FROM articles WHERE id=?1"),

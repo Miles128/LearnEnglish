@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, ArticleListItem, FeedCategory, LearningStats, RefreshResult } from "../api";
 import { articleNeedsCardZh } from "../articleList";
 import { formatLearningInsight } from "../learningStats";
@@ -398,7 +399,10 @@ export default function Home() {
       )}
 
       {learningStats && (
-        <p className="learning-insight">{formatLearningInsight(learningStats)}</p>
+        <p className="learning-insight">
+          {formatLearningInsight(learningStats)} ·{" "}
+          <Link to="/stats">统计</Link>
+        </p>
       )}
       {!hasLlm && articles.some(articleNeedsCardZh) && (
         <p className="muted">

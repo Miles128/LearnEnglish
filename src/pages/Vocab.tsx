@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { clipContext } from "../readerUtils";
 import { api, VocabItem } from "../api";
-import { useVocab } from "../store";
+import { useAppConfig, useVocab } from "../store";
 
 type Tab = "learning" | "review" | "mastered";
 
 export default function Vocab() {
   const { refreshLearningTerms } = useVocab();
+  const { cfg } = useAppConfig();
+  const placementDone = Boolean(cfg.vocab_placement_done);
+  const placementSummary = placementDone
+    ? `${Math.round(cfg.vocab_placement_l ?? cfg.freq_band)} 词`
+    : null;
   const [tab, setTab] = useState<Tab>("learning");
   const [items, setItems] = useState<VocabItem[]>([]);
   const [due, setDue] = useState<VocabItem[]>([]);
@@ -94,8 +100,15 @@ export default function Vocab() {
     <div className="page">
       <header className="page-header page-header-slim">
         <div>
-          <p className="muted">总览 · 复习 · 已掌握归档</p>
+          <p className="muted">
+            {placementSummary
+              ? `我的词频水平：约 ${placementSummary} · 总览 / 复习 / 已掌握`
+              : "总览 · 复习 · 已掌握归档"}
+          </p>
         </div>
+        <Link className="btn small" to="/placement">
+          {placementDone ? "重新测词汇量" : "测一下词汇量"}
+        </Link>
       </header>
 
       <div className="tabs">

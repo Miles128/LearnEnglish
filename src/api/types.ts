@@ -31,6 +31,7 @@ export function defaultAppConfig(): RustAppConfig {
     vocab_placement_at: null,
     vocab_placement_skipped: false,
     article_retention_days: 14,
+    theme: "system",
     ...defaultReadingPrefs(),
   };
 }

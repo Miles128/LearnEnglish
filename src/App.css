@@ -9,8 +9,65 @@
   --accent-soft: #d8efe8;
   --danger: #9b2c2c;
   --shadow: 0 10px 30px rgba(28, 26, 23, 0.06);
+  --bar-bg: rgba(255, 253, 249, 0.72);
+  --panel-strong: rgba(255, 253, 249, 0.94);
+  --scrim: rgba(255, 253, 249, 0.6);
+  --card: #fff;
+  --hover-fill: #fff;
+  --glow-a: #efe7d8;
+  --glow-b: #dbeee8;
+  --progress-a: #0f5c4c;
+  --progress-b: #1a7a66;
   font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC",
     "Source Han Serif SC", serif;
+}
+
+/* Explicit theme (data-theme set by src/theme.ts), plus a system fallback
+   for the first paint before JS runs. */
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #16181a;
+    --panel: #1f2226;
+    --ink: #e9e6e0;
+    --muted: #9aa1a8;
+    --line: #2f353b;
+    --accent: #6fbfa8;
+    --accent-soft: #22352f;
+    --danger: #e08a8a;
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    --bar-bg: rgba(22, 24, 26, 0.72);
+    --panel-strong: rgba(22, 24, 26, 0.94);
+    --scrim: rgba(255, 255, 255, 0.04);
+    --card: #1f2226;
+    --hover-fill: #24282d;
+    --glow-a: rgba(120, 100, 70, 0.16);
+    --glow-b: rgba(50, 110, 95, 0.16);
+    --progress-a: #2f8f77;
+    --progress-b: #45ab90;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #16181a;
+    --panel: #1f2226;
+    --ink: #e9e6e0;
+    --muted: #9aa1a8;
+    --line: #2f353b;
+    --accent: #6fbfa8;
+    --accent-soft: #22352f;
+    --danger: #e08a8a;
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+    --bar-bg: rgba(22, 24, 26, 0.72);
+    --panel-strong: rgba(22, 24, 26, 0.94);
+    --scrim: rgba(255, 255, 255, 0.04);
+    --card: #1f2226;
+    --hover-fill: #24282d;
+    --glow-a: rgba(120, 100, 70, 0.16);
+    --glow-b: rgba(50, 110, 95, 0.16);
+    --progress-a: #2f8f77;
+    --progress-b: #45ab90;
+  }
 }
 
 * {
@@ -23,8 +80,8 @@ body,
   margin: 0;
   height: 100%;
   background:
-    radial-gradient(1200px 600px at 10% -10%, #efe7d8 0%, transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, #dbeee8 0%, transparent 50%),
+    radial-gradient(1200px 600px at 10% -10%, var(--glow-a) 0%, transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, var(--glow-b) 0%, transparent 50%),
     var(--bg);
   color: var(--ink);
 }
@@ -55,7 +112,7 @@ a {
   gap: 12px;
   padding: 6px 14px 6px 80px;
   border-bottom: 1px solid var(--line);
-  background: rgba(255, 253, 249, 0.72);
+  background: var(--bar-bg);
   backdrop-filter: blur(8px);
   position: sticky;
   top: 0;
@@ -695,7 +752,7 @@ mark.vocab-hit:hover {
   padding: 14px 16px;
   border: 1px dashed var(--line);
   border-radius: 10px;
-  background: #fff;
+  background: var(--card);
   font-family: var(--reader-font);
   font-size: var(--reader-size);
   line-height: var(--reader-lh);
@@ -868,7 +925,7 @@ button.flashcard {
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--card);
 }
 
 .feed-list {
@@ -889,7 +946,7 @@ button.flashcard {
   padding: 28px;
   border: 1px dashed var(--line);
   border-radius: 14px;
-  background: rgba(255, 253, 249, 0.6);
+  background: var(--scrim);
 }
 
 .refresh-progress {
@@ -899,10 +956,10 @@ button.flashcard {
   bottom: 0;
   z-index: 40;
   padding: 12px 20px 14px;
-  background: rgba(255, 253, 249, 0.94);
+  background: var(--panel-strong);
   border-top: 1px solid var(--line);
   backdrop-filter: blur(10px);
-  box-shadow: 0 -8px 24px rgba(28, 26, 23, 0.06);
+  box-shadow: 0 -8px 24px var(--shadow);
   transition: opacity 0.25s ease, transform 0.25s ease;
 }
 
@@ -944,7 +1001,7 @@ button.flashcard {
 .refresh-progress-fill {
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #0f5c4c 0%, #1a7a66 100%);
+  background: linear-gradient(90deg, var(--progress-a) 0%, var(--progress-b) 100%);
   transition: width 0.28s ease;
 }
 
@@ -967,7 +1024,7 @@ button.flashcard {
   position: absolute;
   inset: 0;
   border: 0;
-  background: rgba(28, 26, 23, 0.28);
+  background: color-mix(in srgb, var(--ink) 30%, transparent);
   cursor: pointer;
 }
 
@@ -1017,7 +1074,7 @@ button.flashcard {
   padding: 8px 10px;
   border-radius: 10px;
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--card);
 }
 
 .feeds-drawer-section h3 {

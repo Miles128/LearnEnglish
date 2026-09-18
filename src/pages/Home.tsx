@@ -2,9 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ArticleListItem, FeedCategory, LearningStats, RefreshResult } from "../api";
 import { articleNeedsCardZh } from "../articleList";
 import { formatLearningInsight } from "../learningStats";
-import { articleDifficulty, type DifficultyLevel } from "../difficulty";
+import {
+  articleDifficulty,
+  calibrateEdges,
+  difficultyFromScore,
+  type DifficultyLevel,
+} from "../difficulty";
 import { useAppConfig, useVocab } from "../store";
-import { ensureLexiconLoaded, isCefrLevel, isFreqBand, type FreqBand } from "../wordLevels";
+import { ensureLexiconLoaded, isFreqBand, type FreqBand } from "../wordLevels";
 import SourceBoard from "../components/SourceBoard";
 import { groupBySource } from "../sourceInterest";
 import { pickTopArticles, topPickIds } from "../topPicks";
@@ -111,23 +116,24 @@ export default function Home() {
     return tabs;
   }, [categories]);
 
-  // Local difficulty index per article: density of words outside this
-  // learner's comfort zone (freq band + CEFR + learning terms).
-  const difficultyPrefs = useMemo(
-    () => ({
-      cefrLevel: isCefrLevel(cfg.cefr_level) ? cfg.cefr_level : ("B1" as const),
-      freqBand,
-    }),
-    [cfg.cefr_level, freqBand],
-  );
+  // Local difficulty index per article: density of words above this
+  // learner's word-frequency size (plus their learning terms).
+  const difficultyPrefs = useMemo(() => ({ freqBand }), [freqBand]);
   const difficultyById = useMemo(() => {
-    const map = new Map<string, DifficultyLevel | null>();
+    // Score every visible article, calibrate the five bucket edges against
+    // this sample, then bucket. Calibration keeps 简单/普通/较难 relative to
+    // what this learner actually gets served.
+    const scored: { id: string; score: number | null }[] = [];
     for (const a of articles) {
-      map.set(
-        a.id,
-        articleDifficulty(a.excerpt, learningTerms, difficultyPrefs)?.level ??
-          null,
-      );
+      const result = articleDifficulty(a.excerpt, learningTerms, difficultyPrefs);
+      scored.push({ id: a.id, score: result?.score ?? null });
+    }
+    const edges = calibrateEdges(
+      scored.map((s) => s.score).filter((s): s is number => s !== null),
+    );
+    const map = new Map<string, DifficultyLevel | null>();
+    for (const { id, score } of scored) {
+      map.set(id, score === null ? null : difficultyFromScore(score, edges));
     }
     return map;
   }, [articles, learningTerms, difficultyPrefs]);

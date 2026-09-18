@@ -1,7 +1,10 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { ensureLexiconLoaded, type DifficultyPrefs } from "./wordLevels";
+import { ensureLexiconLoaded } from "./wordLevels";
+import type { DifficultyPrefs } from "./difficulty";
 import {
   articleDifficulty,
+  calibrateEdges,
+  DEFAULT_EDGES,
   difficultyClassName,
   difficultyFromScore,
   difficultyLabel,
@@ -10,7 +13,7 @@ import {
   wordDifficultyWeight,
 } from "./difficulty";
 
-const PREFS: DifficultyPrefs = { cefrLevel: "B1", freqBand: 3000 };
+const PREFS: DifficultyPrefs = { freqBand: 3000 };
 
 const EASY_WORDS = [
   "the", "and", "for", "you", "that", "with", "have", "this", "from",
@@ -83,7 +86,7 @@ describe("articleDifficulty", () => {
   it("rates common prose as easy", () => {
     const result = articleDifficulty(repeatTo(EASY_WORDS, 120), [], PREFS);
     expect(result).not.toBeNull();
-    expect(result!.level).toBe("easy");
+    expect(difficultyFromScore(result!.score)).toBe("easy");
   });
 
   it("rates dense hard vocabulary higher", () => {
@@ -92,14 +95,29 @@ describe("articleDifficulty", () => {
       .split(" ");
     const result = articleDifficulty(repeatTo(hard, 120), [], PREFS);
     expect(result).not.toBeNull();
-    expect(["hard", "harder", "hardest"]).toContain(result!.level);
+    expect(["hard", "harder", "hardest"]).toContain(
+      difficultyFromScore(result!.score),
+    );
   });
 
   it("never gets easier when the freq band narrows", () => {
     const body = repeatTo(EASY_WORDS, 150);
-    const wide = articleDifficulty(body, [], { cefrLevel: "B1", freqBand: 20000 });
-    const narrow = articleDifficulty(body, [], { cefrLevel: "A1", freqBand: 1000 });
+    const wide = articleDifficulty(body, [], { freqBand: 20000 });
+    const narrow = articleDifficulty(body, [], { freqBand: 1000 });
     expect(wide!.score).toBeLessThanOrEqual(narrow!.score);
+  });
+
+  it("calibrates edges to the library distribution and stays stable", () => {
+    expect(calibrateEdges([])).toEqual(DEFAULT_EDGES);
+    const small = Array.from({ length: 10 }, (_, i) => i / 100);
+    expect(calibrateEdges(small)).toEqual(DEFAULT_EDGES);
+    const wide = Array.from({ length: 200 }, (_, i) => (i / 200) * 0.4);
+    const edges = calibrateEdges(wide);
+    // Edges must be increasing and pulled away from the defaults.
+    expect(edges[0]).toBeLessThan(edges[1]);
+    expect(edges[1]).toBeLessThan(edges[2]);
+    expect(edges[2]).toBeLessThan(edges[3]);
+    expect(edges[3]).not.toBe(DEFAULT_EDGES[3]);
   });
 
   it("exposes label and css class", () => {

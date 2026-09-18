@@ -8,6 +8,7 @@ import {
   shouldShowPlacementNav,
 } from "./placement/engine";
 import { useAppConfig } from "./store";
+import { applyTheme, isThemePref } from "./theme";
 import { api, type RefreshResult } from "./api";
 import { type RefreshProgress } from "./api";
 import ManageFeedsDrawer from "./components/ManageFeedsDrawer";
@@ -96,6 +97,10 @@ export default function App() {
       if (hideTimer) window.clearTimeout(hideTimer);
     };
   }, []);
+
+  useEffect(() => {
+    applyTheme(isThemePref(cfg.theme) ? cfg.theme : "system");
+  }, [cfg.theme]);
 
   useEffect(() => {
     if (!ready || loadError) return;

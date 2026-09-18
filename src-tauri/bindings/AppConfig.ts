@@ -43,6 +43,10 @@ reader_line_height: number,
  */
 reader_line_width: string, 
 /**
+ * UI theme preference: system | light | dark.
+ */
+theme: string, 
+/**
  * Auto-ingested articles older than this many days are purged on refresh.
  * 0 = keep forever. Liked articles and user imports are always kept.
  */

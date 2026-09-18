@@ -26,6 +26,8 @@ export default function ManageFeedsDrawer({ open, onClose }: Props) {
   const [pasteUrl, setPasteUrl] = useState("");
   const [pasteName, setPasteName] = useState("");
   const [pasting, setPasting] = useState(false);
+  const [articleUrl, setArticleUrl] = useState("");
+  const [importingArticle, setImportingArticle] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -172,8 +174,24 @@ export default function ManageFeedsDrawer({ open, onClose }: Props) {
     }
   }
 
-  async function onPasteSubscribe(e: FormEvent) {
+  async function onImportArticle(e: FormEvent) {
     e.preventDefault();
+    const url = articleUrl.trim();
+    if (!url) return;
+    setImportingArticle(true);
+    setError(null);
+    try {
+      const article = await api.importArticleUrl(url);
+      setArticleUrl("");
+      setMessage(`已导入文章：${article.title}`);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setImportingArticle(false);
+    }
+  }
+
+  async function onPasteSubscribe(e: FormEvent) {    e.preventDefault();
     const url = pasteUrl.trim();
     if (!url) return;
     setPasting(true);
@@ -294,6 +312,26 @@ export default function ManageFeedsDrawer({ open, onClose }: Props) {
           onDiscover={() => void onDiscover()}
           onSubscribe={(row) => void onSubscribeCandidate(row)}
         />
+        <section className="feeds-drawer-section">
+          <h3>导入文章链接</h3>
+          <form className="feeds-paste" onSubmit={(e) => void onImportArticle(e)}>
+            <input
+              className="feeds-paste-url"
+              type="url"
+              value={articleUrl}
+              onChange={(e) => setArticleUrl(e.target.value)}
+              placeholder="https://example.com/some-article"
+              disabled={importingArticle}
+            />
+            <button
+              className="btn primary"
+              type="submit"
+              disabled={importingArticle || !articleUrl.trim()}
+            >
+              {importingArticle ? "导入中…" : "导入"}
+            </button>
+          </form>
+        </section>
         <section className="feeds-drawer-section">
           <h3>粘贴 RSS 订阅</h3>
           <form className="feeds-paste" onSubmit={(e) => void onPasteSubscribe(e)}>

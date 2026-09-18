@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, ArticleListItem, FeedCategory, LearningStats, RefreshResult } from "../api";
@@ -7,9 +7,7 @@ import { formatLearningInsight } from "../learningStats";
 import { estimateKnownPercent } from "../knownPercent";
 import { useAppConfig, useVocab } from "../store";
 import { ensureLexiconLoaded, isFreqBand, type FreqBand } from "../wordLevels";
-import ImportRow from "../components/ImportRow";
 import SourceBoard from "../components/SourceBoard";
-import ManageFeedsDrawer from "../components/ManageFeedsDrawer";
 import { groupBySource } from "../sourceInterest";
 import { pickTopArticles, topPickIds } from "../topPicks";
 
@@ -23,10 +21,7 @@ export default function Home() {
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  const [importUrl, setImportUrl] = useState("");
   const [importing, setImporting] = useState(false);
-  const [manageOpen, setManageOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [learningStats, setLearningStats] = useState<LearningStats | null>(null);
@@ -140,47 +135,37 @@ export default function Home() {
     return map;
   }, [articles, learningTerms, freqBand]);
 
-  async function onRefresh() {
-    setRefreshing(true);
-    setMessage(null);
-    setError(null);
-    await new Promise<void>((r) => requestAnimationFrame(() => r()));
-    try {
-      const result: RefreshResult = await api.refreshFeeds();
+  // The top bar drives refresh + feed management; Home only reacts.
+  useEffect(() => {
+    function onRefreshed(e: Event) {
+      const detail = (e as CustomEvent).detail as
+        | (RefreshResult & { error?: string })
+        | undefined;
+      if (!detail) return;
+      if (detail.error) {
+        setError(detail.error);
+        return;
+      }
       setMessage(
-        `新增 ${result.added_or_updated}` +
-          (result.skipped_existing ? ` · 已有 ${result.skipped_existing}` : "") +
-          (result.skipped_duplicate ? ` · 去重 ${result.skipped_duplicate}` : "") +
-          (result.feeds_unchanged ? ` · ${result.feeds_unchanged} 源无更新` : "") +
-          (result.titles_translated ? ` · 译题/简介 ${result.titles_translated}` : "") +
-          (result.errors.length ? ` · ${result.errors.length} 个问题` : ""),
+        `新增 ${detail.added_or_updated}` +
+          (detail.skipped_existing ? ` · 已有 ${detail.skipped_existing}` : "") +
+          (detail.skipped_duplicate ? ` · 去重 ${detail.skipped_duplicate}` : "") +
+          (detail.feeds_unchanged ? ` · ${detail.feeds_unchanged} 源无更新` : "") +
+          (detail.titles_translated ? ` · 译题/简介 ${detail.titles_translated}` : "") +
+          (detail.errors.length ? ` · ${detail.errors.length} 个问题` : ""),
       );
-      await load();
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setRefreshing(false);
+      void load();
     }
-  }
-
-  async function onImport(e: FormEvent) {
-    e.preventDefault();
-    const url = importUrl.trim();
-    if (!url) return;
-    setImporting(true);
-    setMessage(null);
-    setError(null);
-    try {
-      const article = await api.importArticleUrl(url);
-      setImportUrl("");
-      setMessage(`已导入：${article.title}`);
-      navigate(`/article/${article.id}`);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setImporting(false);
+    function onFeedsChanged() {
+      void load();
     }
-  }
+    window.addEventListener("shiyan:refreshed", onRefreshed);
+    window.addEventListener("shiyan:feeds-changed", onFeedsChanged);
+    return () => {
+      window.removeEventListener("shiyan:refreshed", onRefreshed);
+      window.removeEventListener("shiyan:feeds-changed", onFeedsChanged);
+    };
+  }, [load]);
 
   async function onImportFile() {
     setMessage(null);
@@ -218,27 +203,16 @@ export default function Home() {
 
   return (
     <div className="page">
-      <header className="page-header">
-        <div>
-          <h1>今日阅读</h1>
-        </div>
-        <div className="page-header-actions">
-          <button type="button" className="btn" onClick={() => setManageOpen(true)}>
-            管理订阅
-          </button>
-          <button className="btn primary" onClick={onRefresh} disabled={refreshing}>
-            {refreshing ? "刷新中…" : "刷新"}
-          </button>
-        </div>
-      </header>
-
-      <ImportRow
-        importing={importing}
-        importUrl={importUrl}
-        onImportUrlChange={setImportUrl}
-        onImport={(e) => void onImport(e)}
-        onImportFile={() => void onImportFile()}
-      />
+      <div className="home-import-row">
+        <button
+          className="btn"
+          type="button"
+          disabled={importing}
+          onClick={() => void onImportFile()}
+        >
+          {importing ? "导入中…" : "导入文件"}
+        </button>
+      </div>
 
       <div className="tabs">
         {tabCategories.map((c) => (
@@ -326,14 +300,6 @@ export default function Home() {
           </button>
         </div>
       )}
-
-      <ManageFeedsDrawer
-        open={manageOpen}
-        onClose={() => {
-          setManageOpen(false);
-          void load();
-        }}
-      />
     </div>
   );
 }

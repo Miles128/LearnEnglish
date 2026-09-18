@@ -144,7 +144,7 @@ a {
 }
 
 .page {
-  padding: 28px 36px 48px;
+  padding: 14px 36px 44px;
   max-width: 920px;
 }
 
@@ -191,12 +191,6 @@ a {
   font-size: 1.45rem;
   line-height: 1.35;
   margin: 0 0 8px;
-}
-
-.home-import-row {
-  display: flex;
-  justify-content: flex-end;
-  margin: 0 0 14px;
 }
 
 .page h1 {
@@ -248,7 +242,7 @@ a {
 .tabs {
   display: flex;
   gap: 8px;
-  margin-bottom: 18px;
+  margin-bottom: 12px;
   flex-wrap: wrap;
 }
 
@@ -314,7 +308,7 @@ a {
 }
 
 .learning-insight {
-  margin: 0 0 16px;
+  margin: 0 0 12px;
   color: var(--muted);
   font-size: 0.92rem;
   line-height: 1.5;
@@ -341,7 +335,7 @@ a {
 .source-boards {
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 20px;
 }
 
 .source-board-head {
@@ -1120,7 +1114,7 @@ button.flashcard {
     padding: 4px 10px;
   }
   .page {
-    padding: 18px 16px 36px;
+    padding: 10px 16px 32px;
   }
   .page.reader {
     padding-inline: clamp(1rem, 5vw, 1.5rem);

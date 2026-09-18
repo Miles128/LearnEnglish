@@ -14,6 +14,15 @@ import SourceBoard from "../components/SourceBoard";
 import { groupBySource } from "../sourceInterest";
 import { pickTopArticles, topPickIds } from "../topPicks";
 import { applyDifficultyOrder } from "../difficultyRank";
+import SelectionPopover, { type Popover } from "../components/SelectionPopover";
+import {
+  bundledGloss,
+  cachedTranslation,
+  prepareLookup,
+  rememberTranslation,
+} from "../wordLookup";
+import { useTts } from "../useTts";
+import { useEscapeKey } from "../useEscapeKey";
 
 const PAGE_SIZE = 60;
 /** 今日推荐: the first N ranked unread articles, shown expanded. */
@@ -46,7 +55,10 @@ export default function Home() {
   const [learningStats, setLearningStats] = useState<LearningStats | null>(null);
 
   const { cfg } = useAppConfig();
-  const { learningTerms } = useVocab();
+  const { learningTerms, refreshLearningTerms } = useVocab();
+  const { speaking, speakTarget, startSpeak, stopSpeak } = useTts();
+  const [popover, setPopover] = useState<Popover | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const freqBand: FreqBand = isFreqBand(cfg.freq_band) ? cfg.freq_band : 3000;
   const hasLlm = Boolean(cfg.api_key?.trim());
   const didBackfill = useRef(false);
@@ -234,8 +246,74 @@ export default function Home() {
     };
   }, [load]);
 
+  const closePopover = useCallback(() => setPopover(null), []);
+  useEscapeKey(popover != null, closePopover);
+
+  // Selection-to-translate on the home list (titles / summaries).
+  const showMeaning = useCallback(
+    async (text: string, x: number, y: number) => {
+      const { term, source } = prepareLookup(text);
+      const gloss = bundledGloss(term) ?? cachedTranslation(term);
+      if (gloss) {
+        setPopover({ x, y, text: term, source, translation: gloss, loading: false });
+        return;
+      }
+      setPopover({ x, y, text: term, source, loading: true });
+      try {
+        const translated = await api.translatePlainText(term);
+        rememberTranslation(term, translated);
+        setPopover((p) =>
+          p && p.text === term
+            ? { ...p, translation: translated, loading: false }
+            : p,
+        );
+      } catch (err) {
+        setPopover((p) =>
+          p && p.text === term ? { ...p, error: String(err), loading: false } : p,
+        );
+      }
+    },
+    [],
+  );
+
+  async function onPageMouseUp(e: React.MouseEvent) {
+    const sel = window.getSelection();
+    const text = sel?.toString().trim() ?? "";
+    if (!text || text.length > 120) {
+      return;
+    }
+    await showMeaning(text, e.clientX, e.clientY);
+  }
+
+  function speakWord(text: string) {
+    if (speaking && speakTarget?.kind === "word") {
+      stopSpeak();
+      return;
+    }
+    if (!text.trim()) return;
+    startSpeak({ kind: "word" }, [text]);
+  }
+
+  async function addPopoverToVocab() {
+    if (!popover) return;
+    try {
+      await api.addVocab({
+        term: popover.text,
+        contextSentence: popover.source ?? popover.text,
+        articleId: null,
+        definitionZh: popover.translation ?? null,
+      });
+      setToast(`已加入生词库：${popover.text}`);
+      setPopover(null);
+      await refreshLearningTerms();
+      setTimeout(() => setToast(null), 2500);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   return (
-    <div className="page">
+    <div className="page" onMouseUp={(e) => void onPageMouseUp(e)}>
       <div className="tabs">
         {tabCategories.map((c) => (
           <button
@@ -343,6 +421,19 @@ export default function Home() {
           />
         ))}
       </div>
+
+      {toast && <p className="banner ok">{toast}</p>}
+
+      {popover && (
+        <SelectionPopover
+          popover={popover}
+          speaking={speaking}
+          speakTarget={speakTarget}
+          onSpeakWord={speakWord}
+          onAddVocab={() => void addPopoverToVocab()}
+          onClose={closePopover}
+        />
+      )}
 
       {hasMore && (
         <div className="load-more-row">

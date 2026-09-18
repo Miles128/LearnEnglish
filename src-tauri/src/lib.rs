@@ -61,6 +61,7 @@ pub fn run() {
             commands::articles::import_article_file,
             commands::articles::translate_paragraph,
             commands::articles::translate_selection,
+            commands::articles::translate_plain_text,
             commands::articles::translate_full_article,
             commands::vocab::add_vocab,
             commands::vocab::list_vocab,

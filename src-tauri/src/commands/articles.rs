@@ -3,6 +3,7 @@ use crate::error::AppError;
 use crate::feeds;
 use crate::import_file;
 use crate::translate;
+use crate::vocab;
 use chrono::Datelike;
 use rusqlite::Connection;
 use tauri::{AppHandle, Emitter};
@@ -151,6 +152,14 @@ pub fn list_article_sources(
 ) -> Result<Vec<(String, i64)>, AppError> {
     let conn = state.lock_read()?;
     Ok(db::list_article_sources(&conn)?)
+}
+
+/// One-off translation without article caching (used outside the reader,
+/// e.g. selecting a word on the home list). Goes through the LLM, no DB write.
+#[tauri::command]
+pub async fn translate_plain_text(text: String) -> Result<String, AppError> {
+    let cfg = crate::config::load_config()?;
+    crate::commands::spawn_blocking_err(move || Ok(vocab::translate_text(&cfg, &text)?)).await
 }
 
 /// Backfill topic tags (bounded per call; refresh also runs a batch).

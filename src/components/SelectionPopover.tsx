@@ -5,6 +5,8 @@ export type Popover = {
   x: number;
   y: number;
   text: string;
+  /** Raw selection (before lemma reduction) — used for context sentences. */
+  source?: string;
   translation?: string;
   loading?: boolean;
   error?: string;

@@ -17,6 +17,7 @@ import {
 } from "../readingPrefs";
 import { AnnotatedPara } from "../annotateText";
 import { shouldRenderMarkdown } from "../markdown";
+import { bundledGloss, prepareLookup } from "../wordLookup";
 import SelectionPopover, { type Popover } from "../components/SelectionPopover";
 import ReaderParagraph from "../components/ReaderParagraph";
 import { useAppConfig, useVocab } from "../store";
@@ -221,30 +222,33 @@ export default function Reader() {
       bundledZh?: string;
     }) {
       const { text, x, y, bundledZh } = opts;
-      const fromLexicon = bundledZh || lookupWord(text)?.zh;
+      // Clicking an inflected word looks it up as its base form.
+      const { term, source } = prepareLookup(text);
+      const fromLexicon = bundledZh || lookupWord(term)?.zh || bundledGloss(term);
       if (fromLexicon) {
         setPopover({
           x,
           y,
-          text,
+          text: term,
+          source,
           translation: fromLexicon,
           loading: false,
         });
         return;
       }
 
-      setPopover({ x, y, text, loading: true });
+      setPopover({ x, y, text: term, source, loading: true });
       if (!id) return;
       try {
-        const row = await api.translateSelection(id, text);
+        const row = await api.translateSelection(id, term);
         setPopover((p) =>
-          p && p.text === text
+          p && p.text === term
             ? { ...p, translation: row.translated_text, loading: false }
             : p,
         );
       } catch (err) {
         setPopover((p) =>
-          p && p.text === text
+          p && p.text === term
             ? { ...p, error: String(err), loading: false }
             : p,
         );
@@ -368,7 +372,7 @@ export default function Reader() {
     try {
       await api.addVocab({
         term: popover.text,
-        contextSentence: findContext(paragraphs, popover.text),
+        contextSentence: findContext(paragraphs, popover.source ?? popover.text),
         articleId: id,
         definitionZh: popover.translation ?? null,
       });

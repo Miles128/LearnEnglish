@@ -15,7 +15,7 @@ pub struct ArticleView {
     pub translations: Vec<TranslationRow>,
 }
 
-pub fn load_article_view(conn: &Connection, id: &str) -> Result<Option<ArticleView>, String> {
+pub fn load_article_view(conn: &Connection, id: &str) -> Result<Option<ArticleView>, AppError> {
     let Some(article) = db::get_article(conn, id)? else {
         return Ok(None);
     };

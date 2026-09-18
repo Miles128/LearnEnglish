@@ -1,3 +1,4 @@
+use crate::error::AppError;
 use super::VocabItem;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -25,9 +26,9 @@ fn map_vocab(row: &rusqlite::Row<'_>) -> rusqlite::Result<VocabItem> {
 
 const VOCAB_SELECT: &str = "SELECT id,term,definition_zh,word_type,collocations_json,context_sentence,article_id,status,interval_days,reps,consecutive_know,next_review_at,created_at FROM vocab";
 
-pub fn insert_vocab(conn: &Connection, item: &VocabItem) -> Result<(), String> {
+pub fn insert_vocab(conn: &Connection, item: &VocabItem) -> Result<(), AppError> {
     let collocations_json =
-        serde_json::to_string(&item.collocations).map_err(|e| e.to_string())?;
+        serde_json::to_string(&item.collocations)?;
     conn.execute(
         "INSERT INTO vocab (id,term,definition_zh,word_type,collocations_json,context_sentence,article_id,status,interval_days,reps,consecutive_know,next_review_at,created_at)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
@@ -47,51 +48,53 @@ pub fn insert_vocab(conn: &Connection, item: &VocabItem) -> Result<(), String> {
             item.created_at
         ],
     )
-    .map_err(|e| e.to_string())?;
+    ?;
     Ok(())
 }
 
-pub fn list_vocab(conn: &Connection, status: Option<&str>) -> Result<Vec<VocabItem>, String> {
+pub fn list_vocab(conn: &Connection, status: Option<&str>) -> Result<Vec<VocabItem>, AppError> {
     let mut sql = String::from(VOCAB_SELECT);
     if status.is_some() {
         sql.push_str(" WHERE status=?1");
     }
     sql.push_str(" ORDER BY created_at DESC");
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(&sql)?;
     let rows = match status {
         Some(s) => stmt
             .query_map(params![s], map_vocab)
-            .map_err(|e| e.to_string())?
+            ?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?,
+            ?,
         None => stmt
             .query_map([], map_vocab)
-            .map_err(|e| e.to_string())?
+            ?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?,
+            ?,
     };
     Ok(rows)
 }
 
-pub fn get_vocab(conn: &Connection, id: &str) -> Result<Option<VocabItem>, String> {
+pub fn get_vocab(conn: &Connection, id: &str) -> Result<Option<VocabItem>, AppError> {
     let sql = format!("{VOCAB_SELECT} WHERE id=?1");
     conn.query_row(&sql, params![id], map_vocab)
         .optional()
-        .map_err(|e| e.to_string())
+    .map_err(AppError::from)
+        
 }
 
 /// Case-insensitive lookup by term (oldest row wins).
-pub fn get_vocab_by_term(conn: &Connection, term: &str) -> Result<Option<VocabItem>, String> {
+pub fn get_vocab_by_term(conn: &Connection, term: &str) -> Result<Option<VocabItem>, AppError> {
     let sql = format!("{VOCAB_SELECT} WHERE lower(term)=lower(?1) ORDER BY created_at ASC LIMIT 1");
     conn.query_row(&sql, params![term.trim()], map_vocab)
         .optional()
-        .map_err(|e| e.to_string())
+    .map_err(AppError::from)
+        
 }
 
 /// Update learner-facing fields when an existing term is re-added.
-pub fn update_vocab_meta(conn: &Connection, item: &VocabItem) -> Result<(), String> {
+pub fn update_vocab_meta(conn: &Connection, item: &VocabItem) -> Result<(), AppError> {
     let collocations_json =
-        serde_json::to_string(&item.collocations).map_err(|e| e.to_string())?;
+        serde_json::to_string(&item.collocations)?;
     conn.execute(
         "UPDATE vocab SET definition_zh=?1, word_type=?2, collocations_json=?3, context_sentence=?4, article_id=?5 WHERE id=?6",
         params![
@@ -103,11 +106,11 @@ pub fn update_vocab_meta(conn: &Connection, item: &VocabItem) -> Result<(), Stri
             item.id
         ],
     )
-    .map_err(|e| e.to_string())?;
+    ?;
     Ok(())
 }
 
-pub fn update_vocab_review(conn: &Connection, item: &VocabItem) -> Result<(), String> {
+pub fn update_vocab_review(conn: &Connection, item: &VocabItem) -> Result<(), AppError> {
     conn.execute(
         "UPDATE vocab SET status=?1, interval_days=?2, reps=?3, consecutive_know=?4, next_review_at=?5 WHERE id=?6",
         params![
@@ -119,47 +122,47 @@ pub fn update_vocab_review(conn: &Connection, item: &VocabItem) -> Result<(), St
             item.id
         ],
     )
-    .map_err(|e| e.to_string())?;
+    ?;
     Ok(())
 }
 
-pub fn due_vocab(conn: &Connection) -> Result<Vec<VocabItem>, String> {
+pub fn due_vocab(conn: &Connection) -> Result<Vec<VocabItem>, AppError> {
     let now = Utc::now().to_rfc3339();
     let sql = format!(
         "{VOCAB_SELECT} WHERE status='learning' AND next_review_at<=?1 ORDER BY next_review_at ASC LIMIT 50"
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map(params![now], map_vocab)
-        .map_err(|e| e.to_string())?
+        ?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(rows)
 }
 
-pub fn set_vocab_status(conn: &Connection, id: &str, status: &str) -> Result<(), String> {
+pub fn set_vocab_status(conn: &Connection, id: &str, status: &str) -> Result<(), AppError> {
     conn.execute(
         "UPDATE vocab SET status=?1 WHERE id=?2",
         params![status, id],
     )
-    .map_err(|e| e.to_string())?;
+    ?;
     Ok(())
 }
 
-pub fn delete_vocab(conn: &Connection, id: &str) -> Result<(), String> {
+pub fn delete_vocab(conn: &Connection, id: &str) -> Result<(), AppError> {
     conn.execute("DELETE FROM vocab WHERE id=?1", params![id])
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(())
 }
 
 /// Keep the oldest row per case-insensitive term so a unique index can be added.
-pub fn collapse_duplicate_vocab_terms(conn: &Connection) -> Result<(), String> {
+pub fn collapse_duplicate_vocab_terms(conn: &Connection) -> Result<(), AppError> {
     conn.execute(
         "DELETE FROM vocab WHERE rowid NOT IN (
             SELECT MIN(rowid) FROM vocab GROUP BY lower(term)
         )",
         [],
     )
-    .map_err(|e| e.to_string())?;
+    ?;
     Ok(())
 }

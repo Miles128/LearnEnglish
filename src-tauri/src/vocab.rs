@@ -1,3 +1,4 @@
+use crate::error::AppError;
 use crate::config::AppConfig;
 use crate::db::{self, DbState, VocabItem};
 use chrono::Utc;
@@ -38,7 +39,7 @@ struct Message {
     content: Option<String>,
 }
 
-pub fn translate_text(cfg: &AppConfig, text: &str) -> Result<String, String> {
+pub fn translate_text(cfg: &AppConfig, text: &str) -> Result<String, AppError> {
     ensure_configured(cfg)?;
     let system = "You are a precise English-to-Simplified-Chinese translator for language learners. Translate faithfully. Output ONLY the Chinese translation, no quotes or commentary.";
     let user = format!("Translate to Simplified Chinese:\n\n{text}");
@@ -64,7 +65,7 @@ fn chat_json<T: for<'de> Deserialize<'de>>(
     system: &str,
     user: &str,
     label: &str,
-) -> Result<T, String> {
+) -> Result<T, AppError> {
     let raw = chat(cfg, system, user)?;
     match serde_json::from_str(strip_fences(&raw)) {
         Ok(v) => Ok(v),
@@ -72,13 +73,17 @@ fn chat_json<T: for<'de> Deserialize<'de>>(
             let raw2 = chat(cfg, system, &format!("{user}{JSON_REMINDER}"))
                 .map_err(|e| format!("{label}: first attempt failed to parse ({first_err}); retry request failed: {e}"))?;
             serde_json::from_str(strip_fences(&raw2))
-                .map_err(|e| format!("parse {label}: {first_err}; retry also failed: {e}; raw={raw2}"))
+                .map_err(|e| {
+                    AppError::msg(format!(
+                        "parse {label}: {first_err}; retry also failed: {e}; raw={raw2}"
+                    ))
+                })
         }
     }
 }
 
 /// Translate article paragraphs in batch. Input order must match output order.
-pub fn translate_texts(cfg: &AppConfig, texts: &[String]) -> Result<Vec<String>, String> {
+pub fn translate_texts(cfg: &AppConfig, texts: &[String]) -> Result<Vec<String>, AppError> {
     if texts.is_empty() {
         return Ok(vec![]);
     }
@@ -86,14 +91,14 @@ pub fn translate_texts(cfg: &AppConfig, texts: &[String]) -> Result<Vec<String>,
     let system = r#"You translate English passages to Simplified Chinese for language learners.
 Given a JSON array of English passages, return ONLY a JSON array of Chinese translations in the same order and length.
 Translate faithfully. No markdown fences, no commentary."#;
-    let payload = serde_json::to_string(texts).map_err(|e| e.to_string())?;
+    let payload = serde_json::to_string(texts)?;
     let out: Vec<String> = chat_json(cfg, system, &payload, "paragraph translations")?;
     if out.len() != texts.len() {
-        return Err(format!(
+        return Err(AppError::msg(format!(
             "paragraph translation count mismatch: got {} expected {}",
             out.len(),
             texts.len()
-        ));
+        )));
     }
     Ok(out)
 }
@@ -131,7 +136,7 @@ pub fn card_from_article(title: &str, content_text: &str) -> ArticleCardIn {
 pub fn translate_article_cards(
     cfg: &AppConfig,
     cards: &[ArticleCardIn],
-) -> Result<Vec<ArticleCardOut>, String> {
+) -> Result<Vec<ArticleCardOut>, AppError> {
     if cards.is_empty() {
         return Ok(vec![]);
     }
@@ -142,14 +147,14 @@ Each item must be {"title_zh":"<Chinese title>","summary_zh":"<Chinese synopsis>
 title_zh is a natural Chinese rendering of the title (not pinyin).
 summary_zh is 1–2 complete Simplified Chinese sentences (about 40–120 characters) that say what the article is about. No ellipsis padding, no quotes, no English.
 No markdown fences, no commentary."#;
-    let payload = serde_json::to_string(cards).map_err(|e| e.to_string())?;
+    let payload = serde_json::to_string(cards)?;
     let out: Vec<ArticleCardOut> = chat_json(cfg, system, &payload, "article cards")?;
     if out.len() != cards.len() {
-        return Err(format!(
+        return Err(AppError::msg(format!(
             "article card count mismatch: got {} expected {}",
             out.len(),
             cards.len()
-        ));
+        )));
     }
     Ok(out
         .into_iter()
@@ -161,7 +166,7 @@ No markdown fences, no commentary."#;
         .collect())
 }
 
-pub fn enrich_vocab(cfg: &AppConfig, term: &str, context: &str) -> Result<VocabEnrichment, String> {
+pub fn enrich_vocab(cfg: &AppConfig, term: &str, context: &str) -> Result<VocabEnrichment, AppError> {
     ensure_configured(cfg)?;
     let system = r#"You help English learners. Given a word/phrase and its context sentence, return ONLY valid JSON with keys:
 definition_zh (string, concise Chinese meaning),
@@ -187,7 +192,7 @@ pub fn add_or_merge_vocab(
     db: &DbState,
     cfg: &AppConfig,
     input: AddVocabInput,
-) -> Result<VocabItem, String> {
+) -> Result<VocabItem, AppError> {
     let term = input.term.trim().to_string();
     if term.is_empty() {
         return Err("词条不能为空".into());
@@ -230,7 +235,7 @@ pub fn add_or_merge_vocab(
     }
 
     let now = Utc::now().to_rfc3339();
-    let conn = db.lock_write().map_err(|e| e.to_string())?;
+    let conn = db.lock_write()?;
 
     if let Some(mut existing) = db::get_vocab_by_term(&conn, &term)? {
         if existing.definition_zh.is_empty() {
@@ -288,7 +293,7 @@ pub fn discover_rss_feeds(
     cfg: &AppConfig,
     category_id: &str,
     category_label: &str,
-) -> Result<Vec<FeedDiscoverCandidate>, String> {
+) -> Result<Vec<FeedDiscoverCandidate>, AppError> {
     ensure_configured(cfg)?;
     let system = r#"You help curate free, publicly available English news RSS/Atom feeds for language learners.
 Return ONLY a JSON array (no markdown fences) of 6–10 objects with keys:
@@ -313,7 +318,7 @@ URLs must look like real feed endpoints (often ending in /feed, /rss, .xml)."#;
     Ok(out)
 }
 
-fn ensure_configured(cfg: &AppConfig) -> Result<(), String> {
+fn ensure_configured(cfg: &AppConfig) -> Result<(), AppError> {
     if cfg.api_key.trim().is_empty() || cfg.api_key.contains("YOUR_API_KEY") {
         return Err("请先在设置中配置 API Key（config.local.json）".into());
     }
@@ -336,7 +341,7 @@ pub fn chat_completions_url(base_url: &str) -> String {
     format!("{base}/chat/completions")
 }
 
-fn chat(cfg: &AppConfig, system: &str, user: &str) -> Result<String, String> {
+fn chat(cfg: &AppConfig, system: &str, user: &str) -> Result<String, AppError> {
     let url = chat_completions_url(&cfg.base_url);
     let body = json!({
         "model": cfg.model,
@@ -352,11 +357,11 @@ fn chat(cfg: &AppConfig, system: &str, user: &str) -> Result<String, String> {
         .bearer_auth(&cfg.api_key)
         .json(&body)
         .send()
-        .map_err(|e| e.to_string())?
+        ?
         .error_for_status()
         .map_err(|e| format!("LLM {e}"))?;
 
-    let parsed: ChatResponse = resp.json().map_err(|e| e.to_string())?;
+    let parsed: ChatResponse = resp.json()?;
     parsed
         .choices
         .first()

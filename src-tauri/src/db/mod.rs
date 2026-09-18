@@ -34,7 +34,7 @@ pub struct DbState {
 
 impl DbState {
     /// Open both connections. Migrations are idempotent, so opening twice is safe.
-    pub fn open(app_data: PathBuf) -> Result<Self, String> {
+    pub fn open(app_data: PathBuf) -> Result<Self, AppError> {
         let write = open_db(app_data.clone())?;
         let read = open_db(app_data)?;
         Ok(Self {
@@ -230,11 +230,11 @@ pub fn db_path(app_data: PathBuf) -> PathBuf {
     app_data.join("learnenglish.db")
 }
 
-pub fn open_db(path: PathBuf) -> Result<Connection, String> {
-    let conn = Connection::open(path).map_err(|e| e.to_string())?;
+pub fn open_db(path: PathBuf) -> Result<Connection, AppError> {
+    let conn = Connection::open(path)?;
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     conn.execute_batch("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;")
-        .map_err(|e| e.to_string())?;
+        ?;
     migrate(&conn)?;
     feeds::seed_feed_categories(&conn)?;
     feeds::seed_feeds(&conn)?;
@@ -316,26 +316,26 @@ const LEGACY_COLUMN_ADDITIONS: &[&str] = &[
 /// number (never `LATEST_VERSION`) so later steps are not skipped.
 const LATEST_VERSION: i64 = 6;
 
-fn migrate(conn: &Connection) -> Result<(), String> {
+fn migrate(conn: &Connection) -> Result<(), AppError> {
     let mut stored: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(|e| e.to_string())?;
+        ?;
 
     if stored < 1 {
         // v0 → v1: baseline schema. Idempotent DDL makes this safe both for fresh
         // databases and legacy ones that predate user_version stamping.
         conn.execute_batch(BASELINE_SCHEMA)
-            .map_err(|e| e.to_string())?;
+            ?;
         for sql in LEGACY_COLUMN_ADDITIONS {
             if let Err(e) = conn.execute(sql, []) {
                 let msg = e.to_string();
                 if !msg.contains("duplicate column name") {
-                    return Err(msg);
+                    return Err(AppError::msg(msg));
                 }
             }
         }
         conn.pragma_update(None, "user_version", 1)
-            .map_err(|e| e.to_string())?;
+            ?;
         stored = 1;
     }
 
@@ -345,16 +345,16 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_vocab_term_lower ON vocab(lower(term))",
             [],
         )
-        .map_err(|e| e.to_string())?;
+        ?;
         conn.pragma_update(None, "user_version", 2)
-            .map_err(|e| e.to_string())?;
+            ?;
         stored = 2;
     }
 
     if stored < 3 {
         apply_v3_foreign_keys(conn)?;
         conn.pragma_update(None, "user_version", 3)
-            .map_err(|e| e.to_string())?;
+            ?;
         stored = 3;
     }
 
@@ -365,11 +365,11 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         ) {
             let msg = e.to_string();
             if !msg.contains("duplicate column name") {
-                return Err(msg);
+                return Err(AppError::msg(msg));
             }
         }
         conn.pragma_update(None, "user_version", 4)
-            .map_err(|e| e.to_string())?;
+            ?;
         stored = 4;
     }
 
@@ -381,12 +381,12 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             if let Err(e) = conn.execute(sql, []) {
                 let msg = e.to_string();
                 if !msg.contains("duplicate column name") {
-                    return Err(msg);
+                    return Err(AppError::msg(msg));
                 }
             }
         }
         conn.pragma_update(None, "user_version", 5)
-            .map_err(|e| e.to_string())?;
+            ?;
         stored = 5;
     }
 
@@ -407,7 +407,7 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             if let Err(e) = conn.execute(sql, []) {
                 let msg = e.to_string();
                 if !msg.contains("duplicate column name") {
-                    return Err(msg);
+                    return Err(AppError::msg(msg));
                 }
             }
         }
@@ -415,24 +415,24 @@ fn migrate(conn: &Connection) -> Result<(), String> {
             "CREATE INDEX IF NOT EXISTS idx_articles_fetched ON articles(fetched_at DESC);
              CREATE INDEX IF NOT EXISTS idx_articles_origin_quality ON articles(origin, quality);",
         )
-        .map_err(|e| e.to_string())?;
+        ?;
         conn.pragma_update(None, "user_version", 6)
-            .map_err(|e| e.to_string())?;
+            ?;
         stored = 6;
     }
 
     if stored < LATEST_VERSION {
-        return Err(format!(
+        return Err(AppError::msg(format!(
             "incomplete schema migration: user_version={stored}, expected {LATEST_VERSION}"
-        ));
+        )));
     }
     Ok(())
 }
 
 /// Rebuild translations/vocab with article FKs. SQLite cannot ADD CONSTRAINT.
-fn apply_v3_foreign_keys(conn: &Connection) -> Result<(), String> {
+fn apply_v3_foreign_keys(conn: &Connection) -> Result<(), AppError> {
     conn.execute_batch("PRAGMA foreign_keys = OFF;")
-        .map_err(|e| e.to_string())?;
+        ?;
     conn.execute_batch(
         r#"
         BEGIN;
@@ -492,8 +492,8 @@ fn apply_v3_foreign_keys(conn: &Connection) -> Result<(), String> {
         COMMIT;
         "#,
     )
-    .map_err(|e| e.to_string())?;
+    ?;
     conn.execute_batch("PRAGMA foreign_keys = ON;")
-        .map_err(|e| e.to_string())?;
+        ?;
     Ok(())
 }

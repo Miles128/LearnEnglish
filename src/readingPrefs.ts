@@ -3,24 +3,24 @@ import type { CSSProperties } from "react";
 export const READER_FONTS = [
   {
     id: "serif",
-    label: "衬线（Iowan）",
+    label: "衬线（霞鹜文楷）",
     family:
-      '"Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", "Source Han Serif SC", serif',
+      '"Iowan Old Style", "Palatino Linotype", Palatino, "LXGW WenKai", serif',
   },
   {
     id: "palatino",
     label: "Palatino",
-    family: 'Palatino, "Palatino Linotype", "Songti SC", serif',
+    family: 'Palatino, "Palatino Linotype", "LXGW WenKai", serif',
   },
   {
     id: "georgia",
     label: "Georgia",
-    family: 'Georgia, "Songti SC", serif',
+    family: 'Georgia, "LXGW WenKai", serif',
   },
   {
     id: "newyork",
     label: "New York",
-    family: '"New York", "Iowan Old Style", "Songti SC", serif',
+    family: '"New York", "Iowan Old Style", "LXGW WenKai", serif',
   },
   {
     id: "songti",

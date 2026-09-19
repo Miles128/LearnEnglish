@@ -1,86 +1,125 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, ArticleListItem, FeedCategory, LearningStats, RefreshResult } from "../api";
-import { articleNeedsCardZh } from "../articleList";
+import {
+  applyDifficultyOrder,
+  articleNeedsCardZh,
+  groupBySource,
+  pickTopArticles,
+  topPickIds,
+  topTags,
+} from "../homeDerived";
 import { formatLearningInsight } from "../learningStats";
 import {
   articleDifficulty,
   calibrateEdges,
   difficultyFromScore,
+  DIFFICULTY_LEVELS,
+  difficultyLabel,
   type DifficultyLevel,
 } from "../difficulty";
 import { useAppConfig, useVocab } from "../store";
 import { ensureLexiconLoaded, isFreqBand, type FreqBand } from "../wordLevels";
 import SourceBoard from "../components/SourceBoard";
-import { groupBySource } from "../sourceInterest";
-import { pickTopArticles, topPickIds } from "../topPicks";
-import { applyDifficultyOrder } from "../difficultyRank";
-import SelectionPopover, { type Popover } from "../components/SelectionPopover";
+import ArticleRow from "../components/ArticleRow";
+import { lastArticlePath } from "../useArticle";
+import SelectionPopover from "../components/SelectionPopover";
 import {
   bundledGloss,
   cachedTranslation,
   isPhraseSelection,
-  prepareLookup,
   rememberTranslation,
-} from "../wordLookup";
-import { ensureDetailsLoaded, lookupDetail } from "../wordDetails";
+} from "../wordResolve";
 import { useTts } from "../useTts";
-import { useEscapeKey } from "../useEscapeKey";
+import { useWordPopover } from "../useWordPopover";
+
+function IconRefresh() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+      <path d="M21 3v6h-6" />
+    </svg>
+  );
+}
 
 const PAGE_SIZE = 60;
 /** 今日推荐: the first N ranked unread articles, shown expanded. */
 const TOP_PICKS = 10;
 
-/** Tag chips shown in the filter row: most frequent first, capped. */
-export function topTags(articles: ArticleListItem[], max: number = 12): string[] {
-  const counts = new Map<string, number>();
-  for (const a of articles) {
-    for (const tag of a.tags ?? []) {
-      counts.set(tag, (counts.get(tag) ?? 0) + 1);
-    }
-  }
-  return [...counts.entries()]
-    .sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]))
-    .slice(0, max)
-    .map(([tag]) => tag);
-}
+/** 未完成 (default) / 未读 / 在读 / 已读 / 全部. */
+type ReadFilter = "unfinished" | "unread" | "reading" | "read" | "all";
 
 export default function Home() {
   const [category, setCategory] = useState("all");
   const [activeTags, setActiveTags] = useState<string[]>([]);
+  /** Tags + filters stay hidden until the 筛选 toggle is opened. */
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [categories, setCategories] = useState<FeedCategory[]>([]);
   const [articles, setArticles] = useState<ArticleListItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  /** Archive filters (merged in from the old Library page). */
+  const [readFilter, setReadFilter] = useState<ReadFilter>("unfinished");
+  const [likedOnly, setLikedOnly] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState("");
+  const [levelFilter, setLevelFilter] = useState<DifficultyLevel | "all">("all");
+  const [sources, setSources] = useState<[string, number][]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [learningStats, setLearningStats] = useState<LearningStats | null>(null);
 
+  const navigate = useNavigate();
   const { cfg } = useAppConfig();
-  const { learningTerms, refreshLearningTerms } = useVocab();
-  const { speaking, speakTarget, startSpeak, stopSpeak } = useTts();
-  const [popover, setPopover] = useState<Popover | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const {
+    learningTerms,
+    knownTerms,
+    refreshLearningTerms,
+    markKnown,
+    unmarkKnown,
+  } = useVocab();
+  const tts = useTts();
+  const { speaking, speakTarget } = tts;
   const freqBand: FreqBand = isFreqBand(cfg.freq_band) ? cfg.freq_band : 3000;
   const hasLlm = Boolean(cfg.api_key?.trim());
   const didBackfill = useRef(false);
   const [cardFillError, setCardFillError] = useState<string | null>(null);
   const [cardFilling, setCardFilling] = useState(false);
 
+  /** Any non-default filter switches from the ranked digest to the flat archive list. */
+  const archiveMode =
+    readFilter !== "unfinished" || likedOnly || sourceFilter !== "";
+
+  const fetchPage = useCallback(
+    (offset: number) =>
+      archiveMode
+        ? api.listLibrary({
+            category: category === "all" ? undefined : category,
+            tags: activeTags,
+            source: sourceFilter || undefined,
+            readState: readFilter,
+            likedOnly,
+            limit: PAGE_SIZE,
+            offset,
+          })
+        : api.listArticlesRanked(
+            category === "all" ? undefined : category,
+            activeTags,
+            undefined,
+            true,
+            PAGE_SIZE,
+            offset,
+          ),
+    [archiveMode, category, activeTags, readFilter, likedOnly, sourceFilter],
+  );
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const [list, cats, stats] = await Promise.all([
-        api.listArticlesRanked(
-          category === "all" ? undefined : category,
-          activeTags,
-          undefined,
-          true,
-          PAGE_SIZE,
-          0,
-        ),
+        fetchPage(0),
         api.listFeedCategories().catch(() => [] as FeedCategory[]),
         api.getLearningStats().catch(() => null),
         ensureLexiconLoaded().catch(() => undefined),
@@ -94,12 +133,16 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
-  }, [category, activeTags]);
+  }, [fetchPage]);
 
   useEffect(() => {
     didBackfill.current = false;
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void api.listArticleSources().then(setSources).catch(() => undefined);
+  }, []);
 
   const fillCards = useCallback(async () => {
     setCardFilling(true);
@@ -143,14 +186,7 @@ export default function Home() {
     if (loadingMore) return;
     setLoadingMore(true);
     try {
-      const next = await api.listArticlesRanked(
-        category === "all" ? undefined : category,
-        activeTags,
-        undefined,
-        true,
-        PAGE_SIZE,
-        articles.length,
-      );
+      const next = await fetchPage(articles.length);
       const seen = new Set(articles.map((a) => a.id));
       const merged = articles.concat(next.filter((a) => !seen.has(a.id)));
       setArticles(merged);
@@ -159,6 +195,22 @@ export default function Home() {
       setError(String(e));
     } finally {
       setLoadingMore(false);
+    }
+  }
+
+  // Refresh lives on the list it refreshes: signal Home via the shared event.
+  async function onRefresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const result = await api.refreshFeeds();
+      window.dispatchEvent(new CustomEvent("shiyan:refreshed", { detail: result }));
+    } catch (e) {
+      window.dispatchEvent(
+        new CustomEvent("shiyan:refreshed", { detail: { error: String(e) } }),
+      );
+    } finally {
+      setRefreshing(false);
     }
   }
 
@@ -177,30 +229,46 @@ export default function Home() {
   // Local difficulty index per article: density of words above this
   // learner's word-frequency size (plus their learning terms).
   const difficultyPrefs = useMemo(() => ({ freqBand }), [freqBand]);
-  const difficultyById = useMemo(() => {
+  const { difficultyById, levelCounts } = useMemo(() => {
     // Score every visible article, calibrate the five bucket edges against
     // this sample, then bucket. Calibration keeps 简单/普通/较难 relative to
     // what this learner actually gets served.
     const scored: { id: string; score: number | null }[] = [];
     for (const a of articles) {
-      const result = articleDifficulty(a.excerpt, learningTerms, difficultyPrefs);
+      const result = articleDifficulty(
+        a.excerpt,
+        learningTerms,
+        difficultyPrefs,
+        knownTerms,
+      );
       scored.push({ id: a.id, score: result?.score ?? null });
     }
     const edges = calibrateEdges(
       scored.map((s) => s.score).filter((s): s is number => s !== null),
     );
-    const map = new Map<string, DifficultyLevel | null>();
+    const byId = new Map<string, DifficultyLevel | null>();
+    const counts = new Map<DifficultyLevel, number>();
     for (const { id, score } of scored) {
-      map.set(id, score === null ? null : difficultyFromScore(score, edges));
+      const level = score === null ? null : difficultyFromScore(score, edges);
+      byId.set(id, level);
+      if (level) counts.set(level, (counts.get(level) ?? 0) + 1);
     }
-    return map;
-  }, [articles, learningTerms, difficultyPrefs]);
+    return { difficultyById: byId, levelCounts: counts };
+  }, [articles, learningTerms, knownTerms, difficultyPrefs]);
+
+  const matchesLevel = useCallback(
+    (a: ArticleListItem) =>
+      levelFilter === "all" || difficultyById.get(a.id) === levelFilter,
+    [levelFilter, difficultyById],
+  );
+  /** Flat archive list (read/收藏/来源 filters active). */
+  const visible = useMemo(() => articles.filter(matchesLevel), [articles, matchesLevel]);
 
   // Difficulty fit nudges the backend rank: the sweet spot (a few new words
   // per paragraph) floats up, word walls and trivially-easy pieces sink.
   const orderedArticles = useMemo(
-    () => applyDifficultyOrder(articles, difficultyById),
-    [articles, difficultyById],
+    () => applyDifficultyOrder(articles, difficultyById).filter(matchesLevel),
+    [articles, difficultyById, matchesLevel],
   );
   const topPicks = useMemo(
     () => pickTopArticles(orderedArticles, TOP_PICKS),
@@ -238,66 +306,34 @@ export default function Home() {
       );
       void load();
     }
-    function onFeedsChanged() {
-      void load();
-    }
     window.addEventListener("shiyan:refreshed", onRefreshed);
-    window.addEventListener("shiyan:feeds-changed", onFeedsChanged);
     return () => {
       window.removeEventListener("shiyan:refreshed", onRefreshed);
-      window.removeEventListener("shiyan:feeds-changed", onFeedsChanged);
     };
   }, [load]);
 
-  const closePopover = useCallback(() => setPopover(null), []);
-  useEscapeKey(popover != null, closePopover);
-
   // Selection-to-translate on the home list (titles / summaries).
-  const showMeaning = useCallback(
-    async (text: string, x: number, y: number) => {
-      const { term: ruleTerm, source } = prepareLookup(text);
-      let detail: ReturnType<typeof lookupDetail> = null;
-      try {
-        await ensureDetailsLoaded();
-        detail = lookupDetail(source) ?? lookupDetail(ruleTerm);
-      } catch {
-        // details are optional — fall through to the bundled gloss / LLM
-      }
-      const term = detail?.lemma || ruleTerm;
-      if (detail) {
-        setPopover({ x, y, text: term, source, detail, origin: "local", loading: false });
-        return;
-      }
-      const gloss = bundledGloss(term) ?? cachedTranslation(term);
-      if (gloss) {
-        setPopover({
-          x,
-          y,
-          text: term,
-          source,
-          translation: gloss,
-          origin: "local",
-          loading: false,
-        });
-        return;
-      }
-      setPopover({ x, y, text: term, source, loading: true });
-      try {
-        const translated = await api.translatePlainText(term);
-        rememberTranslation(term, translated);
-        setPopover((p) =>
-          p && p.text === term
-            ? { ...p, translation: translated, origin: "ai" as const, loading: false }
-            : p,
-        );
-      } catch (err) {
-        setPopover((p) =>
-          p && p.text === term ? { ...p, error: String(err), loading: false } : p,
-        );
-      }
+  const {
+    popover,
+    closePopover,
+    toast,
+    showMeaning,
+    speakWord,
+    addToVocab,
+    addToPhrase,
+  } = useWordPopover({
+    articleId: null,
+    tts,
+    localGloss: (term) => bundledGloss(term) ?? cachedTranslation(term),
+    translate: async (term) => {
+      const translated = await api.translatePlainText(term);
+      rememberTranslation(term, translated);
+      return translated;
     },
-    [],
-  );
+    contextFor: (source, term) => source ?? term,
+    onError: (m) => setError(m),
+    onVocabAdded: () => void refreshLearningTerms(),
+  });
 
   async function onPageMouseUp(e: React.MouseEvent) {
     const sel = window.getSelection();
@@ -305,55 +341,38 @@ export default function Home() {
     if (!text || text.length > 120) {
       return;
     }
-    await showMeaning(text, e.clientX, e.clientY);
+    await showMeaning({ text, x: e.clientX, y: e.clientY });
   }
 
-  function speakWord(text: string) {
-    if (speaking && speakTarget?.kind === "word") {
-      stopSpeak();
-      return;
-    }
-    if (!text.trim()) return;
-    startSpeak({ kind: "word" }, [text]);
-  }
-
-  async function addPopoverToPhraseLibrary() {
-    if (!popover) return;
+  async function toggleKnown(term: string) {
+    const key = term.trim().toLowerCase();
     try {
-      await api.addPhrase({
-        phrase: popover.text,
-        contextSentence: popover.source ?? popover.text,
-        articleId: null,
-      });
-      setToast(`已加入短语组合：${popover.text}`);
-      setPopover(null);
-      setTimeout(() => setToast(null), 2500);
-    } catch (err) {
-      setError(String(err));
+      if (knownTerms.includes(key)) await unmarkKnown(key);
+      else await markKnown(key);
+    } catch (e) {
+      setError(String(e));
     }
   }
 
-  async function addPopoverToVocab() {
-    if (!popover) return;
-    try {
-      await api.addVocab({
-        term: popover.text,
-        contextSentence: popover.source ?? popover.text,
-        articleId: null,
-        definitionZh: popover.translation ?? null,
-      });
-      setToast(`已加入生词库：${popover.text}`);
-      setPopover(null);
-      await refreshLearningTerms();
-      setTimeout(() => setToast(null), 2500);
-    } catch (err) {
-      setError(String(err));
-    }
+  const resumePath = lastArticlePath();
+  const hasFilter =
+    readFilter !== "unfinished" ||
+    likedOnly ||
+    levelFilter !== "all" ||
+    activeTags.length > 0 ||
+    sourceFilter !== "";
+
+  function clearFilters() {
+    setReadFilter("unfinished");
+    setLikedOnly(false);
+    setLevelFilter("all");
+    setActiveTags([]);
+    setSourceFilter("");
   }
 
   return (
     <div className="page" onMouseUp={(e) => void onPageMouseUp(e)}>
-      <div className="tabs">
+      <div className="tabs home-tabs">
         {tabCategories.map((c) => (
           <button
             key={c.id}
@@ -363,55 +382,176 @@ export default function Home() {
             {c.label}
           </button>
         ))}
-      </div>
-
-      {availableTags.length > 0 && (
-        <div className="tag-filter">
-          {availableTags.map((tag) => {
-            const on = activeTags.includes(tag);
-            return (
-              <button
-                key={tag}
-                type="button"
-                className={on ? "tag-chip active" : "tag-chip"}
-                onClick={() =>
-                  setActiveTags((prev) =>
-                    prev.includes(tag)
-                      ? prev.filter((t) => t !== tag)
-                      : [...prev, tag],
-                  )
-                }
-              >
-                {tag}
-              </button>
-            );
-          })}
-          {activeTags.length > 0 && (
+        <button
+          type="button"
+          className={`iconlike${refreshing ? " spin" : ""}`}
+          onClick={() => void onRefresh()}
+          disabled={refreshing}
+          title="刷新订阅"
+          aria-label="刷新订阅"
+        >
+          <IconRefresh />
+        </button>
+        <div className="tabs-right">
+          {learningStats && (
+            <span className="learning-insight-inline">
+              {formatLearningInsight(learningStats)} ·{" "}
+              <Link to="/stats">统计</Link>
+            </span>
+          )}
+          <button
+            type="button"
+            className={likedOnly ? "linklike active" : "linklike"}
+            onClick={() => {
+              setLikedOnly((v) => !v);
+              setFiltersOpen(true);
+            }}
+          >
+            收藏
+          </button>
+          <button
+            type="button"
+            className={readFilter === "read" ? "linklike active" : "linklike"}
+            onClick={() => {
+              setReadFilter((v) => (v === "read" ? "unfinished" : "read"));
+              setFiltersOpen(true);
+            }}
+          >
+            已读
+          </button>
+          <button
+            type="button"
+            className={hasFilter ? "linklike active" : "linklike"}
+            onClick={() => setFiltersOpen((o) => !o)}
+            aria-expanded={filtersOpen}
+          >
+            筛选
+          </button>
+          {resumePath && (
             <button
               type="button"
-              className="tag-chip clear"
-              onClick={() => setActiveTags([])}
+              className="linklike"
+              onClick={() => navigate(resumePath)}
             >
-              清除筛选
+              继续阅读
             </button>
           )}
         </div>
+      </div>
+
+      {filtersOpen && (
+        <>
+          {availableTags.length > 0 && (
+            <div className="tag-filter">
+              {availableTags.map((tag) => {
+                const on = activeTags.includes(tag);
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    className={on ? "tag-chip active" : "tag-chip"}
+                    onClick={() =>
+                      setActiveTags((prev) =>
+                        prev.includes(tag)
+                          ? prev.filter((t) => t !== tag)
+                          : [...prev, tag],
+                      )
+                    }
+                  >
+                    {tag}
+                  </button>
+                );
+              })}
+              {activeTags.length > 0 && (
+                <button
+                  type="button"
+                  className="tag-chip clear"
+                  onClick={() => setActiveTags([])}
+                >
+                  清除筛选
+                </button>
+              )}
+            </div>
+          )}
+
+          <div className="library-filters">
+            <div className="filter-row">
+              <div className="filter-group">
+                {(
+                  [
+                    ["unfinished", "未完成"],
+                    ["unread", "未读"],
+                    ["reading", "在读"],
+                    ["read", "已读"],
+                    ["all", "全部"],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={readFilter === id ? "tag-chip active" : "tag-chip"}
+                    onClick={() => setReadFilter(id)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                className={likedOnly ? "tag-chip active" : "tag-chip"}
+                onClick={() => setLikedOnly((v) => !v)}
+              >
+                ★ 收藏
+              </button>
+              <select
+                className="filter-select"
+                value={sourceFilter}
+                onChange={(e) => setSourceFilter(e.target.value)}
+              >
+                <option value="">全部来源</option>
+                {sources.map(([name, count]) => (
+                  <option key={name} value={name}>
+                    {name}（{count}）
+                  </option>
+                ))}
+              </select>
+              {hasFilter && (
+                <button type="button" className="tag-chip clear" onClick={clearFilters}>
+                  清除筛选
+                </button>
+              )}
+            </div>
+
+            <div className="filter-row">
+              <div className="filter-group">
+                <button
+                  type="button"
+                  className={levelFilter === "all" ? "tag-chip active" : "tag-chip"}
+                  onClick={() => setLevelFilter("all")}
+                >
+                  全部难度
+                </button>
+                {DIFFICULTY_LEVELS.map((level) => (
+                  <button
+                    key={level}
+                    type="button"
+                    className={levelFilter === level ? "tag-chip active" : "tag-chip"}
+                    onClick={() => setLevelFilter(level)}
+                  >
+                    {difficultyLabel(level)}
+                    {levelCounts.get(level) ? ` ${levelCounts.get(level)}` : ""}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </>
       )}
 
-      {learningStats && (
-        <p className="learning-insight">
-          {formatLearningInsight(learningStats)} ·{" "}
-          <Link to="/stats">统计</Link>
-        </p>
-      )}
       {!hasLlm && articles.some(articleNeedsCardZh) && (
-        <p className="muted">
-          设置里填 API Key 后，列表会自动补中文译题和一两句简介。
-        </p>
+        <p className="muted">设置里填 API Key 后，列表会自动补一两句中文简介。</p>
       )}
-      {hasLlm && cardFilling && (
-        <p className="muted">正在补中文译题与简介…</p>
-      )}
+      {hasLlm && cardFilling && <p className="muted">正在补中文简介…</p>}
       {cardFillError && (
         <p className="banner err with-action">
           <span>简介未生成：{cardFillError}</span>
@@ -437,32 +577,57 @@ export default function Home() {
           <p>还没有文章。点「刷新」或粘贴链接导入。</p>
         </div>
       )}
-
-      {topPicks.length > 0 && (
-        <div className="source-boards top-picks">
-          <SourceBoard
-            section={{
-              source: "今日推荐",
-              category: topPicks[0].category,
-              articles: topPicks,
-            }}
-            categories={categories}
-            difficultyById={difficultyById}
-            collapseKey="home-top-picks"
-          />
+      {!loading && articles.length > 0 && visible.length === 0 && !error && (
+        <div className="empty">
+          <p>没有符合条件的文章。</p>
         </div>
       )}
 
-      <div className="source-boards">
-        {sections.map((sec) => (
-          <SourceBoard
-            key={sec.source}
-            section={sec}
-            categories={categories}
-            difficultyById={difficultyById}
-          />
-        ))}
-      </div>
+      {archiveMode ? (
+        visible.length > 0 && (
+          <ul className="article-list library-list">
+            {visible.map((a) => (
+              <ArticleRow
+                key={a.id}
+                article={a}
+                difficulty={difficultyById.get(a.id) ?? null}
+                showSource
+                showTags={filtersOpen}
+              />
+            ))}
+          </ul>
+        )
+      ) : (
+        <>
+          {topPicks.length > 0 && (
+            <div className="source-boards top-picks">
+              <SourceBoard
+                section={{
+                  source: "今日推荐",
+                  category: topPicks[0].category,
+                  articles: topPicks,
+                }}
+                categories={categories}
+                difficultyById={difficultyById}
+                collapseKey="home-top-picks"
+                showTags={filtersOpen}
+              />
+            </div>
+          )}
+
+          <div className="source-boards">
+            {sections.map((sec) => (
+              <SourceBoard
+                key={sec.source}
+                section={sec}
+                categories={categories}
+                difficultyById={difficultyById}
+                showTags={filtersOpen}
+              />
+            ))}
+          </div>
+        </>
+      )}
 
       {toast && <p className="banner ok">{toast}</p>}
 
@@ -472,12 +637,18 @@ export default function Home() {
           speaking={speaking}
           speakTarget={speakTarget}
           onSpeakWord={speakWord}
-          onAddVocab={() => void addPopoverToVocab()}
+          onAddVocab={() => void addToVocab()}
           onAddPhrase={
             popover.source && isPhraseSelection(popover.source)
-              ? () => void addPopoverToPhraseLibrary()
+              ? () => void addToPhrase()
               : undefined
           }
+          onToggleKnown={
+            popover.source && isPhraseSelection(popover.source)
+              ? undefined
+              : () => void toggleKnown(popover.text)
+          }
+          known={knownTerms.includes(popover.text.trim().toLowerCase())}
           onClose={closePopover}
         />
       )}

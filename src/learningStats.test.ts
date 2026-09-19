@@ -6,39 +6,40 @@ import {
 } from "./learningStats";
 
 describe("formatLearningInsight", () => {
-  it("explains the empty state", () => {
-    expect(
-      formatLearningInsight({
-        opened_total: 0,
-        opened_7d: 0,
-        top_source: null,
-        top_category: null,
-        vocab_created_7d: 0,
-        vocab_learning: 0,
-      }),
-    ).toBe("读过的文章会记在这里，用来看你常读什么。");
-  });
-
-  it("summarizes week, total, favorite source, and new words", () => {
+  it("shows today's opens over the total", () => {
     expect(
       formatLearningInsight({
         opened_total: 12,
+        opened_today: 3,
         opened_7d: 3,
         top_source: "BBC",
         top_category: "world",
         vocab_created_7d: 5,
         vocab_learning: 20,
       }),
-    ).toBe("本周读 3 篇 · 累计 12 篇 · 常读 BBC · 本周新词 5");
+    ).toBe("今日 3 / 总 12");
+  });
+
+  it("handles the empty state", () => {
+    expect(
+      formatLearningInsight({
+        opened_total: 0,
+        opened_today: 0,
+        opened_7d: 0,
+        top_source: null,
+        top_category: null,
+        vocab_created_7d: 0,
+        vocab_learning: 0,
+      }),
+    ).toBe("今日 0 / 总 0");
   });
 });
 
 describe("articleIsRead", () => {
-  it("is true only after an implicit open", () => {
-    expect(articleIsRead({ last_opened_at: null })).toBe(false);
-    expect(articleIsRead({ last_opened_at: "2026-09-13T00:00:00Z" })).toBe(
-      true,
-    );
+  it("is true only once finished, not merely opened", () => {
+    expect(articleIsRead({ read_completed: false })).toBe(false);
+    expect(articleIsRead({ read_completed: true })).toBe(true);
+    expect(articleIsRead({})).toBe(false);
   });
 });
 

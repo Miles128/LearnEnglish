@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { SpeakTarget } from "../useTts";
-import type { WordDetail } from "../wordDetails";
+import type { WordDetail } from "../wordResolve";
 
 export type Popover = {
   x: number;
@@ -25,6 +25,9 @@ type Props = {
   onAddVocab: () => void;
   /** Present for multi-word selections: save into the phrase library. */
   onAddPhrase?: () => void;
+  /** Present for single words: mark/unmark as already known. */
+  onToggleKnown?: () => void;
+  known?: boolean;
   onClose: () => void;
 };
 
@@ -74,6 +77,8 @@ export default function SelectionPopover({
   onSpeakWord,
   onAddVocab,
   onAddPhrase,
+  onToggleKnown,
+  known,
   onClose,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
@@ -161,6 +166,11 @@ export default function SelectionPopover({
         >
           加入生词库
         </button>
+        {onToggleKnown ? (
+          <button className="btn small" onClick={onToggleKnown}>
+            {known ? "取消已知" : "标记已知"}
+          </button>
+        ) : null}
         <button className="btn small" onClick={onClose}>
           关闭
         </button>

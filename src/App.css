@@ -18,8 +18,8 @@
   --glow-b: #dbeee8;
   --progress-a: #0f5c4c;
   --progress-b: #1a7a66;
-  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC",
-    "Source Han Serif SC", serif;
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "LXGW WenKai",
+    serif;
 }
 
 /* Explicit theme (data-theme set by src/theme.ts), plus a system fallback
@@ -196,6 +196,13 @@ a {
   flex: 1;
 }
 
+/* Sub-pages: back to the main interface, top-right but not in the top bar. */
+.page-back-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px clamp(16px, 3.5vw, 64px) 0;
+}
+
 .app-shell.refreshing .main {
   padding-bottom: 64px;
 }
@@ -213,8 +220,8 @@ a {
   margin-inline: 0;
   padding-inline: clamp(1.25rem, 4vw, 2.5rem);
   box-sizing: border-box;
-  --reader-font: "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC",
-    "Source Han Serif SC", serif;
+  --reader-font: "Iowan Old Style", "Palatino Linotype", Palatino, "LXGW WenKai",
+    serif;
   --reader-size: 18px;
   --reader-lh: 1.75;
   --reader-measure: 100%;
@@ -231,9 +238,6 @@ a {
   letter-spacing: 0.01em;
 }
 
-.article-title-zh {
-  font-family: var(--reader-font);
-}
 
 .page-header {
   display: flex;
@@ -246,6 +250,10 @@ a {
 .page-header-slim {
   align-items: center;
   margin-bottom: 14px;
+}
+
+.page-header-end {
+  justify-content: flex-end;
 }
 
 .reader-heading {
@@ -311,6 +319,82 @@ a {
   flex-wrap: wrap;
 }
 
+/* Locked first row: category tabs + refresh + insight + toggles stay put. */
+.home-tabs {
+  align-items: center;
+  position: sticky;
+  top: 40px;
+  z-index: 30;
+  background: var(--bar-bg);
+  backdrop-filter: blur(8px);
+  padding: 8px 0;
+  margin-bottom: 12px;
+}
+
+/* Right-aligned cluster in the category row: insight text + inline toggles. */
+.tabs-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.learning-insight-inline {
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.4;
+  text-align: right;
+}
+
+/* Borderless icon button (refresh, sitting next to the category tabs). */
+.iconlike {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.iconlike:hover {
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+
+.iconlike:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.iconlike.spin svg {
+  animation: topbar-spin 0.9s linear infinite;
+}
+
+/* Borderless text button (继续阅读 / 标签). */
+.linklike {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0;
+  cursor: pointer;
+}
+
+.linklike:hover {
+  text-decoration: underline;
+}
+
+.linklike.active {
+  color: var(--accent);
+  font-weight: 700;
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -323,7 +407,7 @@ a {
   flex-direction: column;
   gap: 4px;
   padding: 12px 14px;
-  border: 1px solid var(--line);
+  border: none;
   border-radius: 12px;
   background: var(--card);
 }
@@ -528,17 +612,22 @@ a {
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
+}
+
+/* Articles are separated by a thin rule, not boxed cards. */
+.article-list > li + li {
+  border-top: 1px solid var(--line);
 }
 
 .article-row {
   display: block;
-  padding: 16px 18px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 14px;
+  padding: 14px 2px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
   color: inherit;
-  box-shadow: var(--shadow);
+  box-shadow: none;
 }
 
 .article-row.is-read {
@@ -568,6 +657,16 @@ a {
 .article-title-line .article-title-en {
   margin: 0;
   min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* Approximate length, sitting just left of the difficulty badge. */
+.article-length {
+  flex: none;
+  font-size: 0.74rem;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--muted);
 }
 
 /* Difficulty index badge — right-aligned to the title. */
@@ -601,12 +700,6 @@ a {
   background: #c0453b;
 }
 
-.article-title-zh {
-  margin: 0 0 8px;
-  color: var(--muted);
-  font-size: 0.98rem;
-  line-height: 1.4;
-}
 
 .source-boards {
   display: flex;
@@ -695,12 +788,6 @@ a {
   color: var(--muted);
   font-size: 0.92rem;
   line-height: 1.5;
-}
-
-.back {
-  display: inline-block;
-  margin-bottom: 8px;
-  color: var(--muted);
 }
 
 .article-body {
@@ -931,7 +1018,7 @@ mark.vocab-hit:hover {
 .reader-preview {
   margin-top: 8px;
   padding: 14px 16px;
-  border: 1px dashed var(--line);
+  border: none;
   border-radius: 10px;
   background: var(--card);
   font-family: var(--reader-font);
@@ -1054,21 +1141,44 @@ mark.vocab-hit:hover {
   background: var(--panel);
 }
 
+.known-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.known-add input {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.known-add .muted {
+  white-space: nowrap;
+}
+
 .vocab-list {
   list-style: none;
   padding: 0;
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
+}
+
+.vocab-list > li + li {
+  border-top: 1px solid var(--line);
 }
 
 .vocab-card {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 14px 16px;
-  box-shadow: var(--shadow);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 14px 2px;
+  box-shadow: none;
 }
 
 .vocab-head {
@@ -1093,13 +1203,21 @@ mark.vocab-hit:hover {
   max-width: 560px;
 }
 
+/* Context-first review: the original sentence is the prompt. */
+.flash-context {
+  margin: 0 0 16px;
+  font-family: var(--reader-font);
+  font-size: 1.05rem;
+  line-height: 1.7;
+}
+
 .flashcard {
   background: var(--panel);
-  border: 1px solid var(--line);
+  border: none;
   border-radius: 16px;
   padding: 28px 24px;
   min-height: 220px;
-  box-shadow: var(--shadow);
+  box-shadow: none;
   cursor: pointer;
 }
 
@@ -1134,12 +1252,13 @@ button.flashcard {
 }
 
 .settings-section {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 18px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0 0 20px;
   margin-bottom: 16px;
-  box-shadow: var(--shadow);
+  border-bottom: 1px solid var(--line);
+  box-shadow: none;
 }
 
 .settings-section h2 {
@@ -1179,7 +1298,7 @@ button.flashcard {
 
 .empty {
   padding: 28px;
-  border: 1px dashed var(--line);
+  border: none;
   border-radius: 14px;
   background: var(--scrim);
 }
@@ -1245,6 +1364,12 @@ button.flashcard {
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.feeds-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .feeds-drawer-root {
@@ -1439,4 +1564,33 @@ button.flashcard {
   .refresh-progress {
     padding: 10px 14px 12px;
   }
+}
+
+/* Home typography hierarchy: the article title is the baseline, and every
+   non-title text on the main interface is exactly 2pt smaller. */
+:root {
+  --home-title: 1.17rem;
+  --home-text: calc(var(--home-title) - 2pt);
+  --home-meta: calc(var(--home-text) - 2pt);
+}
+
+.article-title-line .article-title-en {
+  font-size: var(--home-title);
+}
+
+.home-tabs .tab,
+.article-summary-zh,
+.article-row-source,
+.article-list .article-tags,
+.learning-insight-inline,
+.linklike,
+.tag-chip,
+.filter-select {
+  font-size: var(--home-text);
+}
+
+/* Length + difficulty read as fine print: another 2pt smaller. */
+.article-length,
+.difficulty-badge {
+  font-size: var(--home-meta);
 }

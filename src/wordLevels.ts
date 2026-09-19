@@ -174,9 +174,13 @@ export function annotateText(
   text: string,
   prefs: DifficultyPrefs,
   learningTerms: string[],
+  knownTerms: string[] = [],
 ): AnnotatedSpan[] {
   const learning = new Set(
     learningTerms.map(normalizeKey).filter((t) => t.length >= 2),
+  );
+  const known = new Set(
+    knownTerms.map(normalizeKey).filter((t) => t.length >= 2),
   );
   // Prefer longer learning phrases too
   const learningPhrases = [...learning]
@@ -194,8 +198,9 @@ export function annotateText(
 
     if (phraseHit) {
       const entry = lookupWord(phraseHit.key);
-      const hard = entry ? isHardWord(entry, prefs) : false;
-      const learningHit = learning.has(phraseHit.key);
+      const knownHit = known.has(phraseHit.key);
+      const hard = !knownHit && (entry ? isHardWord(entry, prefs) : false);
+      const learningHit = !knownHit && learning.has(phraseHit.key);
       spans.push({
         type: "token",
         text: phraseHit.raw,
@@ -226,9 +231,11 @@ export function annotateText(
 
     const key = normalizeKey(raw);
     const entry = lookupWord(key);
-    const hard = entry ? isHardWord(entry, prefs) : false;
     const lemmaKey = findLemmaKey(key);
-    const inLearning = learning.has(key) || learning.has(lemmaKey);
+    const knownHit = known.has(key) || known.has(lemmaKey);
+    const hard = !knownHit && (entry ? isHardWord(entry, prefs) : false);
+    const inLearning =
+      !knownHit && (learning.has(key) || learning.has(lemmaKey));
 
     spans.push({
       type: "token",

@@ -29,17 +29,19 @@ export const AnnotatedPara = memo(function AnnotatedPara({
   text,
   prefs,
   learningTerms,
+  knownTerms,
   onHardClick,
 }: {
   text: string;
   prefs: DifficultyPrefs;
   learningTerms: string[];
+  knownTerms?: string[];
   onHardClick?: HardWordClick;
 }): ReactNode {
   return createElement(
     Fragment,
     null,
-    ...annotateText(text, prefs, learningTerms).map((s, i) =>
+    ...annotateText(text, prefs, learningTerms, knownTerms).map((s, i) =>
       renderSpan(s, i, onHardClick),
     ),
   );

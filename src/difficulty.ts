@@ -170,6 +170,7 @@ export function articleDifficulty(
   rawContent: string,
   learningTerms: string[],
   prefs: DifficultyPrefs,
+  knownTerms: string[] = [],
 ): DifficultyResult | null {
   const content =
     rawContent.length > MAX_SAMPLE_CHARS
@@ -181,9 +182,13 @@ export function articleDifficulty(
   const learning = new Set(
     learningTerms.map((t) => t.trim().toLowerCase()).filter((t) => t.length >= 2),
   );
+  const known = new Set(
+    knownTerms.map((t) => t.trim().toLowerCase()).filter((t) => t.length >= 2),
+  );
 
   let total = 0;
   for (const tok of tokens) {
+    if (known.has(tok)) continue; // known words add no difficulty
     total += wordDifficultyWeight(tok, prefs, learning.has(tok));
   }
   const density = total / tokens.length;

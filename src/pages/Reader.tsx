@@ -7,7 +7,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { api, type FeedCategory, type TranslateProgress } from "../api";
 import {
@@ -16,20 +16,18 @@ import {
   type ResolvedReading,
 } from "../readingPrefs";
 import { AnnotatedPara } from "../annotateText";
-import { shouldRenderMarkdown } from "../markdown";
-import { bundledGloss, isPhraseSelection, prepareLookup } from "../wordLookup";
-import { ensureDetailsLoaded, lookupDetail } from "../wordDetails";
-import SelectionPopover, { type Popover } from "../components/SelectionPopover";
+import { bundledGloss, isPhraseSelection } from "../wordResolve";
+import SelectionPopover from "../components/SelectionPopover";
 import ReaderParagraph from "../components/ReaderParagraph";
 import { useAppConfig, useVocab } from "../store";
-import { useArticle } from "../useArticle";
+import { loadScroll, rememberLastArticle, saveScroll, useArticle } from "../useArticle";
 import { useTts } from "../useTts";
-import { useEscapeKey } from "../useEscapeKey";
-import { loadScroll, rememberLastArticle, saveScroll } from "../lastArticle";
+import { useWordPopover } from "../useWordPopover";
 import {
   applyTranslateProgress,
   categoryLabel,
   findContext,
+  shouldRenderMarkdown,
   translateProgressLabel,
 } from "../readerUtils";
 import {
@@ -57,17 +55,26 @@ export default function Reader() {
   const [busyFull, setBusyFull] = useState(false);
   const [fullProgress, setFullProgress] = useState<TranslateProgress | null>(null);
   const [busyPara, setBusyPara] = useState<number | null>(null);
-  const [popover, setPopover] = useState<Popover | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
   const [categories, setCategories] = useState<FeedCategory[]>([]);
   const [likedOverride, setLikedOverride] = useState<boolean | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const clickGuardRef = useRef(false);
   const readCompletedRef = useRef(false);
+  /** Accumulated visible+focused dwell, used for the finish threshold. */
+  const dwellMsRef = useRef(0);
+  const atBottomRef = useRef(false);
+  const wordCountRef = useRef(0);
 
-  const { speaking, speakTarget, startSpeak, stopSpeak } = useTts();
+  const tts = useTts();
+  const { speaking, speakTarget, startSpeak, stopSpeak } = tts;
   const { cfg } = useAppConfig();
-  const { learningTerms: vocabTerms, refreshLearningTerms } = useVocab();
+  const {
+    learningTerms: vocabTerms,
+    knownTerms,
+    refreshLearningTerms,
+    markKnown,
+    unmarkKnown,
+  } = useVocab();
   const prefs: DifficultyPrefs = useMemo(
     () => ({
       cefrLevel: isCefrLevel(cfg.cefr_level) ? cfg.cefr_level : "B1",
@@ -76,8 +83,28 @@ export default function Reader() {
     [cfg.cefr_level, cfg.freq_band],
   );
   const reading: ResolvedReading = useMemo(() => resolveReadingPrefs(cfg), [cfg]);
-  const closePopover = useCallback(() => setPopover(null), []);
-  useEscapeKey(popover != null, closePopover);
+  const {
+    popover,
+    setPopover,
+    closePopover,
+    toast,
+    showMeaning,
+    speakWord,
+    addToVocab,
+    addToPhrase,
+  } = useWordPopover({
+    articleId: id ?? null,
+    tts,
+    localGloss: (term) => lookupWord(term)?.zh ?? bundledGloss(term),
+    translate: async (term) => {
+      if (!id) throw new Error("文章未加载");
+      const row = await api.translateSelection(id, term);
+      return row.translated_text;
+    },
+    contextFor: (source, term) => findContext(paragraphs, source ?? term),
+    onError: (m) => setError(m),
+    onVocabAdded: () => void refreshLearningTerms(),
+  });
 
   useEffect(() => {
     void ensureLexiconLoaded()
@@ -113,25 +140,44 @@ export default function Reader() {
     }
     document.addEventListener("mousedown", onDocMouseDown);
     return () => document.removeEventListener("mousedown", onDocMouseDown);
-  }, []);
+  }, [setPopover]);
 
   const title = useMemo(() => article?.title ?? "阅读", [article]);
   const liked = likedOverride ?? article?.liked ?? false;
+
+  useEffect(() => {
+    wordCountRef.current = article?.word_count ?? 0;
+  }, [article]);
+
+  /** Finish = reached the bottom AND dwelled at least words/200 minutes. */
+  const tryComplete = useCallback(() => {
+    if (!id || readCompletedRef.current) return;
+    if (!atBottomRef.current) return;
+    const wc = wordCountRef.current;
+    const requiredMs = wc > 0 ? (wc / 200) * 60_000 : 0;
+    if (dwellMsRef.current < requiredMs) return;
+    readCompletedRef.current = true;
+    void api.markArticleProgress(id, 0, true).catch(() => undefined);
+  }, [id]);
 
   // Reading-time tracking: flush while the window is visible AND focused,
   // on losing focus/hiding, and on unmount. Capped per flush so sleep/resume
   // can't inflate it.
   useEffect(() => {
     if (!id) return;
+    dwellMsRef.current = 0;
+    atBottomRef.current = false;
     let flushedAt = Date.now();
     const flush = () => {
       const now = Date.now();
       const delta = Math.min(now - flushedAt, 60_000);
       flushedAt = now;
       if (delta >= 1000) {
+        dwellMsRef.current += delta;
         void api
           .markArticleProgress(id, delta, readCompletedRef.current)
           .catch(() => undefined);
+        tryComplete();
       }
     };
     const isCounting = () => !document.hidden && document.hasFocus();
@@ -155,7 +201,7 @@ export default function Reader() {
       window.removeEventListener("focus", onFocus);
       if (!document.hidden && document.hasFocus()) flush();
     };
-  }, [id]);
+  }, [id, tryComplete]);
 
   // Remember the article so other pages can offer "continue reading".
   useEffect(() => {
@@ -177,6 +223,7 @@ export default function Reader() {
   useEffect(() => {
     if (!id) return;
     readCompletedRef.current = false;
+    atBottomRef.current = false;
     setLikedOverride(null);
     let lastSaved = 0;
     const onScroll = () => {
@@ -185,12 +232,10 @@ export default function Reader() {
         lastSaved = now;
         saveScroll(id, window.scrollY);
       }
-      if (readCompletedRef.current) return;
       const doc = document.documentElement;
-      if (window.innerHeight + window.scrollY >= doc.scrollHeight - 400) {
-        readCompletedRef.current = true;
-        void api.markArticleProgress(id, 0, true).catch(() => undefined);
-      }
+      atBottomRef.current =
+        window.innerHeight + window.scrollY >= doc.scrollHeight - 400;
+      if (atBottomRef.current) tryComplete();
     };
     window.addEventListener("scroll", onScroll, { passive: true });
     onScroll();
@@ -198,7 +243,7 @@ export default function Reader() {
       window.removeEventListener("scroll", onScroll);
       saveScroll(id, window.scrollY);
     };
-  }, [id]);
+  }, [id, tryComplete]);
 
   function toggleLiked() {
     if (!id) return;
@@ -232,71 +277,6 @@ export default function Reader() {
     startSpeak({ kind: "paragraph", index }, [text]);
   }
 
-  function speakWord(text: string) {
-    if (speaking && speakTarget?.kind === "word") {
-      stopSpeak();
-      return;
-    }
-    if (!text.trim()) return;
-    startSpeak({ kind: "word" }, [text]);
-  }
-
-  const showMeaning = useCallback(
-    async function showMeaning(opts: {
-      text: string;
-      x: number;
-      y: number;
-      bundledZh?: string;
-    }) {
-      const { text, x, y, bundledZh } = opts;
-      // Clicking an inflected word looks it up as its base form.
-      const { term: ruleTerm, source } = prepareLookup(text);
-      let detail: ReturnType<typeof lookupDetail> = null;
-      try {
-        await ensureDetailsLoaded();
-        detail = lookupDetail(source) ?? lookupDetail(ruleTerm);
-      } catch {
-        // details are optional — fall through to the bundled gloss / LLM
-      }
-      const term = detail?.lemma || ruleTerm;
-      if (detail) {
-        setPopover({ x, y, text: term, source, detail, origin: "local", loading: false });
-        return;
-      }
-      const fromLexicon = bundledZh || lookupWord(term)?.zh || bundledGloss(term);
-      if (fromLexicon) {
-        setPopover({
-          x,
-          y,
-          text: term,
-          source,
-          translation: fromLexicon,
-          origin: "local",
-          loading: false,
-        });
-        return;
-      }
-
-      setPopover({ x, y, text: term, source, loading: true });
-      if (!id) return;
-      try {
-        const row = await api.translateSelection(id, term);
-        setPopover((p) =>
-          p && p.text === term
-            ? { ...p, translation: row.translated_text, origin: "ai" as const, loading: false }
-            : p,
-        );
-      } catch (err) {
-        setPopover((p) =>
-          p && p.text === term
-            ? { ...p, error: String(err), loading: false }
-            : p,
-        );
-      }
-    },
-    [id],
-  );
-
   const onHardWordClick = useCallback(
     function onHardWordClick(info: {
       term: string;
@@ -325,6 +305,7 @@ export default function Reader() {
           text={text}
           prefs={prefs}
           learningTerms={vocabTerms}
+          knownTerms={knownTerms}
           onHardClick={onHardWordClick}
         />
       );
@@ -336,7 +317,7 @@ export default function Reader() {
       }
       return children;
     },
-    [lexReady, prefs, vocabTerms, onHardWordClick],
+    [lexReady, prefs, vocabTerms, knownTerms, onHardWordClick],
   );
 
   async function toggleFullTranslation() {
@@ -407,35 +388,11 @@ export default function Reader() {
     await showMeaning({ text, x: e.clientX, y: e.clientY });
   }
 
-  async function addToPhraseLibrary() {
-    if (!popover || !id) return;
+  async function toggleKnown(term: string) {
+    const key = term.trim().toLowerCase();
     try {
-      await api.addPhrase({
-        phrase: popover.text,
-        contextSentence: findContext(paragraphs, popover.source ?? popover.text),
-        articleId: id,
-      });
-      setToast(`已加入短语组合：${popover.text}`);
-      setPopover(null);
-      setTimeout(() => setToast(null), 2500);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
-
-  async function addToVocab() {
-    if (!popover || !id) return;
-    try {
-      await api.addVocab({
-        term: popover.text,
-        contextSentence: findContext(paragraphs, popover.source ?? popover.text),
-        articleId: id,
-        definitionZh: popover.translation ?? null,
-      });
-      setToast(`已加入生词库：${popover.text}`);
-      setPopover(null);
-      await refreshLearningTerms();
-      setTimeout(() => setToast(null), 2500);
+      if (knownTerms.includes(key)) await unmarkKnown(key);
+      else await markKnown(key);
     } catch (e) {
       setError(String(e));
     }
@@ -444,9 +401,6 @@ export default function Reader() {
   if (view !== "ready" || !article) {
     return (
       <div className="page">
-        <Link to="/" className="back">
-          ← 返回
-        </Link>
         {view === "error" && error ? (
           <p className="banner err">{error}</p>
         ) : view === "missing" ? (
@@ -466,10 +420,7 @@ export default function Reader() {
       ref={rootRef}
       style={readingCssVars(reading)}
     >
-      <header className="page-header page-header-slim">
-        <Link to="/" className="back">
-          ← 返回
-        </Link>
+      <header className="page-header page-header-slim page-header-end">
         <div className="page-header-actions">
           <button
             className="btn"
@@ -509,13 +460,13 @@ export default function Reader() {
                 text={title}
                 prefs={prefs}
                 learningTerms={vocabTerms}
+                knownTerms={knownTerms}
                 onHardClick={onHardWordClick}
               />
             ) : (
               title
             )}
           </h1>
-          {article.title_zh && <p className="article-title-zh">{article.title_zh}</p>}
           {article.summary_zh && (
             <p className="article-summary-zh">{article.summary_zh}</p>
           )}
@@ -563,9 +514,15 @@ export default function Reader() {
           onAddVocab={() => void addToVocab()}
           onAddPhrase={
             popover.source && isPhraseSelection(popover.source)
-              ? () => void addToPhraseLibrary()
+              ? () => void addToPhrase()
               : undefined
           }
+          onToggleKnown={
+            popover.source && isPhraseSelection(popover.source)
+              ? undefined
+              : () => void toggleKnown(popover.text)
+          }
+          known={knownTerms.includes(popover.text.trim().toLowerCase())}
           onClose={closePopover}
         />
       )}

@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import type { ArticleListItem } from "../api";
-import { articleListBlurb } from "../articleList";
+import { articleLengthLabel, articleListBlurb } from "../homeDerived";
 import {
   difficultyClassName,
   difficultyLabel,
@@ -14,11 +14,19 @@ type Props = {
   difficulty: DifficultyLevel | null;
   /** Show the source name (library view). */
   showSource?: boolean;
+  /** Show topic tags; the home list hides them unless 标签 is toggled on. */
+  showTags?: boolean;
 };
 
 /** One article row, shared by the home boards and the library list. */
-export default function ArticleRow({ article, difficulty, showSource }: Props) {
+export default function ArticleRow({
+  article,
+  difficulty,
+  showSource,
+  showTags = true,
+}: Props) {
   const blurb = articleListBlurb(article);
+  const lengthLabel = articleLengthLabel(article.word_count);
   return (
     <li>
       <Link
@@ -27,6 +35,7 @@ export default function ArticleRow({ article, difficulty, showSource }: Props) {
       >
         <div className="article-title-line">
           <h3 className="article-title-en">{article.title}</h3>
+          {lengthLabel && <span className="article-length">{lengthLabel}</span>}
           {difficulty && (
             <span className={difficultyClassName(difficulty)}>
               {difficultyLabel(difficulty)}
@@ -40,11 +49,8 @@ export default function ArticleRow({ article, difficulty, showSource }: Props) {
             {articleIsRead(article) ? " · 已读" : ""}
           </p>
         ) : null}
-        {article.title_zh ? (
-          <p className="article-title-zh">{article.title_zh}</p>
-        ) : null}
         {blurb ? <p className="article-summary-zh">{blurb}</p> : null}
-        {article.tags.length > 0 ? (
+        {showTags && article.tags.length > 0 ? (
           <p className="article-tags muted">{article.tags.join(" · ")}</p>
         ) : null}
       </Link>

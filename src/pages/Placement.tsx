@@ -188,7 +188,7 @@ export default function Placement() {
           {saved ? (
             <>
               <Link className="btn primary" to="/">
-                回今日阅读
+                回主界面
               </Link>
               <Link className="btn" to="/settings">
                 设置

@@ -2,25 +2,14 @@ import type { LearningStats } from "./api/types";
 
 export type { LearningStats };
 
+/** Compact Home insight: today's opens over the all-time total. */
 export function formatLearningInsight(stats: LearningStats): string {
-  if (stats.opened_total === 0) {
-    return "读过的文章会记在这里，用来看你常读什么。";
-  }
-  const parts = [
-    `本周读 ${stats.opened_7d} 篇`,
-    `累计 ${stats.opened_total} 篇`,
-  ];
-  if (stats.top_source) {
-    parts.push(`常读 ${stats.top_source}`);
-  }
-  if (stats.vocab_created_7d > 0) {
-    parts.push(`本周新词 ${stats.vocab_created_7d}`);
-  }
-  return parts.join(" · ");
+  return `今日 ${stats.opened_today} / 总 ${stats.opened_total}`;
 }
 
-export function articleIsRead(article: { last_opened_at?: string | null }): boolean {
-  return Boolean(article.last_opened_at);
+/** "Read" = finished (bottom + dwell threshold), not merely opened. */
+export function articleIsRead(article: { read_completed?: boolean }): boolean {
+  return Boolean(article.read_completed);
 }
 
 /** Record once per article id in a hook lifetime; skip missing loads. */

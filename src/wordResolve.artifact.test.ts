@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { decodeDetail, ensureDetailsLoaded, lookupDetail } from "./wordDetails";
+import { decodeDetail, ensureDetailsLoaded, lookupDetail } from "./wordResolve";
 
 /**
  * Validates the generated artifact (src/data/word-details.json) so a broken

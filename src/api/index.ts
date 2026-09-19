@@ -3,20 +3,17 @@ export * from "./types";
 export { apiArticles as articles } from "./articles";
 export { apiFeeds as feeds } from "./feeds";
 export { apiConfig as config } from "./config";
-export { apiVocab as vocab } from "./vocab";
-export { apiPhrases as phrases } from "./phrases";
-export type { AddVocabInput } from "./vocab";
+export { apiMemory as memory } from "./memory";
+export type { AddMemoryInput, MemoryKind } from "./memory";
 
 import { apiArticles } from "./articles";
 import { apiConfig } from "./config";
 import { apiFeeds } from "./feeds";
-import { apiPhrases } from "./phrases";
-import { apiVocab } from "./vocab";
+import { apiMemory } from "./memory";
 
 export const api = {
   ...apiConfig,
   ...apiFeeds,
   ...apiArticles,
-  ...apiVocab,
-  ...apiPhrases,
+  ...apiMemory,
 };

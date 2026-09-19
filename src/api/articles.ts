@@ -36,7 +36,7 @@ export const apiArticles = {
     category?: string;
     tags?: string[];
     source?: string;
-    readState?: "all" | "unread" | "read";
+    readState?: "all" | "unfinished" | "unread" | "reading" | "read";
     likedOnly?: boolean;
     limit?: number;
     offset?: number;
@@ -73,6 +73,9 @@ export const apiArticles = {
     invoke<Article>("import_article_url", { url }),
   importArticleFile: (path: string) =>
     invoke<Article>("import_article_file", { path }),
+  /** Re-fetch articles whose stored body lost paragraph breaks. */
+  repairParagraphs: (limit?: number) =>
+    invoke<number>("repair_paragraphs", { limit: limit ?? null }),
   translateParagraph: (
     articleId: string,
     paragraphIndex: number,

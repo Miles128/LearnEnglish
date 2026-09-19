@@ -111,29 +111,62 @@ type VocabState = {
   /** Term strings of everything currently in `learning` status. */
   learningTerms: string[];
   refreshLearningTerms: () => Promise<void>;
+  /** Lowercased terms the learner marked as already known. */
+  knownTerms: string[];
+  markKnown: (term: string) => Promise<void>;
+  unmarkKnown: (term: string) => Promise<void>;
 };
 
 const VocabContext = createContext<VocabState | null>(null);
 
 export function VocabProvider({ children }: { children: ReactNode }) {
   const [learningTerms, setLearningTerms] = useState<string[]>([]);
+  const [knownTerms, setKnownTerms] = useState<string[]>([]);
 
   const refreshLearningTerms = useCallback(async () => {
     try {
-      const list = await api.listVocab("learning");
+      const list = await api.listMemory("word", "learning");
       setLearningTerms(list.map((v) => v.term));
     } catch {
       // highlight list is optional
     }
   }, []);
 
+  const refreshKnownTerms = useCallback(async () => {
+    try {
+      setKnownTerms(await api.listKnownWords());
+    } catch {
+      // optional
+    }
+  }, []);
+
+  const markKnown = useCallback(async (term: string) => {
+    const key = term.trim().toLowerCase();
+    if (!key) return;
+    await api.addKnownWord(key);
+    setKnownTerms((prev) => (prev.includes(key) ? prev : [...prev, key]));
+  }, []);
+
+  const unmarkKnown = useCallback(async (term: string) => {
+    const key = term.trim().toLowerCase();
+    await api.removeKnownWord(key);
+    setKnownTerms((prev) => prev.filter((t) => t !== key));
+  }, []);
+
   useEffect(() => {
     void refreshLearningTerms();
-  }, [refreshLearningTerms]);
+    void refreshKnownTerms();
+  }, [refreshLearningTerms, refreshKnownTerms]);
 
   const value = useMemo(
-    () => ({ learningTerms, refreshLearningTerms }),
-    [learningTerms, refreshLearningTerms],
+    () => ({
+      learningTerms,
+      refreshLearningTerms,
+      knownTerms,
+      markKnown,
+      unmarkKnown,
+    }),
+    [learningTerms, refreshLearningTerms, knownTerms, markKnown, unmarkKnown],
   );
   return (
     <VocabContext.Provider value={value}>{children}</VocabContext.Provider>

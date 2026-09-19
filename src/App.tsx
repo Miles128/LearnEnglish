@@ -9,17 +9,9 @@ import {
 } from "./placement/engine";
 import { useAppConfig } from "./store";
 import { applyTheme, isThemePref } from "./theme";
-import { lastArticlePath } from "./lastArticle";
-import { api, type RefreshResult } from "./api";
+import { api } from "./api";
 import { type RefreshProgress } from "./api";
-import ManageFeedsDrawer from "./components/ManageFeedsDrawer";
 import "./App.css";
-
-/** Frontend-only signal bus: the top bar triggers cross-page actions that
- * mounted pages (e.g. Home) listen for. */
-export function emitUiSignal(name: "feeds-changed" | "refreshed", detail?: unknown) {
-  window.dispatchEvent(new CustomEvent(`shiyan:${name}`, { detail }));
-}
 
 function IconImport() {
   return (
@@ -27,15 +19,6 @@ function IconImport() {
       <path d="M12 3v12" />
       <path d="m7 10 5 5 5-5" />
       <path d="M4 19h16" />
-    </svg>
-  );
-}
-
-function IconRefresh() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-      <path d="M21 3v6h-6" />
     </svg>
   );
 }
@@ -49,42 +32,11 @@ function IconVocab() {
   );
 }
 
-function IconResume() {
+function IconBack() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M12 21a9 9 0 1 0-9-9" />
-      <path d="M3 3v6h6" />
-    </svg>
-  );
-}
-
-function IconLibrary() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M4 4h5v16H4z" />
-      <path d="M10.5 4h5v16h-5z" />
-      <path d="m17.5 5.5 3.2.9-4.2 15-3.2-.9z" />
-    </svg>
-  );
-}
-
-function IconFeeds() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M4 11a9 9 0 0 1 9 9" />
-      <path d="M4 4a16 16 0 0 1 16 16" />
-      <circle cx="5" cy="19" r="1" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
-function IconStats() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M4 20V10" />
-      <path d="M10 20V4" />
-      <path d="M16 20v-7" />
-      <path d="M22 20H2" />
+      <path d="M19 12H5" />
+      <path d="m12 19-7-7 7-7" />
     </svg>
   );
 }
@@ -100,10 +52,8 @@ function IconSettings() {
 
 export default function App() {
   const [progress, setProgress] = useState<RefreshProgress | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
   const [importingFile, setImportingFile] = useState(false);
   const [topbarError, setTopbarError] = useState<string | null>(null);
-  const [manageOpen, setManageOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const { cfg, ready, loadError, refresh } = useAppConfig();
@@ -141,19 +91,6 @@ export default function App() {
     }
   }, [cfg, ready, loadError, location.pathname, navigate]);
 
-  async function onRefresh() {
-    if (refreshing) return;
-    setRefreshing(true);
-    try {
-      const result: RefreshResult = await api.refreshFeeds();
-      emitUiSignal("refreshed", result);
-    } catch (e) {
-      emitUiSignal("refreshed", { error: String(e) });
-    } finally {
-      setRefreshing(false);
-    }
-  }
-
   // Top-bar page buttons act as toggles: clicking the active page goes home.
   function toggleNav(to: string) {
     if (location.pathname === to) navigate("/");
@@ -186,8 +123,6 @@ export default function App() {
     }
   }
 
-  const resumePath = lastArticlePath();
-
   const forcePlacement = shouldForcePlacement(cfg);
   const hideNav = shouldHideAppNav({
     ready,
@@ -201,116 +136,78 @@ export default function App() {
   });
   const showBar = progress != null && progress.phase !== "done";
   const showDoneBriefly = progress?.phase === "done";
+  /** Top bar is locked across pages; only forced placement replaces it. */
+  const isHome = location.pathname === "/";
 
   return (
     <div className={`app-shell${progress ? " refreshing" : ""}`}>
-      <header className="topbar" data-tauri-drag-region>
-        {!hideNav && (
+      {hideNav ? (
+        <header className="topbar" data-tauri-drag-region>
           <nav className="topbar-nav">
             <span className="brand-mini" data-tauri-drag-region>
               拾言
             </span>
-            <NavLink to="/" end className="topbar-link" data-tauri-drag-region>
-              今日阅读
-            </NavLink>
             {showPlacementNav && (
               <NavLink to="/placement" className="topbar-link">
                 词汇测评
               </NavLink>
             )}
           </nav>
-        )}
-        {hideNav && showPlacementNav && (
-          <nav className="topbar-nav">
-            <span className="brand-mini" data-tauri-drag-region>
-              拾言
-            </span>
-            <NavLink to="/placement" className="topbar-link">
-              词汇测评
-            </NavLink>
-          </nav>
-        )}
-        {!hideNav && (
-          <div className="topbar-actions">
-            {resumePath && location.pathname !== resumePath && (
+        </header>
+      ) : (
+        <>
+          <header className="topbar" data-tauri-drag-region>
+            <nav className="topbar-nav">
+              <span className="brand-mini" data-tauri-drag-region>
+                拾言
+              </span>
+            </nav>
+            <div className="topbar-actions">
               <button
                 type="button"
                 className="topbar-btn"
-                onClick={() => navigate(resumePath)}
-                title="继续上次阅读"
-                aria-label="继续上次阅读"
+                onClick={() => void onImportFile()}
+                disabled={importingFile}
+                title="导入文件（txt / pdf / docx）"
+                aria-label="导入文件"
               >
-                <IconResume />
+                <IconImport />
               </button>
-            )}
-            <button
-              type="button"
-              className={`topbar-btn${refreshing ? " spin" : ""}`}
-              onClick={() => void onRefresh()}
-              disabled={refreshing}
-              title="刷新订阅"
-              aria-label="刷新订阅"
-            >
-              <IconRefresh />
-            </button>
-            <button
-              type="button"
-              className="topbar-btn"
-              onClick={() => void onImportFile()}
-              disabled={importingFile}
-              title="导入文件（txt / pdf / docx）"
-              aria-label="导入文件"
-            >
-              <IconImport />
-            </button>
-            <NavLink
-              to="/library"
-              className="topbar-btn"
-              title="文章库"
-              aria-label="文章库"
-              onClick={() => toggleNav("/library")}
-            >
-              <IconLibrary />
-            </NavLink>
-            <NavLink
-              to="/vocab"
-              className="topbar-btn"
-              title="生词库"
-              aria-label="生词库"
-              onClick={() => toggleNav("/vocab")}
-            >
-              <IconVocab />
-            </NavLink>
-            <button
-              type="button"
-              className="topbar-btn"
-              onClick={() => setManageOpen(true)}
-              title="管理订阅"
-              aria-label="管理订阅"
-            >
-              <IconFeeds />
-            </button>
-            <NavLink
-              to="/stats"
-              className="topbar-btn"
-              title="阅读统计"
-              aria-label="阅读统计"
-              onClick={() => toggleNav("/stats")}
-            >
-              <IconStats />
-            </NavLink>
-            <NavLink
-              to="/settings"
-              className="topbar-btn"
-              title="设置"
-              aria-label="设置"
-              onClick={() => toggleNav("/settings")}
-            >
-              <IconSettings />
-            </NavLink>
-          </div>
-        )}
-      </header>
+              <NavLink
+                to="/vocab"
+                className="topbar-btn"
+                title="生词库"
+                aria-label="生词库"
+                onClick={() => toggleNav("/vocab")}
+              >
+                <IconVocab />
+              </NavLink>
+              <NavLink
+                to="/settings"
+                className="topbar-btn"
+                title="设置"
+                aria-label="设置"
+                onClick={() => toggleNav("/settings")}
+              >
+                <IconSettings />
+              </NavLink>
+            </div>
+          </header>
+          {!isHome && (
+            <div className="page-back-row" data-tauri-drag-region>
+              <button
+                type="button"
+                className="btn small page-back-btn"
+                onClick={() => navigate("/")}
+                title="返回主界面"
+                aria-label="返回主界面"
+              >
+                <IconBack />
+              </button>
+            </div>
+          )}
+        </>
+      )}
       <main className="main">
         {loadError && (
           <div className="banner err with-action" role="status">
@@ -323,14 +220,6 @@ export default function App() {
         {topbarError && <p className="banner err">{topbarError}</p>}
         <Outlet />
       </main>
-
-      <ManageFeedsDrawer
-        open={manageOpen}
-        onClose={() => {
-          setManageOpen(false);
-          emitUiSignal("feeds-changed");
-        }}
-      />
 
       {(showBar || showDoneBriefly) && progress && (
         <div

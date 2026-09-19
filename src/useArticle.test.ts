@@ -1,5 +1,15 @@
-import { describe, expect, it } from "vitest";
-import { articleViewState, shouldApplyLoad, translationsMap } from "./useArticle";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  articleViewState,
+  getLastArticleId,
+  lastArticlePath,
+  loadScroll,
+  rememberLastArticle,
+  resetLastArticleMemory,
+  saveScroll,
+  shouldApplyLoad,
+  translationsMap,
+} from "./useArticle";
 
 describe("articleViewState", () => {
   it("is loading while the first fetch is in flight", () => {
@@ -50,5 +60,38 @@ describe("translationsMap", () => {
         { scope_key: "2", translated_text: "世界" },
       ]),
     ).toEqual({ "0": "你好", "2": "世界" });
+  });
+});
+
+beforeEach(() => {
+  resetLastArticleMemory();
+});
+
+describe("last article", () => {
+  it("remembers the last opened article", () => {
+    expect(getLastArticleId()).toBeNull();
+    expect(lastArticlePath()).toBeNull();
+    rememberLastArticle("a1");
+    expect(getLastArticleId()).toBe("a1");
+    expect(lastArticlePath()).toBe("/article/a1");
+  });
+
+  it("ignores empty ids", () => {
+    rememberLastArticle("");
+    expect(getLastArticleId()).toBeNull();
+  });
+});
+
+describe("scroll memory", () => {
+  it("round-trips a scroll offset per article", () => {
+    expect(loadScroll("a1")).toBeNull();
+    saveScroll("a1", 1234.6);
+    expect(loadScroll("a1")).toBe(1235);
+    expect(loadScroll("a2")).toBeNull();
+  });
+
+  it("clamps negatives", () => {
+    saveScroll("a1", -50);
+    expect(loadScroll("a1")).toBe(0);
   });
 });

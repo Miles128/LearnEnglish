@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { clipContext } from "../readerUtils";
-import { api, PhraseItem } from "../api";
+import { api, type MemoryItem, type MemoryKind } from "../api";
 
 type Tab = "learning" | "review" | "mastered";
 
@@ -13,16 +13,31 @@ const USAGE_LABELS: Record<string, string> = {
   phrase: "短语",
 };
 
-function usageLabel(usage: string): string {
-  return USAGE_LABELS[usage] ?? usage;
+/** Words show their part of speech verbatim; phrases map usage to a CN label. */
+function typeLabel(kind: MemoryKind, wordType: string): string {
+  if (kind !== "phrase") return wordType;
+  return USAGE_LABELS[wordType] ?? wordType;
 }
 
-/** 短语组合 view, embedded in the学习界面 (Vocab page). */
-export default function PhrasesView() {
+type Props = {
+  kind: MemoryKind;
+  searchPlaceholder: string;
+  emptyText: string;
+  /** Called after any add/review/status/delete so the host can refresh highlights. */
+  onChanged?: () => void;
+};
+
+/** Shared library view for words and phrases (tabs / search / flashcard review). */
+export default function MemoryLibrary({
+  kind,
+  searchPlaceholder,
+  emptyText,
+  onChanged,
+}: Props) {
   const [tab, setTab] = useState<Tab>("learning");
-  const [items, setItems] = useState<PhraseItem[]>([]);
-  const [due, setDue] = useState<PhraseItem[]>([]);
-  const [current, setCurrent] = useState<PhraseItem | null>(null);
+  const [items, setItems] = useState<MemoryItem[]>([]);
+  const [due, setDue] = useState<MemoryItem[]>([]);
+  const [current, setCurrent] = useState<MemoryItem | null>(null);
   const [flipped, setFlipped] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState("");
@@ -31,36 +46,37 @@ export default function PhrasesView() {
     setError(null);
     try {
       if (tab === "review") {
-        const d = await api.duePhrases();
+        const d = await api.dueMemory(kind);
         setDue(d);
         setCurrent(d[0] ?? null);
         setFlipped(false);
       } else {
-        setItems(await api.listPhrases(tab));
+        setItems(await api.listMemory(kind, tab));
       }
     } catch (e) {
       setError(String(e));
     }
-  }, [tab]);
+  }, [kind, tab]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const filtered = items.filter((p) => {
+  const filtered = items.filter((v) => {
     if (!q.trim()) return true;
     const s = q.toLowerCase();
     return (
-      p.phrase.toLowerCase().includes(s) ||
-      p.meaning_zh.includes(q) ||
-      p.context_sentence.toLowerCase().includes(s)
+      v.term.toLowerCase().includes(s) ||
+      v.definition_zh.includes(q) ||
+      v.word_type.toLowerCase().includes(s)
     );
   });
 
   async function rate(rating: string) {
     if (!current) return;
     try {
-      await api.reviewPhrase(current.id, rating);
+      await api.reviewMemory(current.id, rating);
+      onChanged?.();
       const rest = due.filter((d) => d.id !== current.id);
       setDue(rest);
       setCurrent(rest[0] ?? null);
@@ -72,8 +88,9 @@ export default function PhrasesView() {
 
   async function setStatus(id: string, status: string) {
     try {
-      await api.setPhraseStatus(id, status);
+      await api.setMemoryStatus(id, status);
       await load();
+      onChanged?.();
     } catch (e) {
       setError(String(e));
     }
@@ -81,8 +98,9 @@ export default function PhrasesView() {
 
   async function remove(id: string) {
     try {
-      await api.deletePhrase(id);
+      await api.deleteMemory(id);
       await load();
+      onChanged?.();
     } catch (e) {
       setError(String(e));
     }
@@ -114,26 +132,33 @@ export default function PhrasesView() {
         <>
           <input
             className="search"
-            placeholder="搜索短语 / 释义 / 例句"
+            placeholder={searchPlaceholder}
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
           <ul className="vocab-list">
-            {filtered.map((p) => (
-              <li key={p.id} className="vocab-card">
+            {filtered.map((v) => (
+              <li key={v.id} className="vocab-card">
                 <div className="vocab-head">
-                  <strong>{p.phrase}</strong>
-                  <span className="pill">{usageLabel(p.usage)}</span>
+                  <strong>{v.term}</strong>
+                  {v.word_type && (
+                    <span className="pill">{typeLabel(kind, v.word_type)}</span>
+                  )}
                 </div>
-                <p>{p.meaning_zh}</p>
-                {p.context_sentence && (
-                  <p className="context">“{clipContext(p.context_sentence)}”</p>
+                <p>{v.definition_zh}</p>
+                {v.collocations?.length > 0 && (
+                  <p className="muted">
+                    常见搭配：{v.collocations.join(" · ")}
+                  </p>
+                )}
+                {v.context_sentence && (
+                  <p className="context">“{clipContext(v.context_sentence)}”</p>
                 )}
                 <div className="row-actions">
                   {tab === "learning" && (
                     <button
                       className="btn small"
-                      onClick={() => void setStatus(p.id, "mastered")}
+                      onClick={() => void setStatus(v.id, "mastered")}
                     >
                       标记已掌握
                     </button>
@@ -141,32 +166,28 @@ export default function PhrasesView() {
                   {tab === "mastered" && (
                     <button
                       className="btn small"
-                      onClick={() => void setStatus(p.id, "learning")}
+                      onClick={() => void setStatus(v.id, "learning")}
                     >
                       恢复学习
                     </button>
                   )}
                   <button
                     className="btn small danger"
-                    onClick={() => void remove(p.id)}
+                    onClick={() => void remove(v.id)}
                   >
                     删除
                   </button>
                 </div>
               </li>
             ))}
-            {filtered.length === 0 && (
-              <p className="muted">
-                还没有短语。阅读时选中一串词语，点「加入短语组合」即可收藏。
-              </p>
-            )}
+            {filtered.length === 0 && <p className="muted">{emptyText}</p>}
           </ul>
         </>
       )}
 
       {tab === "review" && (
         <div className="review-panel">
-          {!current && <p className="muted">今日没有到期复习的短语。</p>}
+          {!current && <p className="muted">今日没有到期复习的词条。</p>}
           {current && (
             <>
               <p className="muted">剩余 {due.length} 张</p>
@@ -176,12 +197,23 @@ export default function PhrasesView() {
                 aria-pressed={flipped}
                 onClick={() => setFlipped((f) => !f)}
               >
-                <div className="flash-term">{current.phrase}</div>
-                <p className="context">“{clipContext(current.context_sentence)}”</p>
+                <p className="flash-context">
+                  “{clipContext(current.context_sentence || current.term)}”
+                </p>
                 {flipped ? (
                   <div className="flash-back">
-                    <p>{current.meaning_zh}</p>
-                    <p className="pill inline">{usageLabel(current.usage)}</p>
+                    <div className="flash-term">{current.term}</div>
+                    <p>{current.definition_zh}</p>
+                    {current.word_type && (
+                      <p className="pill inline">
+                        {typeLabel(kind, current.word_type)}
+                      </p>
+                    )}
+                    {current.collocations?.length > 0 && (
+                      <p className="muted">
+                        常见搭配：{current.collocations.join(" · ")}
+                      </p>
+                    )}
                   </div>
                 ) : (
                   <p className="muted tip">点击或按 Enter 查看释义</p>

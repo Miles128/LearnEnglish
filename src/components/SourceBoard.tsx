@@ -23,6 +23,8 @@ type Props = {
   /** Persist collapse state under this key instead of the source name.
    *  No stored preference = expanded (今日推荐 is open by default). */
   collapseKey?: string;
+  /** Forwarded to ArticleRow: hide tags until the 标签 toggle is on. */
+  showTags?: boolean;
 };
 
 /** One per-source board on the home page: header + article list. */
@@ -31,6 +33,7 @@ export default function SourceBoard({
   categories,
   difficultyById,
   collapseKey,
+  showTags,
 }: Props) {
   const key = collapseKey ?? section.source;
   const [collapsed, setCollapsed] = useState(() =>
@@ -67,6 +70,7 @@ export default function SourceBoard({
               key={a.id}
               article={a}
               difficulty={difficultyById.get(a.id) ?? null}
+              showTags={showTags}
             />
           ))}
         </ul>

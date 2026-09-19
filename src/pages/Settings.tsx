@@ -33,6 +33,55 @@ const TABS = [
   ["llm", "大模型"],
 ] as const;
 
+type PrefOption = { value: string | number; label: string };
+
+/** Labelled <select> bound to one config field; options are data-driven. */
+function PrefSelect(props: {
+  label: string;
+  value: string | number;
+  onChange: (raw: string) => void;
+  options: readonly PrefOption[];
+}) {
+  return (
+    <label>
+      {props.label}
+      <select value={props.value} onChange={(e) => props.onChange(e.target.value)}>
+        {props.options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+const THEME_OPTIONS: readonly PrefOption[] = THEME_PREFS.map((p) => ({
+  value: p,
+  label: THEME_LABELS[p],
+}));
+const CEFR_OPTIONS: readonly PrefOption[] = CEFR_LEVELS.map((lv) => ({
+  value: lv,
+  label: lv,
+}));
+const FREQ_OPTIONS: readonly PrefOption[] = FREQ_BANDS.map((n) => ({
+  value: n,
+  label: String(n >= 1000 ? `${n / 1000}k` : n),
+}));
+const FONT_OPTIONS: readonly PrefOption[] = READER_FONTS.map((f) => ({
+  value: f.id,
+  label: f.label,
+}));
+const FONT_SIZE_OPTIONS: readonly PrefOption[] = READER_FONT_SIZES.map(
+  (s) => ({ value: s.value, label: s.label }),
+);
+const LINE_HEIGHT_OPTIONS: readonly PrefOption[] = READER_LINE_HEIGHTS.map(
+  (h) => ({ value: h.value, label: h.label }),
+);
+const LINE_WIDTH_OPTIONS: readonly PrefOption[] = READER_LINE_WIDTHS.map(
+  (w) => ({ value: w.id, label: w.label }),
+);
+
 export default function Settings() {
   const { cfg: savedCfg, ready, save: saveCfg } = useAppConfig();
   const [cfg, setCfg] = useState<AppConfig>(() =>
@@ -104,21 +153,12 @@ export default function Settings() {
       {tab === "appearance" && (
         <section className="settings-section">
           <h2>外观</h2>
-          <label>
-            主题
-            <select
-              value={isThemePref(cfg.theme) ? cfg.theme : "system"}
-              onChange={(e) =>
-                setCfg({ ...cfg, theme: e.target.value as ThemePref })
-              }
-            >
-              {THEME_PREFS.map((p) => (
-                <option key={p} value={p}>
-                  {THEME_LABELS[p]}
-                </option>
-              ))}
-            </select>
-          </label>
+          <PrefSelect
+            label="主题"
+            value={isThemePref(cfg.theme) ? cfg.theme : "system"}
+            onChange={(raw) => setCfg({ ...cfg, theme: raw as ThemePref })}
+            options={THEME_OPTIONS}
+          />
         </section>
       )}
 
@@ -129,39 +169,22 @@ export default function Settings() {
             <p className="muted">
               正文会给「超出 CEFR」或「超出词频上限」的词/短语加下划线。两套阈值同时生效。
             </p>
-            <label>
-              我的 CEFR 水平
-              <select
-                value={cfg.cefr_level}
-                onChange={(e) =>
-                  setCfg({ ...cfg, cefr_level: e.target.value as CefrLevel })
-                }
-              >
-                {CEFR_LEVELS.map((lv) => (
-                  <option key={lv} value={lv}>
-                    {lv}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              词频上限（大约认识多少词）
-              <select
-                value={cfg.freq_band}
-                onChange={(e) =>
-                  setCfg({
-                    ...cfg,
-                    freq_band: Number(e.target.value) as FreqBand,
-                  })
-                }
-              >
-                {FREQ_BANDS.map((n) => (
-                  <option key={n} value={n}>
-                    {n >= 1000 ? `${n / 1000}k` : n}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <PrefSelect
+              label="我的 CEFR 水平"
+              value={cfg.cefr_level}
+              onChange={(raw) =>
+                setCfg({ ...cfg, cefr_level: raw as CefrLevel })
+              }
+              options={CEFR_OPTIONS}
+            />
+            <PrefSelect
+              label="词频上限（大约认识多少词）"
+              value={cfg.freq_band}
+              onChange={(raw) =>
+                setCfg({ ...cfg, freq_band: Number(raw) as FreqBand })
+              }
+              options={FREQ_OPTIONS}
+            />
             <div className="placement-settings">
               <p className="muted">
                 {cfg.vocab_placement_done
@@ -182,77 +205,41 @@ export default function Settings() {
             <h2>阅读排版</h2>
             <p className="muted">只作用于阅读页正文。保存后打开文章即可看到效果。</p>
             <div className="settings-type-grid">
-              <label>
-                字体
-                <select
-                  value={cfg.reader_font}
-                  onChange={(e) =>
-                    setCfg({ ...cfg, reader_font: e.target.value as ReaderFontId })
-                  }
-                >
-                  {READER_FONTS.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                字号
-                <select
-                  value={cfg.reader_font_size}
-                  onChange={(e) =>
-                    setCfg({
-                      ...cfg,
-                      reader_font_size: Number(e.target.value) as ReaderFontSize,
-                    })
-                  }
-                >
-                  {READER_FONT_SIZES.map((s) => (
-                    <option key={s.value} value={s.value}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                行距
-                <select
-                  value={cfg.reader_line_height}
-                  onChange={(e) =>
-                    setCfg({
-                      ...cfg,
-                      reader_line_height: Number(
-                        e.target.value,
-                      ) as ReaderLineHeight,
-                    })
-                  }
-                >
-                  {READER_LINE_HEIGHTS.map((h) => (
-                    <option key={h.value} value={h.value}>
-                      {h.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                行宽
-                <select
-                  value={cfg.reader_line_width}
-                  onChange={(e) =>
-                    setCfg({
-                      ...cfg,
-                      reader_line_width: e.target.value as ReaderLineWidthId,
-                    })
-                  }
-                >
-                  {READER_LINE_WIDTHS.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <PrefSelect
+                label="字体"
+                value={cfg.reader_font}
+                onChange={(raw) =>
+                  setCfg({ ...cfg, reader_font: raw as ReaderFontId })
+                }
+                options={FONT_OPTIONS}
+              />
+              <PrefSelect
+                label="字号"
+                value={cfg.reader_font_size}
+                onChange={(raw) =>
+                  setCfg({ ...cfg, reader_font_size: Number(raw) as ReaderFontSize })
+                }
+                options={FONT_SIZE_OPTIONS}
+              />
+              <PrefSelect
+                label="行距"
+                value={cfg.reader_line_height}
+                onChange={(raw) =>
+                  setCfg({
+                    ...cfg,
+                    reader_line_height: Number(raw) as ReaderLineHeight,
+                  })
+                }
+                options={LINE_HEIGHT_OPTIONS}
+              />
+              <PrefSelect
+                label="行宽"
+                value={cfg.reader_line_width}
+                onChange={(raw) =>
+                  setCfg({ ...cfg, reader_line_width: raw as ReaderLineWidthId })
+                }
+                options={LINE_WIDTH_OPTIONS}
+              />
             </div>
             <div
               className={`reader-preview${readingPreview.fullWidth ? " reader-full" : ""}`}

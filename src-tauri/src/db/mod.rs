@@ -525,7 +525,7 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
             }
         }
         conn.pragma_update(None, "user_version", 7)
-            .map_err(AppError::from)?;
+            ?;
         stored = 7;
     }
 
@@ -538,9 +538,9 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
                 value TEXT NOT NULL
             );",
         )
-        .map_err(AppError::from)?;
+        ?;
         conn.pragma_update(None, "user_version", 8)
-            .map_err(AppError::from)?;
+            ?;
         stored = 8;
     }
 
@@ -566,9 +566,9 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
             CREATE INDEX IF NOT EXISTS idx_phrase_status ON phrases(status);
             CREATE INDEX IF NOT EXISTS idx_phrase_next ON phrases(next_review_at);",
         )
-        .map_err(AppError::from)?;
+        ?;
         conn.pragma_update(None, "user_version", 9)
-            .map_err(AppError::from)?;
+            ?;
         stored = 9;
     }
 
@@ -620,9 +620,9 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
             CREATE INDEX IF NOT EXISTS idx_memory_next ON memory_items(next_review_at);
             CREATE INDEX IF NOT EXISTS idx_memory_article ON memory_items(article_id);",
         )
-        .map_err(AppError::from)?;
+        ?;
         conn.pragma_update(None, "user_version", 10)
-            .map_err(AppError::from)?;
+            ?;
         stored = 10;
     }
 
@@ -635,9 +635,9 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
                 created_at TEXT NOT NULL
             );",
         )
-        .map_err(AppError::from)?;
+        ?;
         conn.pragma_update(None, "user_version", 11)
-            .map_err(AppError::from)?;
+            ?;
         stored = 11;
     }
 

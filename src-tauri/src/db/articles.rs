@@ -131,12 +131,12 @@ pub fn query_articles(
 pub fn list_article_sources(conn: &Connection) -> Result<Vec<(String, i64)>, AppError> {
     let mut stmt = conn
         .prepare("SELECT source, COUNT(*) FROM articles GROUP BY source ORDER BY COUNT(*) DESC, source ASC")
-        .map_err(AppError::from)?;
+        ?;
     let rows = stmt
         .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
-        .map_err(AppError::from)?
+        ?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(AppError::from)?;
+        ?;
     Ok(rows)
 }
 
@@ -287,7 +287,7 @@ pub fn reading_stats(conn: &Connection) -> Result<super::ReadingStats, AppError>
                  WHERE last_opened_at IS NOT NULL
                  GROUP BY d",
             )
-            .map_err(AppError::from)?;
+            ?;
         let by_date: std::collections::HashMap<String, super::ReadingDay> = stmt
             .query_map([], |row| {
                 Ok((
@@ -300,9 +300,9 @@ pub fn reading_stats(conn: &Connection) -> Result<super::ReadingStats, AppError>
                     },
                 ))
             })
-            .map_err(AppError::from)?
+            ?
             .collect::<Result<std::collections::HashMap<_, _>, _>>()
-            .map_err(AppError::from)?;
+            ?;
 
         let today = chrono::Utc::now().date_naive();
         for offset in (0..DAILY_DAYS).rev() {
@@ -330,12 +330,12 @@ pub fn reading_stats(conn: &Connection) -> Result<super::ReadingStats, AppError>
                 "SELECT DISTINCT date(substr(last_opened_at,1,10)) AS d
                  FROM articles WHERE last_opened_at IS NOT NULL ORDER BY d DESC",
             )
-            .map_err(AppError::from)?;
+            ?;
         let dates: Vec<String> = stmt
             .query_map([], |row| row.get::<_, String>(0))
-            .map_err(AppError::from)?
+            ?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(AppError::from)?;
+            ?;
         let present: std::collections::HashSet<&str> = dates.iter().map(|s| s.as_str()).collect();
         let today = chrono::Utc::now().date_naive();
         let start = if present.contains(today.format("%Y-%m-%d").to_string().as_str()) {
@@ -425,7 +425,7 @@ fn build_stats(
                  FROM articles WHERE {read_filter}
                  GROUP BY source ORDER BY SUM(dwell_ms) DESC, COUNT(*) DESC LIMIT 6"
             ))
-            .map_err(AppError::from)?;
+            ?;
         let rows = stmt
             .query_map([], |row| {
                 Ok(super::SourceStat {
@@ -434,9 +434,9 @@ fn build_stats(
                     minutes: row.get(2)?,
                 })
             })
-            .map_err(AppError::from)?
+            ?
             .collect::<Result<Vec<_>, _>>()
-            .map_err(AppError::from)?;
+            ?;
         rows
     };
 
@@ -581,7 +581,7 @@ pub fn set_article_tags(conn: &Connection, id: &str, tags: &[String]) -> Result<
         "UPDATE articles SET tags_json=?1 WHERE id=?2",
         params![json, id],
     )
-    .map_err(AppError::from)?;
+    ?;
     Ok(())
 }
 
@@ -619,7 +619,7 @@ pub fn add_article_reading_progress(
              WHERE id=?3",
             params![delta, read_completed, id],
         )
-        .map_err(AppError::from)?;
+        ?;
     if changed == 0 {
         return Err(AppError::msg("article not found"));
     }
@@ -650,14 +650,14 @@ pub fn list_article_titles(
         Some(s) => ("SELECT title, url FROM articles WHERE fetched_at >= ?1", vec![s]),
         None => ("SELECT title, url FROM articles", vec![]),
     };
-    let mut stmt = conn.prepare(sql).map_err(AppError::from)?;
+    let mut stmt = conn.prepare(sql)?;
     let rows = stmt
         .query_map(rusqlite::params_from_iter(args.iter()), |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        .map_err(AppError::from)?
+        ?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(AppError::from)?;
+        ?;
     Ok(rows)
 }
 
@@ -667,12 +667,12 @@ pub fn list_all_rss_articles(conn: &Connection) -> Result<Vec<Article>, AppError
         .prepare(&format!(
             "SELECT {ARTICLE_COLS} FROM articles WHERE origin='rss'"
         ))
-        .map_err(AppError::from)?;
+        ?;
     let rows = stmt
         .query_map([], map_article)
-        .map_err(AppError::from)?
+        ?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(AppError::from)?;
+        ?;
     Ok(rows)
 }
 
@@ -689,7 +689,7 @@ pub fn purge_old_rss_articles(conn: &Connection, cutoff_rfc3339: &str) -> Result
                AND julianday(COALESCE(published_at, fetched_at)) < julianday(?1)",
             params![cutoff_rfc3339],
         )
-        .map_err(AppError::from)?;
+        ?;
     Ok(changed)
 }
 
@@ -738,7 +738,7 @@ pub fn set_meta(conn: &Connection, key: &str, value: &str) -> Result<(), AppErro
          ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         params![key, value],
     )
-    .map_err(AppError::from)?;
+    ?;
     Ok(())
 }
 
@@ -759,12 +759,12 @@ pub fn articles_missing_tags(conn: &Connection, limit: usize) -> Result<Vec<Arti
              ORDER BY fetched_at DESC
              LIMIT ?1"
         ))
-        .map_err(AppError::from)?;
+        ?;
     let rows = stmt
         .query_map(params![limit as i64], map_article)
-        .map_err(AppError::from)?
+        ?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(AppError::from)?;
+        ?;
     Ok(rows)
 }
 
@@ -784,8 +784,8 @@ pub fn tag_profile(
 > {
     let mut stmt = conn
         .prepare("SELECT tags_json, liked, read_completed FROM articles")
-        .map_err(AppError::from)?;
-    let mut rows = stmt.query([]).map_err(AppError::from)?;
+        ?;
+    let mut rows = stmt.query([])?;
 
     let mut user_weights: std::collections::HashMap<String, f64> =
         std::collections::HashMap::new();
@@ -793,14 +793,14 @@ pub fn tag_profile(
         std::collections::HashMap::new();
     let mut docs = 0i64;
 
-    while let Some(row) = rows.next().map_err(AppError::from)? {
-        let tags = parse_tags_json(&row.get::<_, String>(0).map_err(AppError::from)?);
+    while let Some(row) = rows.next()? {
+        let tags = parse_tags_json(&row.get::<_, String>(0)?);
         if tags.is_empty() {
             continue;
         }
         docs += 1;
-        let liked: i64 = row.get(1).map_err(AppError::from)?;
-        let completed: i64 = row.get(2).map_err(AppError::from)?;
+        let liked: i64 = row.get(1)?;
+        let completed: i64 = row.get(2)?;
         let weight = if liked != 0 {
             2.0
         } else if completed != 0 {

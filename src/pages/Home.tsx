@@ -56,9 +56,25 @@ const TOP_PICKS = 10;
 /** 未完成 (default) / 未读 / 在读 / 已读 / 全部. */
 type ReadFilter = "unfinished" | "unread" | "reading" | "read" | "all";
 
+/** Filter-panel state as one object: reset = one assignment, no setter juggling. */
+type Filters = {
+  read: ReadFilter;
+  likedOnly: boolean;
+  source: string;
+  level: DifficultyLevel | "all";
+  tags: string[];
+};
+
+const DEFAULT_FILTERS: Filters = {
+  read: "unfinished",
+  likedOnly: false,
+  source: "",
+  level: "all",
+  tags: [],
+};
+
 export default function Home() {
   const [category, setCategory] = useState("all");
-  const [activeTags, setActiveTags] = useState<string[]>([]);
   /** Tags + filters stay hidden until the 筛选 toggle is opened. */
   const [filtersOpen, setFiltersOpen] = useState(false);
   /** Tag chips fold into a +N expander; reset when the panel closes. */
@@ -70,10 +86,12 @@ export default function Home() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   /** Archive filters (merged in from the old Library page). */
-  const [readFilter, setReadFilter] = useState<ReadFilter>("unfinished");
-  const [likedOnly, setLikedOnly] = useState(false);
-  const [sourceFilter, setSourceFilter] = useState("");
-  const [levelFilter, setLevelFilter] = useState<DifficultyLevel | "all">("all");
+  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
+  const patchFilters = useCallback(
+    (patch: Partial<Filters>) => setFilters((f) => ({ ...f, ...patch })),
+    [],
+  );
+  const clearFilters = useCallback(() => setFilters(DEFAULT_FILTERS), []);
   const [sources, setSources] = useState<[string, number][]>([]);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -102,29 +120,29 @@ export default function Home() {
 
   /** Any non-default filter switches from the ranked digest to the flat archive list. */
   const archiveMode =
-    readFilter !== "unfinished" || likedOnly || sourceFilter !== "";
+    filters.read !== "unfinished" || filters.likedOnly || filters.source !== "";
 
   const fetchPage = useCallback(
     (offset: number) =>
       archiveMode
         ? api.listLibrary({
             category: category === "all" ? undefined : category,
-            tags: activeTags,
-            source: sourceFilter || undefined,
-            readState: readFilter,
-            likedOnly,
+            tags: filters.tags,
+            source: filters.source || undefined,
+            readState: filters.read,
+            likedOnly: filters.likedOnly,
             limit: PAGE_SIZE,
             offset,
           })
         : api.listArticlesRanked(
             category === "all" ? undefined : category,
-            activeTags,
+            filters.tags,
             undefined,
             true,
             PAGE_SIZE,
             offset,
           ),
-    [archiveMode, category, activeTags, readFilter, likedOnly, sourceFilter],
+    [archiveMode, category, filters],
   );
 
   const load = useCallback(async () => {
@@ -292,8 +310,8 @@ export default function Home() {
 
   const matchesLevel = useCallback(
     (a: ArticleListItem) =>
-      levelFilter === "all" || difficultyById.get(a.id) === levelFilter,
-    [levelFilter, difficultyById],
+      filters.level === "all" || difficultyById.get(a.id) === filters.level,
+    [filters.level, difficultyById],
   );
   /** Flat archive list (read/收藏/来源 filters active). */
   const visible = useMemo(() => articles.filter(matchesLevel), [articles, matchesLevel]);
@@ -412,19 +430,11 @@ export default function Home() {
 
   const resumePath = lastArticlePath();
   const hasFilter =
-    readFilter !== "unfinished" ||
-    likedOnly ||
-    levelFilter !== "all" ||
-    activeTags.length > 0 ||
-    sourceFilter !== "";
-
-  function clearFilters() {
-    setReadFilter("unfinished");
-    setLikedOnly(false);
-    setLevelFilter("all");
-    setActiveTags([]);
-    setSourceFilter("");
-  }
+    filters.read !== "unfinished" ||
+    filters.likedOnly ||
+    filters.level !== "all" ||
+    filters.tags.length > 0 ||
+    filters.source !== "";
 
   return (
     <div className="page" onMouseUp={(e) => void onPageMouseUp(e)}>
@@ -459,7 +469,11 @@ export default function Home() {
             type="button"
             className={hasFilter ? "linklike active" : "linklike"}
             onClick={() => {
-              if (filtersOpen) setTagsExpanded(false);
+              if (filtersOpen) {
+                // 收起筛选面板 = 回到原始主页：清空全部筛选条件。
+                setTagsExpanded(false);
+                clearFilters();
+              }
               setFiltersOpen(!filtersOpen);
             }}
             aria-expanded={filtersOpen}
@@ -494,16 +508,18 @@ export default function Home() {
                   <button
                     key={id}
                     type="button"
-                    className={readFilter === id ? "tag-chip active" : "tag-chip"}
-                    onClick={() => setReadFilter(id)}
+                    className={filters.read === id ? "tag-chip active" : "tag-chip"}
+                    onClick={() => patchFilters({ read: id })}
                   >
                     {label}
                   </button>
                 ))}
                 <button
                   type="button"
-                  className={likedOnly ? "tag-chip active" : "tag-chip"}
-                  onClick={() => setLikedOnly((v) => !v)}
+                  className={filters.likedOnly ? "tag-chip active" : "tag-chip"}
+                  onClick={() =>
+                    setFilters((f) => ({ ...f, likedOnly: !f.likedOnly }))
+                  }
                 >
                   ★ 收藏
                 </button>
@@ -522,8 +538,8 @@ export default function Home() {
             <div className="filter-row">
               <select
                 className="filter-select"
-                value={sourceFilter}
-                onChange={(e) => setSourceFilter(e.target.value)}
+                value={filters.source}
+                onChange={(e) => patchFilters({ source: e.target.value })}
               >
                 <option value="">全部来源</option>
                 {sources.map(([name, count]) => (
@@ -534,9 +550,9 @@ export default function Home() {
               </select>
               <select
                 className="filter-select"
-                value={levelFilter}
+                value={filters.level}
                 onChange={(e) =>
-                  setLevelFilter(e.target.value as DifficultyLevel | "all")
+                  patchFilters({ level: e.target.value as DifficultyLevel | "all" })
                 }
               >
                 <option value="all">全部难度</option>
@@ -554,18 +570,19 @@ export default function Home() {
                     ? availableTags
                     : availableTags.slice(0, TAG_PREVIEW)
                   ).map((tag) => {
-                    const on = activeTags.includes(tag);
+                    const on = filters.tags.includes(tag);
                     return (
                       <button
                         key={tag}
                         type="button"
                         className={on ? "tag-chip active" : "tag-chip"}
                         onClick={() =>
-                          setActiveTags((prev) =>
-                            prev.includes(tag)
-                              ? prev.filter((t) => t !== tag)
-                              : [...prev, tag],
-                          )
+                          setFilters((f) => ({
+                            ...f,
+                            tags: f.tags.includes(tag)
+                              ? f.tags.filter((x) => x !== tag)
+                              : [...f.tags, tag],
+                          }))
                         }
                       >
                         {tag}

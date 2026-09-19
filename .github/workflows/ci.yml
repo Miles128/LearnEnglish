@@ -37,6 +37,9 @@ jobs:
       - name: Frontend build
         run: pnpm build
 
+      - name: Frontend dependency audit
+        run: pnpm audit --audit-level=high
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
@@ -46,3 +49,9 @@ jobs:
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test
+
+      - uses: taiki-e/install-action@cargo-audit
+
+      - name: Rust dependency audit
+        working-directory: src-tauri
+        run: cargo audit

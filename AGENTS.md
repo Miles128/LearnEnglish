@@ -16,33 +16,45 @@
 src/                  React 前端
   main.tsx            入口：Provider + HashRouter 路由表
   App.tsx             布局壳：侧边栏 + 全局刷新进度条 + 测评强跳
-  store.tsx           AppConfig / Vocab(学习中生词) 两个 Context
-  api/                Tauri invoke 封装层（config/feeds/articles/vocab + 类型门面）
-  pages/              Home(今日阅读) Reader(阅读) Vocab(生词复习) Settings Placement(词汇测评) ManageFeedsDrawer
-  components/         SelectionPopover(划词浮窗) ImportRow SourceBoard
+  store.tsx           AppConfig / Vocab(学习中生词+已认识词) 两个 Context
+  api/                Tauri invoke 封装层（config/feeds/articles/memory + 类型门面）
+  pages/              Home(主界面：文章列表+筛选) Reader(阅读) Vocab(生词/短语/已认识三库) Stats Settings(分页) Placement(词汇测评)
+  components/         SelectionPopover(划词浮窗) MemoryLibrary(生词/短语共用) KnownWords(已认识词管理) SourceBoard ArticleRow ManageFeeds FeedDiscoverSection ReaderParagraph
+  homeDerived.ts      Home 列表派生逻辑：摘要/长度标签/按源分组/标签栏/今日推荐/难度加权排序
+  wordResolve.ts      划词解析域：选区归一(lemma/全大写/短语判定) + 内置词典详情(word-details.json)
+  useArticle.ts       Reader 加载 hook + 上次阅读/滚动位置记忆
+  readerUtils.ts      Reader 工具：分类标签/上下文截取/翻译进度合并/Markdown 判定
+  knownWords.ts       已认识词过滤纯函数
+  difficulty.ts       难度标定/分档/标签 + 「约认识 N%」估算
   annotateText.tsx    按CEFR/词频给难词加下划线
   wordLevels.ts       懒加载内置 CEFR+词频词典(word-levels.json)
-  knownPercent.ts     「约认识 N%」估算
   tts.ts/useTts.ts    Web Speech 朗读
 src-tauri/src/        Rust 后端
   lib.rs              应用入口：打开 SQLite(app_data_dir) 注入 DbState(Mutex<Connection>)，注册全部 command
-  commands/           Tauri command 薄层：阻塞工作 spawn_blocking，进度走 event("refresh-progress"/"translate-progress")
-  db/                 仓储层：mod(schema+migration) articles feeds curated_feeds(内置订阅源种子) translations vocab
-  feeds.rs            RSS 刷新管线：抓取→正文启发式→英文过滤→入库；标题翻译批量补齐
-  vocab.rs            OpenAI 兼容 LLM 客户端：段落/标题批量翻译、生词 enrichment、RSS 发现
+  commands/           Tauri command 薄层(articles/config/feeds/known/memory)：阻塞工作 spawn_blocking，进度走 event("refresh-progress"/"translate-progress")
+  db/                 仓储层：mod(schema+migration) articles feeds curated_feeds(内置订阅源种子) translations memory(生词+短语统一表) known(已认识词)
+  feeds/              RSS 管线（按职责分模块）：net(HTTP/SSRF/URL校验) filters(可读性/英文/屏蔽/付费墙) extract(页面抽取) dedup(URL/标题去重) pipeline(refresh主流程) cleanup(审计/清理/修复) enrich(翻译/标签回填) import(URL导入) tests
+  vocab.rs            OpenAI 兼容 LLM 客户端：段落翻译、生词/短语 enrichment、RSS 发现
+  translate.rs        翻译缓存 + 编排层
+  rank.rs             兴趣排序：freshness×亲和度 + 显式信号 + tag IDF
   srs.rs              简化间隔重复：again/hard/easy，连续 easy≥3 且 14d 即 mastered
+  reflow.rs           段落整形
   import_file.rs      txt/pdf/docx 本地导入
+  db_tests.rs         DB 层集成测试
   config.rs           config.local.json 读写(API key 等)，0600 权限
 ```
 
 ## 数据流与关键约定
 
-- 前端一律经 `api/*` invoke 后端 command；后端分层 commands → (feeds/vocab/import_file 业务) → db 仓储，db 不做网络。
+- 前端一律经 `api/*` invoke 后端 command；后端分层 commands → (feeds/vocab/translate/import_file 业务) → db 仓储，db 不做网络。
 - 全局单连接 SQLite，`DbState(Mutex<Connection>)`；命令内 lock 后尽快释放，网络调用不持锁。
 - 文章幂等去重按 `url UNIQUE`，`insert_article_if_new` 冲突即跳过；RSS 旧文只在 RSS 正文可信且更长时升级。
 - 正文阈值：RSS 正文 ≥2000 字符且像可读文章才信任；否则须抓文章页。导航/关键词墙、链接列表、不足 400 字散文（MIN_FULLTEXT_CHARS）一律不入库，刷新时清掉。
 - `origin` 字段区分 rss/url/file 导入；refresh 的清理(purge)只处理 rss 来源，永不删用户导入。
+- `title_zh` DB 列已废弃：代码零引用，仅 schema/迁移保留（免迁移），不要再往结构体或 SQL 里加回。
 - LLM 配置在 `config.local.json`（gitignore）；无 Key 时翻译功能优雅降级。
+
+前端测试约定：vitest 为 node 环境、只收 `src/**/*.test.ts`，测试文件不得拖 react/store 依赖图。可测试的纯逻辑从组件抽出，但**按域归堆**（如 homeDerived/wordResolve），不要一个函数开一个文件；组件内的逻辑要测时抽到域模块而不是建孤儿文件。
 
 开发时少编 Rust：只改 `src/`（排版、划词、样式）用 `pnpm dev`，浏览器看 Vite；`invoke` 不可用，不要在这里测刷新/翻译/入库。改 `src-tauri` 或要真实数据时才 `pnpm dev:desktop`（或 `pnpm tauri dev`）。桌面会话结束执行 `pnpm clean:rust`。
 
@@ -59,6 +71,8 @@ Desktop smoke (macOS + Rust):
 ```bash
 pnpm dev:desktop
 ```
+
+注意：非交互 shell 里 cargo 在 `~/.cargo/bin`、pnpm 在 `/opt/homebrew/bin`，不在默认 PATH 时手动加前缀。
 
 开发缓存：`src-tauri/target` 是 Cargo 产物（不入库）。`profile.dev` 只保留本 crate 行号表、依赖不带 debug，避免 `target/debug` 涨到数 GB。不开发时 `pnpm clean:rust`。若启用 Time Machine，排除 `src-tauri/target`（`cargo clean` 会删掉该目录上的排除标记，下次生成后再 `tmutil addexclusion src-tauri/target`）。
 

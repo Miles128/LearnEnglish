@@ -1,0 +1,31 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- 背景圆角方块 -->
+  <rect x="0" y="0" width="1024" height="1024" rx="224" fill="#FAF8F4"/>
+
+  <!-- 摊开的书：中缝低、外角翘，标准书本剪影 -->
+  <g stroke="#2E3440" stroke-width="34" stroke-linejoin="round" stroke-linecap="round" fill="#FFFFFF">
+    <!-- 左页 -->
+    <path d="M 512 424 L 196 352 L 196 628 L 512 700 Z"/>
+    <!-- 右页 -->
+    <path d="M 512 424 L 828 352 L 828 628 L 512 700 Z"/>
+  </g>
+
+  <!-- 左页文字线（随页面向中缝倾斜） -->
+  <g stroke="#9AA3AE" stroke-width="24" stroke-linecap="round">
+    <line x1="272" y1="452" x2="446" y2="490"/>
+    <line x1="272" y1="516" x2="446" y2="554"/>
+    <line x1="272" y1="580" x2="410" y2="609"/>
+  </g>
+
+  <!-- 右页文字线 -->
+  <g stroke="#9AA3AE" stroke-width="24" stroke-linecap="round">
+    <line x1="578" y1="490" x2="752" y2="452"/>
+    <line x1="578" y1="554" x2="752" y2="516"/>
+  </g>
+
+  <!-- 拾起的单词：一道蓝色笔触从右页里被拎出来 -->
+  <g stroke="#3B82F6" stroke-width="30" stroke-linecap="round" fill="none">
+    <path d="M 648 434 C 700 402, 748 372, 792 344"/>
+  </g>
+  <circle cx="810" cy="332" r="32" fill="#3B82F6"/>
+</svg>

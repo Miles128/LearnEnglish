@@ -11,6 +11,9 @@ use std::sync::LazyLock;
 use uuid::Uuid;
 
 const MAX_FILE_BYTES: u64 = 20 * 1024 * 1024;
+/// Cap on text pulled out of an archive entry, so a small `.docx` zip bomb
+/// cannot expand into gigabytes of memory.
+const MAX_DECOMPRESSED_BYTES: u64 = 50 * 1024 * 1024;
 
 static RE_BLANK_RUN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").unwrap());
 
@@ -35,13 +38,18 @@ pub fn import_article_from_file(db: &DbState, path: &str) -> Result<Article, App
         .to_ascii_lowercase();
 
     let bytes = std::fs::read(&path).map_err(|e| format!("无法读取文件：{e}"))?;
-    let content_text = match ext.as_str() {
-        "txt" => extract_txt(&bytes)?,
-        "pdf" => extract_pdf(&bytes)?,
-        "docx" => extract_docx(&bytes)?,
-        "doc" => return Err("暂不支持旧版 .doc，请另存为 .docx".into()),
-        _ => return Err("暂不支持该格式（仅 .txt / .pdf / .docx）".into()),
-    };
+    // Parser crates can panic on malformed input; contain it instead of taking
+    // down the command thread.
+    let content_text = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        match ext.as_str() {
+            "txt" => extract_txt(&bytes),
+            "pdf" => extract_pdf(&bytes),
+            "docx" => extract_docx(&bytes),
+            "doc" => Err(AppError::msg("暂不支持旧版 .doc，请另存为 .docx")),
+            _ => Err(AppError::msg("暂不支持该格式（仅 .txt / .pdf / .docx）")),
+        }
+    }))
+    .map_err(|_| AppError::msg("文件解析失败：文件损坏或格式不支持"))??;
 
     let content_text = normalize_whitespace(&content_text);
     if content_text.chars().count() < MIN_FULLTEXT_CHARS {
@@ -58,7 +66,6 @@ pub fn import_article_from_file(db: &DbState, path: &str) -> Result<Article, App
         id: id.clone(),
         url: format!("file://import/{id}"),
         title,
-        title_zh: String::new(),
         source: "导入".into(),
         category: "other".into(),
         published_at: None,
@@ -116,8 +123,11 @@ fn extract_txt(bytes: &[u8]) -> Result<String, AppError> {
 }
 
 fn extract_pdf(bytes: &[u8]) -> Result<String, AppError> {
-    let text = pdf_extract::extract_text_from_mem(bytes)
-        .map_err(|e| format!("PDF 解析失败：{e}"))?;
+    let text = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        pdf_extract::extract_text_from_mem(bytes)
+    }))
+    .map_err(|_| AppError::msg("PDF 解析失败：文件损坏或格式不支持"))?
+    .map_err(|e| format!("PDF 解析失败：{e}"))?;
     let trimmed = text.trim().to_string();
     if trimmed.chars().filter(|c| c.is_alphanumeric()).count() < 40 {
         return Err("未能从 PDF 提取文字（可能是扫描件，暂不支持 OCR）".into());
@@ -129,12 +139,17 @@ fn extract_docx(bytes: &[u8]) -> Result<String, AppError> {
     let cursor = std::io::Cursor::new(bytes);
     let mut archive =
         zip::ZipArchive::new(cursor).map_err(|_| "不是有效的 .docx 文件".to_string())?;
-    let mut file = archive
+    let file = archive
         .by_name("word/document.xml")
         .map_err(|_| "docx 缺少正文（word/document.xml）".to_string())?;
-    let mut xml = String::new();
-    file.read_to_string(&mut xml)
+    let mut buf = Vec::new();
+    file.take(MAX_DECOMPRESSED_BYTES + 1)
+        .read_to_end(&mut buf)
         .map_err(|e| format!("读取 docx 失败：{e}"))?;
+    if buf.len() as u64 > MAX_DECOMPRESSED_BYTES {
+        return Err(AppError::msg("docx 解压后过大，已拒绝"));
+    }
+    let xml = String::from_utf8_lossy(&buf);
     Ok(docx_xml_to_text(&xml))
 }
 

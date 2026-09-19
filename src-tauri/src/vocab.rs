@@ -1,6 +1,6 @@
 use crate::error::AppError;
 use crate::config::AppConfig;
-use crate::db::{self, DbState, PhraseItem, VocabItem};
+use crate::db::{self, DbState, MemoryItem};
 use chrono::Utc;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -124,8 +124,6 @@ pub struct ArticleCardIn {
 #[derive(Deserialize, Default)]
 pub struct ArticleCardOut {
     #[serde(default)]
-    pub title_zh: String,
-    #[serde(default)]
     pub summary_zh: String,
     /// 2–3 lowercase English topic tags for interest profiling.
     #[serde(default)]
@@ -139,8 +137,9 @@ pub fn card_from_article(title: &str, content_text: &str) -> ArticleCardIn {
     }
 }
 
-/// Batch: Chinese title + one-sentence Chinese synopsis + topic tags,
-/// in one request. Input order = output order.
+/// Batch: one-sentence Chinese synopsis + topic tags, in one request.
+/// Titles are intentionally left in English — no title tokens are spent.
+/// Input order = output order.
 pub fn translate_article_cards(
     cfg: &AppConfig,
     cards: &[ArticleCardIn],
@@ -151,8 +150,7 @@ pub fn translate_article_cards(
     ensure_configured(cfg)?;
     let system = r#"You write Simplified Chinese metadata for English articles for language learners.
 Given a JSON array of objects {title, excerpt}, return ONLY a JSON array of the same length.
-Each item must be {"title_zh":"<Chinese title>","summary_zh":"<Chinese synopsis>","tags":["<tag1>","<tag2>"]}.
-title_zh is a natural Chinese rendering of the title (not pinyin).
+Each item must be {"summary_zh":"<Chinese synopsis>","tags":["<tag1>","<tag2>"]}.
 summary_zh is ONE complete Simplified Chinese sentence (about 30–60 characters) that says what the article is about. No ellipsis padding, no quotes, no English.
 tags is 2–3 short lowercase English topic tags (e.g. ["economy","central-bank"]). No markdown fences, no commentary."#;
     let payload = serde_json::to_string(cards)?;
@@ -167,7 +165,6 @@ tags is 2–3 short lowercase English topic tags (e.g. ["economy","central-bank"
     Ok(out
         .into_iter()
         .map(|mut c| {
-            c.title_zh = c.title_zh.trim().to_string();
             c.summary_zh = clip_zh(&c.summary_zh, CARD_SUMMARY_MAX_CHARS);
             c.tags = c
                 .tags
@@ -242,7 +239,9 @@ No markdown fences."#;
 }
 
 #[derive(serde::Deserialize)]
-pub struct AddVocabInput {
+pub struct AddMemoryInput {
+    /// "word" | "phrase" — selects the library and how enrichment runs.
+    pub kind: String,
     pub term: String,
     pub context_sentence: String,
     pub article_id: Option<String>,
@@ -251,64 +250,99 @@ pub struct AddVocabInput {
     pub collocations: Option<Vec<String>>,
 }
 
-/// Enrich (optional) and insert-or-merge a vocab row. LLM failure degrades to given fields.
-pub fn add_or_merge_vocab(
+/// Enrich (optional) and insert-or-merge a memory row (word or phrase).
+/// LLM failure degrades to whatever fields the caller supplied.
+pub fn add_or_merge_memory(
     db: &DbState,
     cfg: &AppConfig,
-    input: AddVocabInput,
-) -> Result<VocabItem, AppError> {
-    let term = input.term.trim().to_string();
+    input: AddMemoryInput,
+) -> Result<MemoryItem, AppError> {
+    // Whitespace-collapse works for both a single word and a phrase.
+    let term = input.term.split_whitespace().collect::<Vec<_>>().join(" ");
     if term.is_empty() {
         return Err("词条不能为空".into());
     }
-    let definition_zh = input.definition_zh.clone().unwrap_or_default();
-    let word_type = input.word_type.clone().unwrap_or_default();
-    let collocations = input.collocations.clone().unwrap_or_default();
-    let explicit = input.definition_zh.is_some()
-        && input.word_type.is_some()
-        && input.collocations.is_some();
-    let mut enrichment = if explicit {
-        VocabEnrichment {
-            definition_zh: definition_zh.clone(),
-            word_type: if word_type.is_empty() {
-                "phrase".into()
-            } else {
-                word_type.clone()
-            },
-            collocations,
-        }
+    let kind = if input.kind.trim() == "phrase" {
+        "phrase"
     } else {
-        match enrich_vocab(cfg, &term, &input.context_sentence) {
-            Ok(e) => e,
-            Err(_) => VocabEnrichment {
-                definition_zh: definition_zh.clone(),
-                word_type: if word_type.is_empty() {
-                    "phrase".into()
+        "word"
+    };
+    let fallback_word_type = || "phrase".to_string();
+    let given_definition = input.definition_zh.clone().unwrap_or_default();
+    let given_word_type = input.word_type.clone().unwrap_or_default();
+
+    let (definition_zh, word_type, collocations) = if kind == "phrase" {
+        let mut definition_zh = given_definition;
+        let mut word_type = given_word_type;
+        if definition_zh.is_empty() || word_type.is_empty() {
+            if let Ok(e) = enrich_phrase(cfg, &term, &input.context_sentence) {
+                if definition_zh.is_empty() {
+                    definition_zh = e.meaning_zh;
+                }
+                if word_type.is_empty() {
+                    word_type = e.usage;
+                }
+            }
+        }
+        let word_type = if word_type.is_empty() {
+            fallback_word_type()
+        } else {
+            word_type
+        };
+        (definition_zh, word_type, Vec::new())
+    } else {
+        let collocations = input.collocations.clone().unwrap_or_default();
+        let explicit = input.definition_zh.is_some()
+            && input.word_type.is_some()
+            && input.collocations.is_some();
+        let mut enrichment = if explicit {
+            VocabEnrichment {
+                definition_zh: given_definition.clone(),
+                word_type: if given_word_type.is_empty() {
+                    fallback_word_type()
                 } else {
-                    word_type.clone()
+                    given_word_type.clone()
                 },
                 collocations: collocations.clone(),
-            },
+            }
+        } else {
+            match enrich_vocab(cfg, &term, &input.context_sentence) {
+                Ok(e) => e,
+                Err(_) => VocabEnrichment {
+                    definition_zh: given_definition.clone(),
+                    word_type: if given_word_type.is_empty() {
+                        fallback_word_type()
+                    } else {
+                        given_word_type.clone()
+                    },
+                    collocations: collocations.clone(),
+                },
+            }
+        };
+        if enrichment.definition_zh.is_empty() {
+            enrichment.definition_zh = given_definition.clone();
         }
+        if enrichment.word_type.is_empty() {
+            enrichment.word_type = fallback_word_type();
+        }
+        (
+            enrichment.definition_zh,
+            enrichment.word_type,
+            enrichment.collocations,
+        )
     };
-    if enrichment.definition_zh.is_empty() {
-        enrichment.definition_zh = definition_zh.clone();
-    }
-    if enrichment.word_type.is_empty() {
-        enrichment.word_type = "phrase".into();
-    }
 
     let now = Utc::now().to_rfc3339();
     let conn = db.lock_write()?;
 
-    if let Some(mut existing) = db::get_vocab_by_term(&conn, &term)? {
+    if let Some(mut existing) = db::get_memory_by_term(&conn, kind, &term)? {
         if existing.definition_zh.is_empty() {
-            existing.definition_zh = enrichment.definition_zh.clone();
+            existing.definition_zh = definition_zh;
         }
-        if existing.word_type.is_empty() {
-            existing.word_type = enrichment.word_type.clone();
+        if existing.word_type.is_empty() || (kind == "phrase" && existing.word_type == "phrase") {
+            existing.word_type = word_type;
         }
-        for c in &enrichment.collocations {
+        for c in &collocations {
             let c = c.trim();
             if !c.is_empty() && !existing.collocations.contains(&c.to_string()) {
                 existing.collocations.push(c.to_string());
@@ -320,16 +354,17 @@ pub fn add_or_merge_vocab(
         if existing.article_id.is_none() {
             existing.article_id = input.article_id.clone();
         }
-        db::update_vocab_meta(&conn, &existing)?;
+        db::update_memory_meta(&conn, &existing)?;
         return Ok(existing);
     }
 
-    let item = VocabItem {
+    let item = MemoryItem {
         id: Uuid::new_v4().to_string(),
+        kind: kind.to_string(),
         term,
-        definition_zh: enrichment.definition_zh,
-        word_type: enrichment.word_type,
-        collocations: enrichment.collocations,
+        definition_zh,
+        word_type,
+        collocations,
         context_sentence: input.context_sentence,
         article_id: input.article_id,
         status: "learning".into(),
@@ -339,7 +374,7 @@ pub fn add_or_merge_vocab(
         next_review_at: now.clone(),
         created_at: now,
     };
-    db::insert_vocab(&conn, &item)?;
+    db::insert_memory(&conn, &item)?;
     Ok(item)
 }
 
@@ -388,15 +423,6 @@ pub struct PhraseEnrichment {
     pub usage: String,
 }
 
-#[derive(serde::Deserialize)]
-pub struct AddPhraseInput {
-    pub phrase: String,
-    pub context_sentence: String,
-    pub article_id: Option<String>,
-    pub meaning_zh: Option<String>,
-    pub usage: Option<String>,
-}
-
 /// Chinese meaning + category for a phrase (idiom / phrasal verb / collocation).
 pub fn enrich_phrase(
     cfg: &AppConfig,
@@ -411,72 +437,6 @@ usage (string, ONE of: idiom / phrasal-verb / collocation / fixed-expression / s
 No markdown fences."#;
     let user = format!("Phrase: {phrase}\nContext: {context}");
     chat_json(cfg, system, &user, "phrase JSON")
-}
-
-/// Enrich (optional) and insert-or-merge a phrase row. LLM failure degrades.
-pub fn add_or_merge_phrase(
-    db: &DbState,
-    cfg: &AppConfig,
-    input: AddPhraseInput,
-) -> Result<PhraseItem, AppError> {
-    let phrase = input.phrase.split_whitespace().collect::<Vec<_>>().join(" ");
-    if phrase.is_empty() {
-        return Err(AppError::msg("短语不能为空"));
-    }
-    let mut meaning_zh = input.meaning_zh.clone().unwrap_or_default();
-    let mut usage = input.usage.clone().unwrap_or_default();
-    if meaning_zh.is_empty() || usage.is_empty() {
-        if let Ok(enriched) = enrich_phrase(cfg, &phrase, &input.context_sentence) {
-            if meaning_zh.is_empty() {
-                meaning_zh = enriched.meaning_zh;
-            }
-            if usage.is_empty() {
-                usage = enriched.usage;
-            }
-        }
-    }
-    let usage = if usage.is_empty() {
-        "phrase".to_string()
-    } else {
-        usage
-    };
-
-    let now = Utc::now().to_rfc3339();
-    let conn = db.lock_write()?;
-
-    if let Some(mut existing) = db::get_phrase_by_text(&conn, &phrase)? {
-        if existing.meaning_zh.is_empty() {
-            existing.meaning_zh = meaning_zh;
-        }
-        if existing.usage.is_empty() || existing.usage == "phrase" {
-            existing.usage = usage;
-        }
-        if existing.context_sentence.is_empty() {
-            existing.context_sentence = input.context_sentence.clone();
-        }
-        if existing.article_id.is_none() {
-            existing.article_id = input.article_id.clone();
-        }
-        db::update_phrase_meta(&conn, &existing)?;
-        return Ok(existing);
-    }
-
-    let item = PhraseItem {
-        id: Uuid::new_v4().to_string(),
-        phrase,
-        meaning_zh,
-        usage,
-        context_sentence: input.context_sentence,
-        article_id: input.article_id,
-        status: "learning".into(),
-        interval_days: 0.0,
-        reps: 0,
-        consecutive_know: 0,
-        next_review_at: now.clone(),
-        created_at: now,
-    };
-    db::insert_phrase(&conn, &item)?;
-    Ok(item)
 }
 
 fn ensure_configured(cfg: &AppConfig) -> Result<(), AppError> {

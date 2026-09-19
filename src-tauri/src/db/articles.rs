@@ -2,8 +2,10 @@ use crate::error::AppError;
 use super::{Article, ArticleListItem};
 use rusqlite::{params, Connection, OptionalExtension};
 
+/// Full-row projection. The list projection is derived from this (see
+/// [`query_articles`]) so the column list cannot drift between the two.
 const ARTICLE_COLS: &str =
-    "id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin,summary_zh,last_opened_at,open_count,word_count,quality,extraction_source,dwell_ms,read_completed,liked,tags_json";
+    "id,url,title,source,category,published_at,content_text,fetched_at,origin,summary_zh,last_opened_at,open_count,word_count,quality,extraction_source,dwell_ms,read_completed,liked,tags_json";
 
 /// Home list only needs an excerpt (known% + blurb). Full body stays on get_article.
 pub const LIST_EXCERPT_CHARS: i32 = 6000;
@@ -25,12 +27,18 @@ pub fn list_articles(
     )
 }
 
-/// Read-state filter for the library view.
+/// Read-state filter. "Finished" means scrolled to the end + dwell threshold;
+/// merely opening an article puts it in `Reading`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReadState {
     #[default]
     All,
+    /// Never opened and not finished.
     Unread,
+    /// Opened but not finished — stays in the list forever.
+    Reading,
+    /// Not finished (unread + reading): the home digest default.
+    Unfinished,
     Read,
 }
 
@@ -55,9 +63,12 @@ pub fn query_articles(
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<ArticleListItem>, AppError> {
-    let mut sql = format!(
-        "SELECT id,url,title,title_zh,source,category,published_at,SUBSTR(content_text,1,{LIST_EXCERPT_CHARS}),fetched_at,origin,summary_zh,last_opened_at,open_count,word_count,quality,extraction_source,dwell_ms,read_completed,liked,tags_json FROM articles"
+    // Same columns as ARTICLE_COLS, with the body truncated to an excerpt.
+    let list_cols = ARTICLE_COLS.replace(
+        "content_text",
+        &format!("SUBSTR(content_text,1,{LIST_EXCERPT_CHARS})"),
     );
+    let mut sql = format!("SELECT {list_cols} FROM articles");
     let mut params: Vec<rusqlite::types::Value> = vec![];
     let mut clauses: Vec<String> = vec![];
     if let Some(cat) = query.category.filter(|c| *c != "all") {
@@ -84,8 +95,14 @@ pub fn query_articles(
     }
     match query.read_state {
         ReadState::All => {}
-        ReadState::Unread => clauses.push("last_opened_at IS NULL".into()),
-        ReadState::Read => clauses.push("last_opened_at IS NOT NULL".into()),
+        ReadState::Unfinished => clauses.push("read_completed = 0".into()),
+        ReadState::Unread => {
+            clauses.push("read_completed = 0 AND last_opened_at IS NULL".into())
+        }
+        ReadState::Reading => {
+            clauses.push("read_completed = 0 AND last_opened_at IS NOT NULL".into())
+        }
+        ReadState::Read => clauses.push("read_completed = 1".into()),
     }
     if query.liked_only {
         clauses.push("liked=1".into());
@@ -128,22 +145,21 @@ pub fn map_article_list_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<Articl
         id: row.get(0)?,
         url: row.get(1)?,
         title: row.get(2)?,
-        title_zh: row.get(3)?,
-        source: row.get(4)?,
-        category: row.get(5)?,
-        published_at: row.get(6)?,
-        excerpt: row.get(7)?,
-        fetched_at: row.get(8)?,
-        origin: row.get(9)?,
-        summary_zh: row.get(10)?,
-        last_opened_at: row.get(11)?,
-        open_count: row.get(12)?,
-        word_count: row.get(13)?,
+        source: row.get(3)?,
+        category: row.get(4)?,
+        published_at: row.get(5)?,
+        excerpt: row.get(6)?,
+        fetched_at: row.get(7)?,
+        origin: row.get(8)?,
+        summary_zh: row.get(9)?,
+        last_opened_at: row.get(10)?,
+        open_count: row.get(11)?,
+        word_count: row.get(12)?,
         rank_score: 0.0,
-        dwell_ms: row.get(16)?,
-        read_completed: row.get::<_, i64>(17)? != 0,
-        liked: row.get::<_, i64>(18)? != 0,
-        tags: parse_tags_json(&row.get::<_, String>(19)?),
+        dwell_ms: row.get(15)?,
+        read_completed: row.get::<_, i64>(16)? != 0,
+        liked: row.get::<_, i64>(17)? != 0,
+        tags: parse_tags_json(&row.get::<_, String>(18)?),
     })
 }
 
@@ -152,23 +168,22 @@ pub fn map_article(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
         id: row.get(0)?,
         url: row.get(1)?,
         title: row.get(2)?,
-        title_zh: row.get(3)?,
-        source: row.get(4)?,
-        category: row.get(5)?,
-        published_at: row.get(6)?,
-        content_text: row.get(7)?,
-        fetched_at: row.get(8)?,
-        origin: row.get(9)?,
-        summary_zh: row.get(10)?,
-        last_opened_at: row.get(11)?,
-        open_count: row.get(12)?,
-        word_count: row.get(13)?,
-        quality: row.get(14)?,
-        extraction_source: row.get(15)?,
-        dwell_ms: row.get(16)?,
-        read_completed: row.get::<_, i64>(17)? != 0,
-        liked: row.get::<_, i64>(18)? != 0,
-        tags: parse_tags_json(&row.get::<_, String>(19)?),
+        source: row.get(3)?,
+        category: row.get(4)?,
+        published_at: row.get(5)?,
+        content_text: row.get(6)?,
+        fetched_at: row.get(7)?,
+        origin: row.get(8)?,
+        summary_zh: row.get(9)?,
+        last_opened_at: row.get(10)?,
+        open_count: row.get(11)?,
+        word_count: row.get(12)?,
+        quality: row.get(13)?,
+        extraction_source: row.get(14)?,
+        dwell_ms: row.get(15)?,
+        read_completed: row.get::<_, i64>(16)? != 0,
+        liked: row.get::<_, i64>(17)? != 0,
+        tags: parse_tags_json(&row.get::<_, String>(18)?),
     })
 }
 
@@ -202,6 +217,14 @@ pub fn learning_stats(conn: &Connection) -> Result<super::LearningStats, AppErro
             |row| row.get(0),
         )
         ?;
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let opened_today: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM articles WHERE substr(last_opened_at,1,10) = ?1",
+            params![today],
+            |row| row.get(0),
+        )
+        ?;
     let top_source = conn
         .query_row(
             "SELECT source FROM articles WHERE last_opened_at IS NOT NULL
@@ -224,20 +247,21 @@ pub fn learning_stats(conn: &Connection) -> Result<super::LearningStats, AppErro
         ?;
     let vocab_created_7d: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM vocab WHERE created_at >= ?1",
+            "SELECT COUNT(*) FROM memory_items WHERE kind='word' AND created_at >= ?1",
             params![since],
             |row| row.get(0),
         )
         ?;
     let vocab_learning: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM vocab WHERE status='learning'",
+            "SELECT COUNT(*) FROM memory_items WHERE kind='word' AND status='learning'",
             [],
             |row| row.get(0),
         )
         ?;
     Ok(super::LearningStats {
         opened_total,
+        opened_today,
         opened_7d,
         top_source,
         top_category,
@@ -375,23 +399,22 @@ fn build_stats(
         &[],
     )?;
 
-    let by_status = |table: &str, status: &str| -> Result<i64, AppError> {
+    let by_status = |kind: &str, status: &str| -> Result<i64, AppError> {
         conn.query_row(
-            &format!("SELECT COUNT(*) FROM {table} WHERE status=?1"),
-            rusqlite::params![status],
+            "SELECT COUNT(*) FROM memory_items WHERE kind=?1 AND status=?2",
+            rusqlite::params![kind, status],
             |row| row.get::<_, i64>(0),
         )
         .map_err(AppError::from)
     };
-    let vocab_learning = by_status("vocab", "learning")?;
-    let vocab_mastered = by_status("vocab", "mastered")?;
-    let phrases_learning = by_status("phrases", "learning")?;
-    let phrases_mastered = by_status("phrases", "mastered")?;
+    let vocab_learning = by_status("word", "learning")?;
+    let vocab_mastered = by_status("word", "mastered")?;
+    let phrases_learning = by_status("phrase", "learning")?;
+    let phrases_mastered = by_status("phrase", "mastered")?;
 
     let due_since = chrono::Utc::now().to_rfc3339();
     let due_today = scalar(
-        "SELECT (SELECT COUNT(*) FROM vocab WHERE status='learning' AND next_review_at <= ?1)
-              + (SELECT COUNT(*) FROM phrases WHERE status='learning' AND next_review_at <= ?1)",
+        "SELECT COUNT(*) FROM memory_items WHERE status='learning' AND next_review_at <= ?1",
         &[&due_since],
     )?;
 
@@ -490,14 +513,13 @@ pub fn list_article_content_lengths(
 pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, AppError> {
     let changed = conn
         .execute(
-            "INSERT INTO articles (id,url,title,title_zh,source,category,published_at,content_text,fetched_at,origin,summary_zh,word_count,quality,extraction_source)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+            "INSERT INTO articles (id,url,title,source,category,published_at,content_text,fetched_at,origin,summary_zh,word_count,quality,extraction_source)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)
              ON CONFLICT(url) DO NOTHING",
             params![
                 a.id,
                 a.url,
                 a.title,
-                a.title_zh,
                 a.source,
                 a.category,
                 a.published_at,
@@ -517,7 +539,7 @@ pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, App
 /// Refresh an existing RSS article when a longer full-text body is available.
 /// Matches by URL: callers may build the update struct with an empty/fresh id
 /// (the RSS refresh path does exactly that).
-/// Keeps id / url / title_zh / source / category / published_at / origin intact.
+/// Keeps id / url / title / source / category / published_at / origin intact.
 /// Clears `summary_zh` so the refresh pipeline regenerates it for the new body.
 pub fn refresh_article_content(conn: &Connection, a: &Article) -> Result<bool, AppError> {
     let changed = conn
@@ -660,13 +682,44 @@ pub fn list_all_rss_articles(conn: &Connection) -> Result<Vec<Article>, AppError
 pub fn purge_old_rss_articles(conn: &Connection, cutoff_rfc3339: &str) -> Result<usize, AppError> {
     let changed = conn
         .execute(
+            // 在读 (opened but unfinished) never disappears, even past retention.
             "DELETE FROM articles
              WHERE origin='rss' AND liked=0
+               AND NOT (last_opened_at IS NOT NULL AND read_completed = 0)
                AND julianday(COALESCE(published_at, fetched_at)) < julianday(?1)",
             params![cutoff_rfc3339],
         )
         .map_err(AppError::from)?;
     Ok(changed)
+}
+
+/// One-time cleanup for rows with no word count: truly empty bodies are
+/// deleted, and bodies that were never measured (pre-v6 rows) are counted now.
+/// Returns the number of rows whose count was stamped.
+pub fn backfill_word_counts(conn: &Connection) -> Result<usize, AppError> {
+    conn.execute("DELETE FROM articles WHERE TRIM(content_text) = ''", [])?;
+    let rows: Vec<(String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, content_text FROM articles WHERE word_count = 0",
+        )?;
+        let mapped = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let collected = mapped.collect::<Result<Vec<_>, _>>()?;
+        collected
+    };
+    let mut stamped = 0;
+    for (id, text) in rows {
+        let wc = text.split_whitespace().count() as i64;
+        if wc == 0 {
+            conn.execute("DELETE FROM articles WHERE id=?1", params![id])?;
+        } else {
+            conn.execute(
+                "UPDATE articles SET word_count=?1 WHERE id=?2",
+                params![wc, id],
+            )?;
+            stamped += 1;
+        }
+    }
+    Ok(stamped)
 }
 
 pub fn get_meta(conn: &Connection, key: &str) -> Result<Option<String>, AppError> {
@@ -807,7 +860,7 @@ pub fn articles_missing_card_zh(conn: &Connection, limit: usize) -> Result<Vec<A
     let mut stmt = conn
         .prepare(&format!(
             "SELECT {ARTICLE_COLS} FROM articles
-             WHERE IFNULL(title_zh,'') = '' OR IFNULL(summary_zh,'') = ''
+             WHERE IFNULL(summary_zh,'') = ''
              ORDER BY fetched_at DESC
              LIMIT ?1"
         ))
@@ -820,12 +873,37 @@ pub fn articles_missing_card_zh(conn: &Connection, limit: usize) -> Result<Vec<A
     Ok(rows)
 }
 
-pub fn set_article_title_zh(conn: &Connection, id: &str, title_zh: &str) -> Result<(), AppError> {
+/// RSS articles whose stored body has no paragraph breaks (extraction loss),
+/// newest first — candidates for a re-fetch repair.
+pub fn articles_without_paragraphs(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<Article>, AppError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {ARTICLE_COLS} FROM articles
+         WHERE origin='rss' AND url LIKE 'http%'
+           AND instr(content_text, char(10)) = 0
+         ORDER BY fetched_at DESC
+         LIMIT ?1"
+    ))?;
+    let rows = stmt
+        .query_map(params![limit as i64], map_article)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Replace an article body after a successful re-extraction.
+pub fn set_article_body(
+    conn: &Connection,
+    id: &str,
+    content_text: &str,
+    word_count: i64,
+    extraction_source: &str,
+) -> Result<(), AppError> {
     conn.execute(
-        "UPDATE articles SET title_zh=?1 WHERE id=?2",
-        params![title_zh, id],
-    )
-    ?;
+        "UPDATE articles SET content_text=?1, word_count=?2, quality='fulltext', extraction_source=?3 WHERE id=?4",
+        params![content_text, word_count, extraction_source, id],
+    )?;
     Ok(())
 }
 

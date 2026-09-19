@@ -68,7 +68,7 @@ pub async fn list_articles_ranked(
                     tags: &tags,
                     source: source.as_deref(),
                     read_state: if unread_only.unwrap_or(false) {
-                        db::ReadState::Unread
+                        db::ReadState::Unfinished
                     } else {
                         db::ReadState::All
                     },
@@ -123,6 +123,8 @@ pub async fn list_library(
     let tags = tags.unwrap_or_default();
     let read_state = match read_state.as_deref() {
         Some("unread") => db::ReadState::Unread,
+        Some("reading") => db::ReadState::Reading,
+        Some("unfinished") => db::ReadState::Unfinished,
         Some("read") => db::ReadState::Read,
         _ => db::ReadState::All,
     };
@@ -314,6 +316,18 @@ pub async fn fill_missing_card_zh(app: AppHandle) -> Result<usize, AppError> {
 pub async fn import_article_url(app: AppHandle, url: String) -> Result<Article, AppError> {
     crate::commands::spawn_db(app, move |state| {
         Ok(feeds::import_article_from_url(state, &url)?)
+    })
+    .await
+}
+
+/// Re-fetch articles whose stored body lost paragraph breaks.
+#[tauri::command]
+pub async fn repair_paragraphs(
+    app: AppHandle,
+    limit: Option<usize>,
+) -> Result<usize, AppError> {
+    crate::commands::spawn_db(app, move |state| {
+        Ok(feeds::repair_missing_paragraphs(state, limit.unwrap_or(30))?)
     })
     .await
 }

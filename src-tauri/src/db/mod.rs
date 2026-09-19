@@ -7,16 +7,16 @@
 mod articles;
 mod curated_feeds;
 mod feeds;
-mod phrases;
+mod known;
+mod memory;
 mod translations;
-mod vocab;
 
 pub use articles::*;
 pub use curated_feeds::*;
-pub use phrases::*;
+pub use known::*;
+pub use memory::*;
 pub use feeds::*;
 pub use translations::*;
-pub use vocab::*;
 
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -60,8 +60,6 @@ pub struct Article {
     pub id: String,
     pub url: String,
     pub title: String,
-    #[serde(default)]
-    pub title_zh: String,
     pub source: String,
     pub category: String,
     pub published_at: Option<String>,
@@ -109,8 +107,6 @@ pub struct ArticleListItem {
     pub id: String,
     pub url: String,
     pub title: String,
-    #[serde(default)]
-    pub title_zh: String,
     pub source: String,
     pub category: String,
     pub published_at: Option<String>,
@@ -210,6 +206,8 @@ pub struct LearningStats {
     #[ts(type = "number")]
     pub opened_total: i64,
     #[ts(type = "number")]
+    pub opened_today: i64,
+    #[ts(type = "number")]
     pub opened_7d: i64,
     pub top_source: Option<String>,
     pub top_category: Option<String>,
@@ -273,36 +271,19 @@ pub struct TranslationRow {
     pub model: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct VocabItem {
-    pub id: String,
-    pub term: String,
-    pub definition_zh: String,
-    pub word_type: String,
-    pub collocations: Vec<String>,
-    pub context_sentence: String,
-    pub article_id: Option<String>,
-    pub status: String,
-    pub interval_days: f64,
-    #[ts(type = "number")]
-    pub reps: i64,
-    #[ts(type = "number")]
-    pub consecutive_know: i64,
-    pub next_review_at: String,
-    pub created_at: String,
-}
-
-/// A saved phrase / collocation with its own spaced-repetition state,
-/// kept separate from the single-word `vocab` library.
+/// A saved word or phrase with spaced-repetition state. Both library lists
+/// (生词 / 短语组合) live in one table, distinguished by `kind`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export)]
-pub struct PhraseItem {
+pub struct MemoryItem {
     pub id: String,
-    pub phrase: String,
-    pub meaning_zh: String,
-    /// idiom / phrasal verb / collocation / 固定搭配 …
-    pub usage: String,
+    /// "word" | "phrase"
+    pub kind: String,
+    pub term: String,
+    pub definition_zh: String,
+    /// Part of speech for words; usage label (idiom / collocation …) for phrases.
+    pub word_type: String,
+    pub collocations: Vec<String>,
     pub context_sentence: String,
     pub article_id: Option<String>,
     pub status: String,
@@ -321,14 +302,35 @@ pub fn db_path(app_data: PathBuf) -> PathBuf {
 }
 
 pub fn open_db(path: PathBuf) -> Result<Connection, AppError> {
-    let conn = Connection::open(path)?;
+    let conn = Connection::open(&path)?;
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     conn.execute_batch("PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;")
         ?;
+    backup_before_migration(&conn, &path);
     migrate(&conn)?;
     feeds::seed_feed_categories(&conn)?;
     feeds::seed_feeds(&conn)?;
     Ok(conn)
+}
+
+/// Snapshot the database before a version bump, so a bad migration can be
+/// rolled back by hand. Best-effort: never blocks startup.
+pub(crate) fn backup_before_migration(conn: &Connection, path: &std::path::Path) {
+    let Ok(stored) = conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0)) else {
+        return;
+    };
+    // 0 = fresh database (nothing to lose); >= latest = no migration will run.
+    if stored == 0 || stored >= LATEST_VERSION {
+        return;
+    }
+    let backup = path.with_file_name(format!("learnenglish.db.premigrate-v{stored}.bak"));
+    if backup.exists() {
+        return;
+    }
+    let _ = conn.execute(
+        "VACUUM INTO ?1",
+        rusqlite::params![backup.to_string_lossy()],
+    );
 }
 
 const BASELINE_SCHEMA: &str = r#"
@@ -404,9 +406,9 @@ const LEGACY_COLUMN_ADDITIONS: &[&str] = &[
 /// Version-gated migrations. To add one: raise `LATEST_VERSION` and apply its
 /// DDL inside `migrate` when `stored < N`. Stamp each version with its own
 /// number (never `LATEST_VERSION`) so later steps are not skipped.
-const LATEST_VERSION: i64 = 9;
+const LATEST_VERSION: i64 = 11;
 
-fn migrate(conn: &Connection) -> Result<(), AppError> {
+pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
     let mut stored: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         ?;
@@ -430,7 +432,7 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
     }
 
     if stored < 2 {
-        vocab::collapse_duplicate_vocab_terms(conn)?;
+        collapse_duplicate_vocab_terms(conn)?;
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_vocab_term_lower ON vocab(lower(term))",
             [],
@@ -570,11 +572,92 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
         stored = 9;
     }
 
+    if stored < 10 {
+        // Unify vocab + phrases into one `memory_items` table with a `kind`
+        // column. Both libraries share the same columns and SRS state.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS memory_items (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL DEFAULT 'word',
+                term TEXT NOT NULL,
+                definition_zh TEXT NOT NULL DEFAULT '',
+                word_type TEXT NOT NULL DEFAULT '',
+                collocations_json TEXT NOT NULL DEFAULT '[]',
+                context_sentence TEXT NOT NULL DEFAULT '',
+                article_id TEXT,
+                status TEXT NOT NULL DEFAULT 'learning',
+                interval_days REAL NOT NULL DEFAULT 0,
+                reps INTEGER NOT NULL DEFAULT 0,
+                consecutive_know INTEGER NOT NULL DEFAULT 0,
+                next_review_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (article_id) REFERENCES articles(id) ON DELETE SET NULL
+            );
+            INSERT OR IGNORE INTO memory_items
+                (id, kind, term, definition_zh, word_type, collocations_json,
+                 context_sentence, article_id, status, interval_days, reps,
+                 consecutive_know, next_review_at, created_at)
+            SELECT id, 'word', term, definition_zh, word_type, collocations_json,
+                   context_sentence, article_id, status, interval_days, reps,
+                   consecutive_know, next_review_at, created_at
+              FROM vocab;
+            INSERT OR IGNORE INTO memory_items
+                (id, kind, term, definition_zh, word_type, collocations_json,
+                 context_sentence, article_id, status, interval_days, reps,
+                 consecutive_know, next_review_at, created_at)
+            SELECT id, 'phrase', phrase, meaning_zh, usage, '[]',
+                   context_sentence, article_id, status, interval_days, reps,
+                   consecutive_know, next_review_at, created_at
+              FROM phrases;
+            -- Rename (never DROP) the legacy tables so the source rows stay
+            -- recoverable if the copy above ever goes wrong.
+            ALTER TABLE vocab RENAME TO _legacy_vocab;
+            ALTER TABLE phrases RENAME TO _legacy_phrases;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_kind_term
+                ON memory_items(kind, lower(term));
+            CREATE INDEX IF NOT EXISTS idx_memory_kind_status
+                ON memory_items(kind, status);
+            CREATE INDEX IF NOT EXISTS idx_memory_next ON memory_items(next_review_at);
+            CREATE INDEX IF NOT EXISTS idx_memory_article ON memory_items(article_id);",
+        )
+        .map_err(AppError::from)?;
+        conn.pragma_update(None, "user_version", 10)
+            .map_err(AppError::from)?;
+        stored = 10;
+    }
+
+    if stored < 11 {
+        // Known words: words the learner has marked as already known, so they
+        // stop being underlined and stop counting toward article difficulty.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS known_words (
+                term TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL
+            );",
+        )
+        .map_err(AppError::from)?;
+        conn.pragma_update(None, "user_version", 11)
+            .map_err(AppError::from)?;
+        stored = 11;
+    }
+
     if stored < LATEST_VERSION {
         return Err(AppError::msg(format!(
             "incomplete schema migration: user_version={stored}, expected {LATEST_VERSION}"
         )));
     }
+    Ok(())
+}
+
+/// v2 migration helper: keep the oldest row per case-insensitive term so the
+/// unique index can be added. Operates on the pre-v10 `vocab` table.
+fn collapse_duplicate_vocab_terms(conn: &Connection) -> Result<(), AppError> {
+    conn.execute(
+        "DELETE FROM vocab WHERE rowid NOT IN (
+            SELECT MIN(rowid) FROM vocab GROUP BY lower(term)
+        )",
+        [],
+    )?;
     Ok(())
 }
 

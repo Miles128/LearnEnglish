@@ -5,6 +5,7 @@ mod error;
 mod feeds;
 mod import_file;
 mod rank;
+mod reflow;
 mod srs;
 mod translate;
 mod vocab;
@@ -31,6 +32,14 @@ pub fn run() {
                     cfg.disabled_feeds.clear();
                     config::save_config(&cfg)?;
                 }
+            }
+            {
+                // Drop empty articles, stamp never-measured word counts, and
+                // remove link roundups / podcast transcripts already stored.
+                let conn = state.lock_write()?;
+                let _ = db::backfill_word_counts(&conn);
+                let _ = feeds::purge_blocked_articles(&conn);
+                let _ = feeds::clear_stale_paragraph_translations_once(&conn);
             }
             app.manage(state);
             Ok(())
@@ -60,22 +69,20 @@ pub fn run() {
             commands::articles::fill_missing_tags,
             commands::articles::import_article_url,
             commands::articles::import_article_file,
+            commands::articles::repair_paragraphs,
             commands::articles::translate_paragraph,
             commands::articles::translate_selection,
             commands::articles::translate_plain_text,
             commands::articles::translate_full_article,
-            commands::vocab::add_vocab,
-            commands::vocab::list_vocab,
-            commands::vocab::due_vocab,
-            commands::vocab::review_vocab,
-            commands::vocab::set_vocab_status,
-            commands::vocab::delete_vocab,
-            commands::phrases::add_phrase,
-            commands::phrases::list_phrases,
-            commands::phrases::due_phrases,
-            commands::phrases::review_phrase,
-            commands::phrases::set_phrase_status,
-            commands::phrases::delete_phrase
+            commands::memory::add_memory,
+            commands::memory::list_memory,
+            commands::memory::due_memory,
+            commands::memory::review_memory,
+            commands::memory::set_memory_status,
+            commands::memory::delete_memory,
+            commands::known::list_known_words,
+            commands::known::add_known_word,
+            commands::known::remove_known_word
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

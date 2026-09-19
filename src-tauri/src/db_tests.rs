@@ -8,7 +8,6 @@ fn sample_article(id: &str) -> db::Article {
         id: id.into(),
         url: format!("https://example.com/{id}"),
         title: id.into(),
-        title_zh: String::new(),
         source: "Test".into(),
         category: "tech".into(),
         published_at: None,
@@ -53,7 +52,6 @@ fn db_seeds_feeds_and_stores_article() {
         id: Uuid::new_v4().to_string(),
         url: "https://example.com/a".into(),
         title: "Hello".into(),
-        title_zh: "你好".into(),
         source: "Test".into(),
         category: "tech".into(),
         published_at: None,
@@ -154,7 +152,6 @@ fn insert_article_if_new_is_idempotent() {
         id: "id-1".into(),
         url: "https://example.com/same".into(),
         title: "Original Title".into(),
-        title_zh: "原文标题".into(),
         source: "Test".into(),
         category: "tech".into(),
         published_at: None,
@@ -172,7 +169,6 @@ fn insert_article_if_new_is_idempotent() {
         id: "id-2".into(),
         url: "https://example.com/same".into(),
         title: "Changed Title".into(),
-        title_zh: String::new(),
         source: "Other".into(),
         category: "world".into(),
         published_at: Some("2024-01-01T00:00:00Z".into()),
@@ -191,7 +187,6 @@ fn insert_article_if_new_is_idempotent() {
         .expect("exists");
     assert_eq!(stored.id, "id-1");
     assert_eq!(stored.title, "Original Title");
-    assert_eq!(stored.title_zh, "原文标题");
     assert_eq!(stored.content_text, "original content that should stay");
     assert_eq!(stored.fetched_at, "2020-01-01T00:00:00Z");
 
@@ -206,7 +201,6 @@ fn list_article_urls_supports_incremental_skip() {
         id: "a1".into(),
         url: "https://example.com/one".into(),
         title: "One".into(),
-        title_zh: String::new(),
         source: "T".into(),
         category: "tech".into(),
         published_at: None,
@@ -267,7 +261,6 @@ fn purge_summary_only_removes_teasers_keeps_fulltext() {
         id: "teaser".into(),
         url: "https://example.com/teaser".into(),
         title: "Teaser".into(),
-        title_zh: String::new(),
         source: "T".into(),
         category: "tech".into(),
         published_at: None,
@@ -283,7 +276,6 @@ fn purge_summary_only_removes_teasers_keeps_fulltext() {
         id: "full".into(),
         url: "https://example.com/full".into(),
         title: "Full".into(),
-        title_zh: String::new(),
         source: "T".into(),
         category: "tech".into(),
         published_at: None,
@@ -319,8 +311,7 @@ fn purge_never_touches_user_imported_articles() {
             id: id.into(),
             url: url.into(),
             title: "Imported".into(),
-            title_zh: String::new(),
-            source: "导入".into(),
+                source: "导入".into(),
             category: "other".into(),
             published_at: None,
             content_text: "a".repeat(500), // would be purged if origin were rss
@@ -356,7 +347,6 @@ fn collect_non_english_ids_does_not_delete() {
         id: "zh1".into(),
         url: "https://example.com/zh".into(),
         title: "如何学习 Rust 编程语言入门指南".into(),
-        title_zh: String::new(),
         source: "T".into(),
         category: "tech".into(),
         published_at: None,
@@ -427,7 +417,6 @@ fn refresh_article_content_updates_longer_body() {
         id: "r1".into(),
         url: "https://example.com/refresh".into(),
         title: "Old".into(),
-        title_zh: "旧题".into(),
         source: "T".into(),
         category: "tech".into(),
         published_at: None,
@@ -449,7 +438,6 @@ fn refresh_article_content_updates_longer_body() {
         id: String::new(),
         url: "https://example.com/refresh".into(),
         title: "New Title".into(),
-        title_zh: String::new(),
         source: "T".into(),
         category: "tech".into(),
         published_at: None,
@@ -466,7 +454,6 @@ fn refresh_article_content_updates_longer_body() {
     let stored = db::get_article(&conn, "r1").unwrap().expect("exists");
     assert_eq!(stored.title, "New Title");
     assert_eq!(stored.content_text, longer);
-    assert_eq!(stored.title_zh, "旧题", "title_zh must be preserved");
     assert_eq!(stored.summary_zh, "", "stale summary cleared on body refresh");
     assert_eq!(stored.origin, "rss");
 
@@ -486,7 +473,6 @@ fn refresh_article_content_skips_url_imports() {
         id: "imp1".into(),
         url: "https://example.com/same-url".into(),
         title: "Imported".into(),
-        title_zh: String::new(),
         source: "导入".into(),
         category: "other".into(),
         published_at: None,
@@ -504,7 +490,6 @@ fn refresh_article_content_skips_url_imports() {
         id: String::new(),
         url: "https://example.com/same-url".into(),
         title: "RSS overwrite".into(),
-        title_zh: String::new(),
         source: "T".into(),
         category: "tech".into(),
         published_at: None,
@@ -535,7 +520,6 @@ fn list_articles_returns_excerpt_not_full_body() {
         id: "long1".into(),
         url: "https://example.com/long".into(),
         title: "Long".into(),
-        title_zh: String::new(),
         source: "S".into(),
         category: "tech".into(),
         published_at: None,
@@ -571,8 +555,7 @@ fn list_articles_paginates() {
             id: format!("p{i}"),
             url: format!("https://example.com/{i}"),
             title: format!("T{i}"),
-            title_zh: String::new(),
-            source: "S".into(),
+                source: "S".into(),
             category: "tech".into(),
             published_at: None,
             content_text: "x".repeat(50),
@@ -696,7 +679,8 @@ fn query_articles_filters_read_state_source_liked_and_tags() {
     for a in [&unread, &read, &liked, &tagged] {
         db::insert_article_if_new(&conn, a).unwrap();
     }
-    db::mark_article_opened(&conn, "read").unwrap();
+    // "Read" now means finished, not merely opened.
+    db::add_article_reading_progress(&conn, "read", 0, true).unwrap();
     db::set_article_liked(&conn, "liked", true).unwrap();
     db::set_article_tags(&conn, "tagged", &["ai".into(), "chips".into()]).unwrap();
 
@@ -839,12 +823,14 @@ fn retention_purge_drops_old_rss_but_keeps_liked_and_imports() {
     let _ = std::fs::remove_file(path);
 }
 
-fn sample_phrase(id: &str, text: &str) -> db::PhraseItem {
-    db::PhraseItem {
+fn sample_phrase(id: &str, text: &str) -> db::MemoryItem {
+    db::MemoryItem {
         id: id.into(),
-        phrase: text.into(),
-        meaning_zh: "测试释义".into(),
-        usage: "collocation".into(),
+        kind: "phrase".into(),
+        term: text.into(),
+        definition_zh: "测试释义".into(),
+        word_type: "collocation".into(),
+        collocations: vec![],
         context_sentence: "It is on the house.".into(),
         article_id: None,
         status: "learning".into(),
@@ -861,30 +847,53 @@ fn phrase_library_dedup_review_and_listing() {
     let path = temp_dir().join(format!("le-phrases-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");
 
-    db::insert_phrase(&conn, &sample_phrase("p1", "on the house")).unwrap();
-    assert!(db::get_phrase_by_text(&conn, "On The House").unwrap().is_some());
+    db::insert_memory(&conn, &sample_phrase("p1", "on the house")).unwrap();
+    assert!(db::get_memory_by_term(&conn, "phrase", "On The House")
+        .unwrap()
+        .is_some());
 
     // Case-insensitive unique index blocks a differently-cased duplicate.
-    let dup = db::insert_phrase(&conn, &sample_phrase("p2", "ON THE HOUSE"));
+    let dup = db::insert_memory(&conn, &sample_phrase("p2", "ON THE HOUSE"));
     assert!(dup.is_err(), "duplicate phrase must be rejected");
 
     // Due immediately (next_review_at in the past), listed once.
-    let due = db::due_phrases(&conn).unwrap();
+    let due = db::due_memory(&conn, Some("phrase")).unwrap();
     assert_eq!(due.len(), 1);
-    assert_eq!(due[0].phrase, "on the house");
+    assert_eq!(due[0].term, "on the house");
 
     // SRS: easy schedule pushes it out of the due list.
-    let mut item = db::get_phrase(&conn, "p1").unwrap().unwrap();
-    crate::srs::apply_rating_phrase(&mut item, crate::srs::Rating::Easy);
+    let mut item = db::get_memory(&conn, "p1").unwrap().unwrap();
+    crate::srs::apply_rating(&mut item, crate::srs::Rating::Easy);
     assert_eq!(item.interval_days, 1.0);
-    db::update_phrase_review(&conn, &item).unwrap();
-    assert!(db::due_phrases(&conn).unwrap().is_empty());
+    db::update_memory_review(&conn, &item).unwrap();
+    assert!(db::due_memory(&conn, Some("phrase")).unwrap().is_empty());
 
     // Status transitions + delete.
-    db::set_phrase_status(&conn, "p1", "mastered").unwrap();
-    assert_eq!(db::list_phrases(&conn, Some("mastered")).unwrap().len(), 1);
-    db::delete_phrase(&conn, "p1").unwrap();
-    assert!(db::list_phrases(&conn, None).unwrap().is_empty());
+    db::set_memory_status(&conn, "p1", "mastered").unwrap();
+    assert_eq!(
+        db::list_memory(&conn, Some("phrase"), Some("mastered"))
+            .unwrap()
+            .len(),
+        1
+    );
+    db::delete_memory(&conn, "p1").unwrap();
+    assert!(db::list_memory(&conn, Some("phrase"), None).unwrap().is_empty());
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn word_and_phrase_libraries_are_independent() {
+    let path = temp_dir().join(format!("le-memory-kind-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    // Same text in both libraries is allowed (uniqueness is per kind).
+    db::insert_memory(&conn, &sample_vocab("w1", "make", "2020-01-01T00:00:00Z")).unwrap();
+    db::insert_memory(&conn, &sample_phrase("p1", "make")).unwrap();
+
+    assert_eq!(db::list_memory(&conn, Some("word"), None).unwrap().len(), 1);
+    assert_eq!(db::list_memory(&conn, Some("phrase"), None).unwrap().len(), 1);
+    assert_eq!(db::list_memory(&conn, None, None).unwrap().len(), 2);
 
     let _ = std::fs::remove_file(path);
 }
@@ -894,27 +903,23 @@ fn vocab_dedup_by_term_and_delete_article_detaches() {
     let path = temp_dir().join(format!("le-vocab-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");
 
-    let item = db::VocabItem {
-        id: "v1".into(),
+    let item = db::MemoryItem {
         term: "Ubiquitous".into(),
         definition_zh: "无处不在的".into(),
         word_type: "adjective".into(),
         collocations: vec!["ubiquitous in".into()],
         context_sentence: "It is ubiquitous.".into(),
         article_id: Some("a1".into()),
-        status: "learning".into(),
-        interval_days: 0.0,
-        reps: 0,
-        consecutive_know: 0,
-        next_review_at: "2020-01-01T00:00:00Z".into(),
-        created_at: "2020-01-01T00:00:00Z".into(),
+        ..sample_vocab("v1", "Ubiquitous", "2020-01-01T00:00:00Z")
     };
     db::upsert_article(&conn, &sample_article("a1")).unwrap();
     db::upsert_article(&conn, &sample_article("a2")).unwrap();
-    db::insert_vocab(&conn, &item).unwrap();
+    db::insert_memory(&conn, &item).unwrap();
 
     // Case-insensitive lookup re-adding the same term returns the same row.
-    let found = db::get_vocab_by_term(&conn, "ubiquitous").unwrap().expect("exists");
+    let found = db::get_memory_by_term(&conn, "word", "ubiquitous")
+        .unwrap()
+        .expect("exists");
     assert_eq!(found.id, "v1");
 
     // Merge meta into existing entry.
@@ -922,22 +927,23 @@ fn vocab_dedup_by_term_and_delete_article_detaches() {
     merged.definition_zh = String::new(); // existing keeps its def
     merged.collocations = vec!["ubiquitous in".into(), "ubiquitous across".into()];
     merged.article_id = Some("a2".into());
-    db::update_vocab_meta(&conn, &merged).unwrap();
-    let after = db::get_vocab(&conn, "v1").unwrap().expect("exists");
+    db::update_memory_meta(&conn, &merged).unwrap();
+    let after = db::get_memory(&conn, "v1").unwrap().expect("exists");
     assert_eq!(after.collocations.len(), 2);
     assert_eq!(after.article_id.as_deref(), Some("a2"));
 
-    // Deleting an article detaches vocab rows instead of deleting them.
+    // Deleting an article detaches memory rows instead of deleting them.
     db::delete_article(&conn, "a2").unwrap();
-    let detached = db::get_vocab(&conn, "v1").unwrap().expect("still exists");
+    let detached = db::get_memory(&conn, "v1").unwrap().expect("still exists");
     assert_eq!(detached.article_id, None);
 
     let _ = std::fs::remove_file(path);
 }
 
-fn sample_vocab(id: &str, term: &str, created_at: &str) -> db::VocabItem {
-    db::VocabItem {
+fn sample_vocab(id: &str, term: &str, created_at: &str) -> db::MemoryItem {
+    db::MemoryItem {
         id: id.into(),
+        kind: "word".into(),
         term: term.into(),
         definition_zh: String::new(),
         word_type: "noun".into(),
@@ -953,43 +959,101 @@ fn sample_vocab(id: &str, term: &str, created_at: &str) -> db::VocabItem {
     }
 }
 
+/// v10 folds the legacy `vocab` and `phrases` tables into `memory_items`.
 #[test]
-fn collapse_duplicate_vocab_keeps_oldest_row() {
-    let path = temp_dir().join(format!("le-vocab-dup-{}.db", Uuid::new_v4()));
+fn v10_migration_merges_vocab_and_phrases_into_memory_items() {
+    let path = temp_dir().join(format!("le-v10-migrate-{}.db", Uuid::new_v4()));
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "CREATE TABLE vocab (
-            id TEXT PRIMARY KEY,
-            term TEXT NOT NULL,
-            definition_zh TEXT NOT NULL,
-            word_type TEXT NOT NULL,
-            collocations_json TEXT NOT NULL DEFAULT '[]',
-            context_sentence TEXT NOT NULL DEFAULT '',
-            article_id TEXT,
-            status TEXT NOT NULL DEFAULT 'learning',
-            interval_days REAL NOT NULL DEFAULT 0,
-            reps INTEGER NOT NULL DEFAULT 0,
-            consecutive_know INTEGER NOT NULL DEFAULT 0,
-            next_review_at TEXT NOT NULL,
+        "CREATE TABLE articles (id TEXT PRIMARY KEY);
+         CREATE TABLE vocab (
+            id TEXT PRIMARY KEY, term TEXT NOT NULL, definition_zh TEXT NOT NULL,
+            word_type TEXT NOT NULL, collocations_json TEXT NOT NULL DEFAULT '[]',
+            context_sentence TEXT NOT NULL DEFAULT '', article_id TEXT,
+            status TEXT NOT NULL DEFAULT 'learning', interval_days REAL NOT NULL DEFAULT 0,
+            reps INTEGER NOT NULL DEFAULT 0, consecutive_know INTEGER NOT NULL DEFAULT 0,
+            next_review_at TEXT NOT NULL, created_at TEXT NOT NULL
+         );
+         CREATE TABLE phrases (
+            id TEXT PRIMARY KEY, phrase TEXT NOT NULL, meaning_zh TEXT NOT NULL DEFAULT '',
+            usage TEXT NOT NULL DEFAULT '', context_sentence TEXT NOT NULL DEFAULT '',
+            article_id TEXT, status TEXT NOT NULL DEFAULT 'learning',
+            interval_days REAL NOT NULL DEFAULT 0, reps INTEGER NOT NULL DEFAULT 0,
+            consecutive_know INTEGER NOT NULL DEFAULT 0, next_review_at TEXT NOT NULL,
             created_at TEXT NOT NULL
-        )",
+         );
+         INSERT INTO vocab VALUES
+            ('w1','Ubiquitous','无处不在的','adjective','[\"ubiquitous in\"]','It is ubiquitous.',
+             NULL,'learning',0,0,0,'2020-01-01T00:00:00Z','2020-01-01T00:00:00Z');
+         INSERT INTO phrases VALUES
+            ('p1','on the house','本店请客','collocation','It is on the house.',
+             NULL,'learning',0,0,0,'2020-01-01T00:00:00Z','2020-01-01T00:00:00Z');
+         PRAGMA user_version = 9;",
     )
     .unwrap();
-    db::insert_vocab(&conn, &sample_vocab("old", "Hello", "2020-01-01T00:00:00Z")).unwrap();
-    db::insert_vocab(&conn, &sample_vocab("new", "hello", "2021-01-01T00:00:00Z")).unwrap();
-    db::collapse_duplicate_vocab_terms(&conn).unwrap();
-    let rows = db::list_vocab(&conn, None).unwrap();
-    assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].id, "old");
+    db::migrate(&conn).unwrap();
+
+    assert_eq!(
+        conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        11
+    );
+    let words = db::list_memory(&conn, Some("word"), None).unwrap();
+    let phrases = db::list_memory(&conn, Some("phrase"), None).unwrap();
+    assert_eq!(words.len(), 1);
+    assert_eq!(words[0].term, "Ubiquitous");
+    assert_eq!(words[0].collocations, vec!["ubiquitous in".to_string()]);
+    assert_eq!(phrases.len(), 1);
+    assert_eq!(phrases[0].term, "on the house");
+    assert_eq!(phrases[0].definition_zh, "本店请客");
+    assert_eq!(phrases[0].word_type, "collocation");
+    // Legacy tables are renamed, not dropped: rows stay recoverable.
+    let renamed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('_legacy_vocab','_legacy_phrases')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(renamed, 2, "legacy tables should be renamed, not dropped");
+    let legacy_phrases: i64 = conn
+        .query_row("SELECT COUNT(*) FROM _legacy_phrases", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(legacy_phrases, 1, "legacy phrase rows preserved");
+
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn migration_snapshot_is_written_before_version_bump() {
+    let path = temp_dir().join(format!("le-premigrate-{}.db", Uuid::new_v4()));
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.pragma_update(None, "user_version", 5).unwrap();
+
+    db::backup_before_migration(&conn, &path);
+    let backup = path.with_file_name("learnenglish.db.premigrate-v5.bak");
+    assert!(backup.exists(), "pre-migration snapshot should exist");
+
+    // Already up to date → no new snapshot.
+    let current = temp_dir().join(format!("le-premigrate-current-{}.db", Uuid::new_v4()));
+    let conn2 = rusqlite::Connection::open(&current).unwrap();
+    conn2.pragma_update(None, "user_version", 11).unwrap();
+    db::backup_before_migration(&conn2, &current);
+    assert!(!current
+        .with_file_name("learnenglish.db.premigrate-v11.bak")
+        .exists());
+
+    let _ = std::fs::remove_file(path);
+    let _ = std::fs::remove_file(backup);
+    let _ = std::fs::remove_file(current);
 }
 
 #[test]
 fn vocab_term_unique_index_rejects_case_insensitive_dup() {
     let path = temp_dir().join(format!("le-vocab-uniq-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");
-    db::insert_vocab(&conn, &sample_vocab("v1", "Focus", "2020-01-01T00:00:00Z")).unwrap();
-    let err = db::insert_vocab(&conn, &sample_vocab("v2", "focus", "2020-01-02T00:00:00Z"))
+    db::insert_memory(&conn, &sample_vocab("v1", "Focus", "2020-01-01T00:00:00Z")).unwrap();
+    let err = db::insert_memory(&conn, &sample_vocab("v2", "focus", "2020-01-02T00:00:00Z"))
         .expect_err("duplicate term");
     assert!(
         err.to_string().to_lowercase().contains("unique"),
@@ -999,15 +1063,16 @@ fn vocab_term_unique_index_rejects_case_insensitive_dup() {
 }
 
 #[test]
-fn add_or_merge_vocab_reuses_existing_term() {
+fn add_or_merge_memory_reuses_existing_term() {
     let dir = temp_dir().join(format!("le-vocab-merge-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let state = db::DbState::open(db::db_path(dir.clone())).unwrap();
     let cfg = crate::config::AppConfig::default();
-    let first = crate::vocab::add_or_merge_vocab(
+    let first = crate::vocab::add_or_merge_memory(
         &state,
         &cfg,
-        crate::vocab::AddVocabInput {
+        crate::vocab::AddMemoryInput {
+            kind: "word".into(),
             term: "serendipity".into(),
             context_sentence: "A happy serendipity.".into(),
             article_id: None,
@@ -1017,10 +1082,11 @@ fn add_or_merge_vocab_reuses_existing_term() {
         },
     )
     .unwrap();
-    let second = crate::vocab::add_or_merge_vocab(
+    let second = crate::vocab::add_or_merge_memory(
         &state,
         &cfg,
-        crate::vocab::AddVocabInput {
+        crate::vocab::AddMemoryInput {
+            kind: "word".into(),
             term: "Serendipity".into(),
             context_sentence: String::new(),
             article_id: None,
@@ -1033,6 +1099,154 @@ fn add_or_merge_vocab_reuses_existing_term() {
     assert_eq!(first.id, second.id);
     assert!(second.collocations.contains(&"pure serendipity".to_string()));
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn add_or_merge_memory_unifies_word_and_phrase_kinds() {
+    let dir = temp_dir().join(format!("le-memory-kinds-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = db::DbState::open(db::db_path(dir.clone())).unwrap();
+    let cfg = crate::config::AppConfig::default();
+    let phrase = crate::vocab::add_or_merge_memory(
+        &state,
+        &cfg,
+        crate::vocab::AddMemoryInput {
+            kind: "phrase".into(),
+            term: "  on   the house ".into(),
+            context_sentence: "It is on the house.".into(),
+            article_id: None,
+            definition_zh: Some("本店请客".into()),
+            word_type: Some("collocation".into()),
+            collocations: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(phrase.kind, "phrase");
+    assert_eq!(phrase.term, "on the house", "whitespace normalized");
+    assert_eq!(phrase.definition_zh, "本店请客");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn known_words_add_list_remove_roundtrip() {
+    let path = temp_dir().join(format!("le-known-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    // Insert normalizes case/whitespace; a differently-cased re-add is ignored.
+    db::add_known_word(&conn, "  Serendipity ").unwrap();
+    db::add_known_word(&conn, "serendipity").unwrap();
+    // Empty / whitespace-only terms are silently ignored.
+    db::add_known_word(&conn, "   ").unwrap();
+
+    let words = db::list_known_words(&conn).unwrap();
+    assert_eq!(words, vec!["serendipity".to_string()]);
+
+    db::add_known_word(&conn, "Ubiquitous").unwrap();
+    let words = db::list_known_words(&conn).unwrap();
+    assert_eq!(words.len(), 2, "sorted list keeps both terms");
+
+    db::remove_known_word(&conn, " SERENDIPITY ").unwrap();
+    let words = db::list_known_words(&conn).unwrap();
+    assert_eq!(words, vec!["ubiquitous".to_string()]);
+
+    // Removing a missing term is a no-op, not an error.
+    db::remove_known_word(&conn, "ghost").unwrap();
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn read_state_reading_and_unfinished_filters() {
+    let path = temp_dir().join(format!("le-reading-state-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    let mut untouched = sample_article("untouched");
+    untouched.source = "NPR".into();
+    let mut in_progress = sample_article("in-progress");
+    in_progress.source = "NPR".into();
+    for a in [&untouched, &in_progress] {
+        db::insert_article_if_new(&conn, a).unwrap();
+    }
+    // Merely opening (without completion) puts it in `Reading`.
+    db::mark_article_opened(&conn, "in-progress").unwrap();
+
+    let ids = |state: db::ReadState| {
+        db::query_articles(
+            &conn,
+            &db::ArticleQuery {
+                read_state: state,
+                ..Default::default()
+            },
+            Some(10),
+            Some(0),
+        )
+        .unwrap()
+        .into_iter()
+        .map(|a| a.id)
+        .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        ids(db::ReadState::Reading),
+        vec!["in-progress".to_string()],
+        "opened-but-unfinished is Reading"
+    );
+    let unfinished = ids(db::ReadState::Unfinished);
+    assert_eq!(unfinished.len(), 2, "Unfinished covers both unread and reading");
+    assert_eq!(
+        ids(db::ReadState::Unread),
+        vec!["untouched".to_string()],
+        "Unread excludes opened articles"
+    );
+
+    // Completing moves it out of Reading into Read.
+    db::add_article_reading_progress(&conn, "in-progress", 0, true).unwrap();
+    assert!(ids(db::ReadState::Reading).is_empty());
+    assert_eq!(
+        ids(db::ReadState::Read),
+        vec!["in-progress".to_string()]
+    );
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn repair_target_selection_and_body_replacement() {
+    let path = temp_dir().join(format!("le-repair-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    // Target: RSS article whose body lost all paragraph breaks.
+    let mut flat = sample_article("flat");
+    flat.content_text = "one long line without any newlines ".repeat(30);
+    // Not a target: body already has paragraph breaks.
+    let mut healthy = sample_article("healthy");
+    healthy.content_text = "First paragraph.\n\nSecond paragraph.".into();
+    // Not a target: user import (origin != rss), even with a flat body.
+    let mut imported = sample_article("imported");
+    imported.origin = "url".into();
+    imported.content_text = "another flat body ".repeat(30);
+
+    for a in [&flat, &healthy, &imported] {
+        db::insert_article_if_new(&conn, a).unwrap();
+    }
+
+    let targets = db::articles_without_paragraphs(&conn, 50).unwrap();
+    assert_eq!(targets.len(), 1, "only the flat RSS body is a repair target");
+    assert_eq!(targets[0].id, "flat");
+
+    // Replace the body as the repair path would.
+    let fixed = "First para.\n\nSecond para.\n\nThird para.";
+    db::set_article_body(&conn, "flat", fixed, 6, "page").unwrap();
+    let stored = db::get_article(&conn, "flat").unwrap().expect("exists");
+    assert_eq!(stored.content_text, fixed);
+    assert_eq!(stored.word_count, 6);
+    assert_eq!(stored.quality, "fulltext");
+    assert_eq!(stored.extraction_source, "page");
+
+    // Repaired rows leave the candidate set.
+    assert!(db::articles_without_paragraphs(&conn, 50).unwrap().is_empty());
+
+    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -1058,9 +1272,9 @@ fn article_foreign_keys_cascade_and_reject_orphans() {
 
     db::upsert_article(&conn, &sample_article("a1")).unwrap();
     db::save_translation(&conn, "a1", "paragraph", "0", "Hello", "你好", "test").unwrap();
-    db::insert_vocab(
+    db::insert_memory(
         &conn,
-        &db::VocabItem {
+        &db::MemoryItem {
             article_id: Some("a1".into()),
             ..sample_vocab("v1", "hello", "2020-01-01T00:00:00Z")
         },
@@ -1076,13 +1290,13 @@ fn article_foreign_keys_cascade_and_reject_orphans() {
         .unwrap();
     let vocab_fks: i64 = conn
         .query_row(
-            "SELECT count(*) FROM pragma_foreign_key_list('vocab')",
+            "SELECT count(*) FROM pragma_foreign_key_list('memory_items')",
             [],
             |row| row.get(0),
         )
         .unwrap();
     assert!(trans_fks >= 1, "translations should reference articles");
-    assert!(vocab_fks >= 1, "vocab should reference articles");
+    assert!(vocab_fks >= 1, "memory_items should reference articles");
 
     let err = db::save_translation(&conn, "missing", "paragraph", "0", "x", "y", "test")
         .expect_err("orphan translation");
@@ -1101,8 +1315,35 @@ fn article_foreign_keys_cascade_and_reject_orphans() {
         )
         .unwrap();
     assert_eq!(remaining, 0, "translations should cascade-delete");
-    let detached = db::get_vocab(&conn, "v1").unwrap().expect("vocab kept");
+    let detached = db::get_memory(&conn, "v1").unwrap().expect("vocab kept");
     assert_eq!(detached.article_id, None);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn reflow_cleanup_clears_paragraph_translations_once() {
+    let path = temp_dir().join(format!("le-reflow-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    db::upsert_article(&conn, &sample_article("a1")).unwrap();
+    db::save_translation(&conn, "a1", "paragraph", "0", "Hello", "你好", "test").unwrap();
+    db::save_translation(&conn, "a1", "selection", "abc", "hi", "嗨", "test").unwrap();
+
+    let removed = feeds::clear_stale_paragraph_translations_once(&conn).unwrap();
+    assert_eq!(removed, 1, "only paragraph rows are cleared");
+    assert!(db::get_translation(&conn, "a1", "paragraph", "0")
+        .unwrap()
+        .is_none());
+    assert!(db::get_translation(&conn, "a1", "selection", "abc")
+        .unwrap()
+        .is_some());
+
+    // Guarded by app_meta: a second run is a no-op even with new rows.
+    db::save_translation(&conn, "a1", "paragraph", "0", "Hello", "你好", "test").unwrap();
+    assert_eq!(feeds::clear_stale_paragraph_translations_once(&conn).unwrap(), 0);
+    assert!(db::get_translation(&conn, "a1", "paragraph", "0")
+        .unwrap()
+        .is_some());
 
     let _ = std::fs::remove_file(path);
 }
@@ -1156,15 +1397,15 @@ fn schema_adds_summary_zh_column() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 9);
-    let phrases_table: i64 = conn
+    assert_eq!(version, 11);
+    let memory_table: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='phrases'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_items'",
             [],
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(phrases_table, 1, "phrases should exist after migrate");
+    assert_eq!(memory_table, 1, "memory_items should exist after migrate");
     let meta_table: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='app_meta'",
@@ -1205,7 +1446,6 @@ fn summary_zh_roundtrips_and_missing_query() {
     let path = temp_dir().join(format!("le-summary-zh-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");
     let mut a = sample_article("s1");
-    a.title_zh = "已有译题".into();
     a.summary_zh = String::new();
     db::insert_article_if_new(&conn, &a).unwrap();
 
@@ -1215,7 +1455,6 @@ fn summary_zh_roundtrips_and_missing_query() {
 
     db::set_article_summary_zh(&conn, "s1", "这是一条不超过五十字的中文简介").unwrap();
     let stored = db::get_article(&conn, "s1").unwrap().expect("exists");
-    assert_eq!(stored.title_zh, "已有译题");
     assert_eq!(stored.summary_zh, "这是一条不超过五十字的中文简介");
     assert!(db::articles_missing_card_zh(&conn, 40).unwrap().is_empty());
 
@@ -1263,12 +1502,12 @@ fn learning_stats_uses_opens_and_new_vocab() {
     db::mark_article_opened(&conn, "bbc1").unwrap();
     db::mark_article_opened(&conn, "npr1").unwrap();
 
-    db::insert_vocab(
+    db::insert_memory(
         &conn,
         &sample_vocab("v-new", "fresh", &chrono::Utc::now().to_rfc3339()),
     )
     .unwrap();
-    db::insert_vocab(
+    db::insert_memory(
         &conn,
         &sample_vocab("v-old", "stale", "2020-01-01T00:00:00Z"),
     )

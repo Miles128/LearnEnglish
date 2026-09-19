@@ -7,8 +7,8 @@
 pub mod articles;
 pub mod config;
 pub mod feeds;
-pub mod phrases;
-pub mod vocab;
+pub mod known;
+pub mod memory;
 
 use crate::db::DbState;
 use crate::error::AppError;

@@ -71,6 +71,14 @@ pub fn list_paragraph_translations(
     Ok(rows)
 }
 
+/// Drop every cached paragraph translation. Paragraph indices are only valid
+/// for one exact paragraph split, so a re-paragraphing (reflow) change makes
+/// the stored rows unmatchable — they are cleared and re-created on demand.
+pub fn clear_paragraph_translations(conn: &Connection) -> Result<usize, AppError> {
+    let removed = conn.execute("DELETE FROM translations WHERE scope='paragraph'", [])?;
+    Ok(removed)
+}
+
 fn map_translation(row: &rusqlite::Row<'_>) -> rusqlite::Result<TranslationRow> {
     Ok(TranslationRow {
         id: row.get(0)?,

@@ -1,4 +1,4 @@
-use crate::db::{PhraseItem, VocabItem};
+use crate::db::MemoryItem;
 use crate::error::AppError;
 use chrono::{Duration, Utc};
 
@@ -69,20 +69,7 @@ pub fn apply_rating_fields(fields: SrsFields<'_>, rating: Rating) {
     }
 }
 
-pub fn apply_rating(item: &mut VocabItem, rating: Rating) {
-    apply_rating_fields(
-        SrsFields {
-            status: &mut item.status,
-            interval_days: &mut item.interval_days,
-            reps: &mut item.reps,
-            consecutive_know: &mut item.consecutive_know,
-            next_review_at: &mut item.next_review_at,
-        },
-        rating,
-    );
-}
-
-pub fn apply_rating_phrase(item: &mut PhraseItem, rating: Rating) {
+pub fn apply_rating(item: &mut MemoryItem, rating: Rating) {
     apply_rating_fields(
         SrsFields {
             status: &mut item.status,
@@ -99,9 +86,10 @@ pub fn apply_rating_phrase(item: &mut PhraseItem, rating: Rating) {
 mod tests {
     use super::*;
 
-    fn sample() -> VocabItem {
-        VocabItem {
+    fn sample() -> MemoryItem {
+        MemoryItem {
             id: "1".into(),
+            kind: "word".into(),
             term: "t".into(),
             definition_zh: "测".into(),
             word_type: "noun".into(),

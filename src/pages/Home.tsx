@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, ArticleListItem, FeedCategory, LearningStats, RefreshResult } from "../api";
+import { api, ArticleListItem, FeedCategory, LearningStats } from "../api";
 import {
   applyDifficultyOrder,
   articleNeedsCardZh,
@@ -9,16 +9,16 @@ import {
   topPickIds,
   topTags,
 } from "../homeDerived";
+import { useArticleBackfill, useHomeDifficulty, useInfiniteScroll } from "../homeHooks";
 import { formatLearningInsight } from "../learningStats";
 import {
-  articleDifficulty,
-  calibrateEdges,
-  difficultyFromScore,
   DIFFICULTY_LEVELS,
   difficultyLabel,
   type DifficultyLevel,
 } from "../difficulty";
 import { useAppConfig, useVocab } from "../store";
+import { useToast } from "../components/Toaster";
+import { emitEvent, onEvent } from "../events";
 import { ensureLexiconLoaded, isFreqBand, type FreqBand } from "../wordLevels";
 import SourceBoard from "../components/SourceBoard";
 import ArticleRow from "../components/ArticleRow";
@@ -93,8 +93,7 @@ export default function Home() {
   );
   const clearFilters = useCallback(() => setFilters(DEFAULT_FILTERS), []);
   const [sources, setSources] = useState<[string, number][]>([]);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const toast = useToast();
   const [learningStats, setLearningStats] = useState<LearningStats | null>(null);
   /** Collapsed source boards (incl. 今日推荐 via "home-top-picks"), persisted. */
   const [collapsedSources, setCollapsedSources] = useState<Set<string>>(
@@ -114,13 +113,17 @@ export default function Home() {
   const { speaking, speakTarget } = tts;
   const freqBand: FreqBand = isFreqBand(cfg.freq_band) ? cfg.freq_band : 3000;
   const hasLlm = Boolean(cfg.api_key?.trim());
-  const didBackfill = useRef(false);
-  const [cardFillError, setCardFillError] = useState<string | null>(null);
-  const [cardFilling, setCardFilling] = useState(false);
 
-  /** Any non-default filter switches from the ranked digest to the flat archive list. */
-  const archiveMode =
-    filters.read !== "unfinished" || filters.likedOnly || filters.source !== "";
+  /** Presenting rule, stated once: home = category tabs + 今日推荐 pinned +
+   *  per-source boards; the flat archive list appears whenever ANY filter is
+   *  active (status/收藏/来源/难度/标签) — a filtered digest is an archive. */
+  const hasFilter =
+    filters.read !== "unfinished" ||
+    filters.likedOnly ||
+    filters.level !== "all" ||
+    filters.tags.length > 0 ||
+    filters.source !== "";
+  const archiveMode = hasFilter;
 
   const fetchPage = useCallback(
     (offset: number) =>
@@ -147,7 +150,6 @@ export default function Home() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
       const [list, cats, stats] = await Promise.all([
         fetchPage(0),
@@ -160,14 +162,13 @@ export default function Home() {
       setCategories(cats);
       setLearningStats(stats);
     } catch (e) {
-      setError(String(e));
+      toast.err(String(e));
     } finally {
       setLoading(false);
     }
-  }, [fetchPage]);
+  }, [fetchPage, toast]);
 
   useEffect(() => {
-    didBackfill.current = false;
     void load();
   }, [load]);
 
@@ -175,43 +176,12 @@ export default function Home() {
     void api.listArticleSources().then(setSources).catch(() => undefined);
   }, []);
 
-  const fillCards = useCallback(async () => {
-    setCardFilling(true);
-    setCardFillError(null);
-    try {
-      const n = await api.fillMissingCardZh();
-      if (n > 0) await load();
-    } catch (e) {
-      didBackfill.current = false;
-      setCardFillError(String(e));
-    } finally {
-      setCardFilling(false);
-    }
-  }, [load]);
-
-  // Tag backfill shares the once-per-mount guard with the card backfill.
-  useEffect(() => {
-    if (didBackfill.current) return;
-    if (!hasLlm || loading || articles.length === 0) return;
-    if (!articles.some((a) => a.tags.length === 0)) return;
-    didBackfill.current = true;
-    void (async () => {
-      try {
-        const n = await api.fillMissingTags(100);
-        if (n > 0) await load();
-      } catch {
-        didBackfill.current = false;
-      }
-    })();
-  }, [articles, hasLlm, loading, load]);
-
-  useEffect(() => {
-    if (didBackfill.current) return;
-    if (!hasLlm || loading || articles.length === 0) return;
-    if (!articles.some(articleNeedsCardZh)) return;
-    didBackfill.current = true;
-    void fillCards();
-  }, [articles, hasLlm, loading, fillCards]);
+  const { cardFilling, cardFillError, retryFillCards } = useArticleBackfill({
+    articles,
+    hasLlm,
+    loading,
+    load,
+  });
 
   async function loadMore() {
     if (loadingMore) return;
@@ -223,32 +193,13 @@ export default function Home() {
       setArticles(merged);
       setHasMore(next.length >= PAGE_SIZE);
     } catch (e) {
-      setError(String(e));
+      toast.err(String(e));
     } finally {
       setLoadingMore(false);
     }
   }
 
-  // Infinite scroll: a sentinel near the list bottom triggers loadMore.
-  // Ref indirection keeps the observer callback on the latest closure.
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
-  const loadMoreRef = useRef(loadMore);
-  useEffect(() => {
-    loadMoreRef.current = loadMore;
-  });
-  useEffect(() => {
-    if (!hasMore) return;
-    const el = sentinelRef.current;
-    if (!el) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) loadMoreRef.current();
-      },
-      { rootMargin: "600px" },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [hasMore]);
+  const sentinelRef = useInfiniteScroll(hasMore, loadMore);
 
   // Refresh lives on the list it refreshes: signal Home via the shared event.
   async function onRefresh() {
@@ -256,11 +207,9 @@ export default function Home() {
     setRefreshing(true);
     try {
       const result = await api.refreshFeeds();
-      window.dispatchEvent(new CustomEvent("shiyan:refreshed", { detail: result }));
+      emitEvent("shiyan:refreshed", { result });
     } catch (e) {
-      window.dispatchEvent(
-        new CustomEvent("shiyan:refreshed", { detail: { error: String(e) } }),
-      );
+      emitEvent("shiyan:refreshed", { error: String(e) });
     } finally {
       setRefreshing(false);
     }
@@ -278,41 +227,20 @@ export default function Home() {
     return tabs;
   }, [categories]);
 
-  // Local difficulty index per article: density of words above this
-  // learner's word-frequency size (plus their learning terms).
-  const difficultyPrefs = useMemo(() => ({ freqBand }), [freqBand]);
-  const { difficultyById, levelCounts } = useMemo(() => {
-    // Score every visible article, calibrate the five bucket edges against
-    // this sample, then bucket. Calibration keeps 简单/普通/较难 relative to
-    // what this learner actually gets served.
-    const scored: { id: string; score: number | null }[] = [];
-    for (const a of articles) {
-      const result = articleDifficulty(
-        a.excerpt,
-        learningTerms,
-        difficultyPrefs,
-        knownTerms,
-      );
-      scored.push({ id: a.id, score: result?.score ?? null });
-    }
-    const edges = calibrateEdges(
-      scored.map((s) => s.score).filter((s): s is number => s !== null),
-    );
-    const byId = new Map<string, DifficultyLevel | null>();
-    const counts = new Map<DifficultyLevel, number>();
-    for (const { id, score } of scored) {
-      const level = score === null ? null : difficultyFromScore(score, edges);
-      byId.set(id, level);
-      if (level) counts.set(level, (counts.get(level) ?? 0) + 1);
-    }
-    return { difficultyById: byId, levelCounts: counts };
-  }, [articles, learningTerms, knownTerms, difficultyPrefs]);
+  // Local difficulty index per article — see useHomeDifficulty.
+  const { difficultyById, levelCounts } = useHomeDifficulty({
+    articles,
+    learningTerms,
+    knownTerms,
+    freqBand,
+  });
 
   const matchesLevel = useCallback(
     (a: ArticleListItem) =>
       filters.level === "all" || difficultyById.get(a.id) === filters.level,
     [filters.level, difficultyById],
   );
+
   /** Flat archive list (read/收藏/来源 filters active). */
   const visible = useMemo(() => articles.filter(matchesLevel), [articles, matchesLevel]);
 
@@ -359,38 +287,30 @@ export default function Home() {
 
   // The top bar drives refresh + feed management; Home only reacts.
   useEffect(() => {
-    function onRefreshed(e: Event) {
-      const detail = (e as CustomEvent).detail as
-        | (RefreshResult & { error?: string })
-        | undefined;
-      if (!detail) return;
-      if (detail.error) {
-        setError(detail.error);
+    return onEvent("shiyan:refreshed", (detail) => {
+      const result = detail.result;
+      if (detail.error || !result) {
+        toast.err(detail.error ?? "刷新失败");
         return;
       }
-      setMessage(
-        `新增 ${detail.added_or_updated}` +
-          (detail.skipped_existing ? ` · 已有 ${detail.skipped_existing}` : "") +
-          (detail.skipped_duplicate ? ` · 去重 ${detail.skipped_duplicate}` : "") +
-          (detail.purged_teasers ? ` · 清理残篇 ${detail.purged_teasers}` : "") +
-          (detail.purged_old ? ` · 过期清理 ${detail.purged_old}` : "") +
-          (detail.feeds_unchanged ? ` · ${detail.feeds_unchanged} 源无更新` : "") +
-          (detail.titles_translated ? ` · 译题/简介 ${detail.titles_translated}` : "") +
-          (detail.errors.length ? ` · ${detail.errors.length} 个问题` : ""),
+      toast.ok(
+        `新增 ${result.added_or_updated}` +
+          (result.skipped_existing ? ` · 已有 ${result.skipped_existing}` : "") +
+          (result.skipped_duplicate ? ` · 去重 ${result.skipped_duplicate}` : "") +
+          (result.purged_teasers ? ` · 清理残篇 ${result.purged_teasers}` : "") +
+          (result.purged_old ? ` · 过期清理 ${result.purged_old}` : "") +
+          (result.feeds_unchanged ? ` · ${result.feeds_unchanged} 源无更新` : "") +
+          (result.titles_translated ? ` · 译题/简介 ${result.titles_translated}` : "") +
+          (result.errors.length ? ` · ${result.errors.length} 个问题` : ""),
       );
       void load();
-    }
-    window.addEventListener("shiyan:refreshed", onRefreshed);
-    return () => {
-      window.removeEventListener("shiyan:refreshed", onRefreshed);
-    };
-  }, [load]);
+    });
+  }, [load, toast]);
 
   // Selection-to-translate on the home list (titles / summaries).
   const {
     popover,
     closePopover,
-    toast,
     showMeaning,
     speakWord,
     addToVocab,
@@ -405,9 +325,77 @@ export default function Home() {
       return translated;
     },
     contextFor: (source, term) => source ?? term,
-    onError: (m) => setError(m),
+    onError: (m) => toast.err(m),
+    onSuccess: (m) => toast.ok(m),
     onVocabAdded: () => void refreshLearningTerms(),
   });
+
+  // Keyboard flow (j/k/Enter/o): the navigation list mirrors what is actually
+  // on screen — collapsed boards are skipped, archive mode uses the flat list.
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const navList = useMemo(() => {
+    if (archiveMode) return visible;
+    const list: ArticleListItem[] = [];
+    if (topPicks.length > 0 && !collapsedSources.has("home-top-picks")) {
+      list.push(...topPicks);
+    }
+    for (const sec of sections) {
+      if (!collapsedSources.has(sec.source)) list.push(...sec.articles);
+    }
+    return list;
+  }, [archiveMode, visible, topPicks, sections, collapsedSources]);
+
+  useEffect(() => {
+    function onNavKey(e: KeyboardEvent) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const key = e.key;
+      if (key !== "j" && key !== "k" && key !== "Enter" && key !== "o") return;
+      const t = e.target as HTMLElement | null;
+      const tag = t?.tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        t?.isContentEditable
+      ) {
+        return;
+      }
+      // Don't hijack Enter on a focused button/link (it would double-act),
+      // and not while the selection popover is open.
+      if ((key === "Enter" || key === "o") && (tag === "BUTTON" || tag === "A")) {
+        return;
+      }
+      if (popover || navList.length === 0) return;
+      e.preventDefault();
+      if (key === "j" || key === "k") {
+        setSelectedId((prev) => {
+          const idx = prev ? navList.findIndex((a) => a.id === prev) : -1;
+          const next =
+            key === "j"
+              ? Math.min(navList.length - 1, idx + 1)
+              : Math.max(0, idx - 1);
+          return navList[next]?.id ?? null;
+        });
+        return;
+      }
+      // Enter/o: with a selection open it; without one, select the first row.
+      const target = selectedId
+        ? navList.find((a) => a.id === selectedId)
+        : navList[0];
+      if (selectedId && target) navigate(`/article/${target.id}`);
+      else if (target) setSelectedId(target.id);
+    }
+    window.addEventListener("keydown", onNavKey);
+    return () => window.removeEventListener("keydown", onNavKey);
+  }, [navList, popover, selectedId, navigate]);
+
+  // Keep the keyboard-selected row in view.
+  useEffect(() => {
+    if (!selectedId) return;
+    document
+      .querySelector(`[data-article-row="${selectedId}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [selectedId]);
 
   async function onPageMouseUp(e: React.MouseEvent) {
     const sel = window.getSelection();
@@ -424,17 +412,11 @@ export default function Home() {
       if (knownTerms.includes(key)) await unmarkKnown(key);
       else await markKnown(key);
     } catch (e) {
-      setError(String(e));
+      toast.err(String(e));
     }
   }
 
   const resumePath = lastArticlePath();
-  const hasFilter =
-    filters.read !== "unfinished" ||
-    filters.likedOnly ||
-    filters.level !== "all" ||
-    filters.tags.length > 0 ||
-    filters.source !== "";
 
   return (
     <div className="page" onMouseUp={(e) => void onPageMouseUp(e)}>
@@ -617,21 +599,15 @@ export default function Home() {
           <button
             type="button"
             className="btn small"
-            onClick={() => {
-              didBackfill.current = true;
-              void fillCards();
-            }}
+            onClick={retryFillCards}
           >
             重试
           </button>
         </p>
       )}
 
-      {message && <p className="banner ok">{message}</p>}
-      {error && <p className="banner err">{error}</p>}
       {loading && <p className="muted">加载中…</p>}
-
-      {!loading && articles.length === 0 && !error && (
+      {!loading && articles.length === 0 && (
         <div className="empty">
           <p>
             还没有文章。点上方「刷新」拉取订阅；也可以用右上角按钮导入文件，
@@ -639,7 +615,7 @@ export default function Home() {
           </p>
         </div>
       )}
-      {!loading && articles.length > 0 && visible.length === 0 && !error && (
+      {!loading && articles.length > 0 && visible.length === 0 && (
         <div className="empty">
           <p>没有符合条件的文章。</p>
         </div>
@@ -655,6 +631,7 @@ export default function Home() {
                 difficulty={difficultyById.get(a.id) ?? null}
                 showSource
                 showTags={filtersOpen}
+                highlighted={a.id === selectedId}
               />
             ))}
           </ul>
@@ -688,6 +665,7 @@ export default function Home() {
                 collapsed={collapsedSources.has("home-top-picks")}
                 onToggleCollapsed={() => toggleSourceBoard("home-top-picks")}
                 showTags={filtersOpen}
+                highlightedId={selectedId}
               />
             </div>
           )}
@@ -701,13 +679,12 @@ export default function Home() {
                 collapsed={collapsedSources.has(sec.source)}
                 onToggleCollapsed={() => toggleSourceBoard(sec.source)}
                 showTags={filtersOpen}
+                highlightedId={selectedId}
               />
             ))}
           </div>
         </>
       )}
-
-      {toast && <p className="banner ok">{toast}</p>}
 
       {popover && (
         <SelectionPopover

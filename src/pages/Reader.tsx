@@ -18,8 +18,11 @@ import {
 import { AnnotatedPara } from "../annotateText";
 import { bundledGloss, isPhraseSelection } from "../wordResolve";
 import SelectionPopover from "../components/SelectionPopover";
+import ReaderTypePanel from "../components/ReaderTypePanel";
 import ReaderParagraph from "../components/ReaderParagraph";
+import { useEscapeKey } from "../useEscapeKey";
 import { useAppConfig, useVocab } from "../store";
+import { useToast } from "../components/Toaster";
 import { loadScroll, rememberLastArticle, saveScroll, useArticle } from "../useArticle";
 import { useTts } from "../useTts";
 import { useWordPopover } from "../useWordPopover";
@@ -125,6 +128,9 @@ export default function Reader() {
   const [busyPara, setBusyPara] = useState<number | null>(null);
   const [categories, setCategories] = useState<FeedCategory[]>([]);
   const [likedOverride, setLikedOverride] = useState<boolean | null>(null);
+  const [typeOpen, setTypeOpen] = useState(false);
+  const typePanelRef = useRef<HTMLDivElement | null>(null);
+  const typeBtnRef = useRef<HTMLButtonElement | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const clickGuardRef = useRef(false);
   const readCompletedRef = useRef(false);
@@ -133,6 +139,7 @@ export default function Reader() {
   const atBottomRef = useRef(false);
 
   const tts = useTts();
+  const wordToast = useToast();
   const { speaking, speakTarget, startSpeak, stopSpeak } = tts;
   const { cfg } = useAppConfig();
   const {
@@ -154,7 +161,6 @@ export default function Reader() {
     popover,
     setPopover,
     closePopover,
-    toast,
     showMeaning,
     speakWord,
     addToVocab,
@@ -170,6 +176,7 @@ export default function Reader() {
     },
     contextFor: (source, term) => findContext(paragraphs, source ?? term),
     onError: (m) => setError(m),
+    onSuccess: (m) => wordToast.ok(m),
     onVocabAdded: () => void refreshLearningTerms(),
   });
 
@@ -204,10 +211,19 @@ export default function Reader() {
       if (!rootRef.current?.contains(e.target as Node)) {
         setPopover(null);
       }
+      // Close the typography panel on any click outside it and its toggle.
+      if (
+        !typePanelRef.current?.contains(e.target as Node) &&
+        !typeBtnRef.current?.contains(e.target as Node)
+      ) {
+        setTypeOpen(false);
+      }
     }
     document.addEventListener("mousedown", onDocMouseDown);
     return () => document.removeEventListener("mousedown", onDocMouseDown);
   }, [setPopover]);
+
+  useEscapeKey(typeOpen, () => setTypeOpen(false));
 
   const title = useMemo(() => article?.title ?? "阅读", [article]);
   const liked = likedOverride ?? article?.liked ?? false;
@@ -484,7 +500,6 @@ export default function Reader() {
     >
 
       {error && <p className="banner err">{error}</p>}
-      {toast && <p className="banner ok">{toast}</p>}
 
       <article className="article-body" onMouseUp={onMouseUp}>
         <div className="reader-title-row">
@@ -546,6 +561,22 @@ export default function Reader() {
           >
             {showFullZh ? <IconEyeOff /> : <IconTranslate />}
           </button>
+        )}
+        <button
+          ref={typeBtnRef}
+          className={`icon-btn type-toggle${typeOpen ? " active" : ""}`}
+          type="button"
+          onClick={() => setTypeOpen((v) => !v)}
+          title="排版设置"
+          aria-label="排版设置"
+          aria-expanded={typeOpen}
+        >
+          Aa
+        </button>
+        {typeOpen && (
+          <div ref={typePanelRef} className="type-panel-anchor">
+            <ReaderTypePanel />
+          </div>
         )}
           </div>
         </div>

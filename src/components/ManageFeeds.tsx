@@ -5,15 +5,20 @@ import FeedDiscoverSection, {
   type DiscoverRow,
 } from "./FeedDiscoverSection";
 import { categoryLabel } from "../readerUtils";
+import { useToast } from "./Toaster";
+
+type AddTab = "discover" | "paste" | "article";
 
 /** Subscription manager, embedded in the Settings page (订阅 tab). */
 export default function ManageFeeds() {
   const navigate = useNavigate();
+  const toast = useToast();
   const [categories, setCategories] = useState<FeedCategory[]>([]);
   const [feeds, setFeeds] = useState<FeedSource[]>([]);
   const [categoryId, setCategoryId] = useState("all");
   const [newCatLabel, setNewCatLabel] = useState("");
   const [addingCat, setAddingCat] = useState(false);
+  const [addTab, setAddTab] = useState<AddTab>("discover");
   const [discovering, setDiscovering] = useState(false);
   const [candidates, setCandidates] = useState<DiscoverRow[]>([]);
   const [pasteUrl, setPasteUrl] = useState("");
@@ -22,7 +27,6 @@ export default function ManageFeeds() {
   const [articleUrl, setArticleUrl] = useState("");
   const [importingArticle, setImportingArticle] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -63,7 +67,25 @@ export default function ManageFeeds() {
         prev.map((f) => (f.id === id ? { ...f, enabled } : f)),
       );
     } catch (e) {
-      setError(String(e));
+      toast.err(String(e));
+    }
+  }
+
+  async function onDeleteFeed(feed: FeedSource) {
+    if (
+      !window.confirm(
+        `删除订阅源「${feed.name}」？已收录的文章会保留，但不再拉取更新。`,
+      )
+    ) {
+      return;
+    }
+    setError(null);
+    try {
+      await api.deleteFeedSource(feed.id);
+      setFeeds((prev) => prev.filter((f) => f.id !== feed.id));
+      toast.ok(`已删除订阅源：${feed.name}`);
+    } catch (e) {
+      toast.err(String(e));
     }
   }
 
@@ -78,9 +100,9 @@ export default function ManageFeeds() {
       setNewCatLabel("");
       setCategories((prev) => [...prev, cat]);
       setCategoryId(cat.id);
-      setMessage(`已添加分类「${cat.label}」`);
+      toast.ok(`已添加分类「${cat.label}」`);
     } catch (err) {
-      setError(String(err));
+      toast.err(String(err));
     } finally {
       setAddingCat(false);
     }
@@ -89,7 +111,6 @@ export default function ManageFeeds() {
   async function onDiscover() {
     setDiscovering(true);
     setError(null);
-    setMessage(null);
     setCandidates([]);
     try {
       const list = await api.discoverFeeds(discoverCategoryId);
@@ -98,7 +119,7 @@ export default function ManageFeeds() {
         subscribed: subscribedUrls.has(c.url.trim()),
       }));
       setCandidates(rows);
-      setMessage(`找到 ${rows.length} 个候选，正在校验…`);
+      toast.ok(`找到 ${rows.length} 个候选，正在校验…`);
       for (let i = 0; i < rows.length; i++) {
         setCandidates((prev) =>
           prev.map((r, idx) => (idx === i ? { ...r, validating: true } : r)),
@@ -129,7 +150,7 @@ export default function ManageFeeds() {
           );
         }
       }
-      setMessage("校验完成，可订阅可用源");
+      toast.ok("校验完成，可订阅可用源");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -157,9 +178,9 @@ export default function ManageFeeds() {
         prev.map((c) => (c.url === row.url ? { ...c, subscribed: true } : c)),
       );
       await load();
-      setMessage(`已订阅：${row.name}`);
+      toast.ok(`已订阅：${row.name}`);
     } catch (e) {
-      setError(String(e));
+      toast.err(String(e));
     }
   }
 
@@ -172,11 +193,11 @@ export default function ManageFeeds() {
     try {
       const article = await api.importArticleUrl(url);
       setArticleUrl("");
-      setMessage(`已导入文章：${article.title}`);
+      toast.ok(`已导入文章：${article.title}`);
       // Same behavior as file import: land the reader on the fresh article.
       navigate(`/article/${article.id}`);
     } catch (err) {
-      setError(String(err));
+      toast.err(String(err));
     } finally {
       setImportingArticle(false);
     }
@@ -205,9 +226,9 @@ export default function ManageFeeds() {
       setPasteUrl("");
       setPasteName("");
       await load();
-      setMessage(`已订阅：${name}`);
+      toast.ok(`已订阅：${name}`);
     } catch (err) {
-      setError(String(err));
+      toast.err(String(err));
     } finally {
       setPasting(false);
     }
@@ -215,7 +236,6 @@ export default function ManageFeeds() {
 
   return (
     <div className="feeds-page">
-      {message && <p className="banner ok">{message}</p>}
       {error && <p className="banner err">{error}</p>}
 
       <div className="feeds-cat-row">
@@ -236,19 +256,22 @@ export default function ManageFeeds() {
             {c.label}
           </button>
         ))}
+        <form className="feeds-cat-add" onSubmit={(e) => void onAddCategory(e)}>
+          <input
+            value={newCatLabel}
+            onChange={(e) => setNewCatLabel(e.target.value)}
+            placeholder="新建分类"
+            disabled={addingCat}
+          />
+          <button
+            className="btn small"
+            type="submit"
+            disabled={addingCat || !newCatLabel.trim()}
+          >
+            {addingCat ? "添加中…" : "+ 分类"}
+          </button>
+        </form>
       </div>
-
-      <form className="feeds-add-cat" onSubmit={(e) => void onAddCategory(e)}>
-        <input
-          value={newCatLabel}
-          onChange={(e) => setNewCatLabel(e.target.value)}
-          placeholder="新建分类名…"
-          disabled={addingCat}
-        />
-        <button className="btn" type="submit" disabled={addingCat || !newCatLabel.trim()}>
-          {addingCat ? "添加中…" : "+ 分类"}
-        </button>
-      </form>
 
       <section className="feeds-drawer-section">
         <h3>我的订阅</h3>
@@ -257,81 +280,121 @@ export default function ManageFeeds() {
             <li className="muted">该分类下暂无订阅</li>
           )}
           {filteredFeeds.map((f) => (
-            <li key={f.id}>
-              <label className="feed-row">
+            <li key={f.id} className="feed-row-item">
+              <label
+                className="feed-enabled"
+                title={f.enabled ? "已启用" : "已停用"}
+              >
                 <input
                   type="checkbox"
                   checked={f.enabled}
                   onChange={(e) => void toggleFeed(f.id, e.target.checked)}
                 />
-                <span className="feed-row-main">
+              </label>
+              <div className="feed-row-main">
+                <div className="feed-row-title">
                   <strong>{f.name}</strong>
-                  <span className="muted">
-                    {" "}
-                    · {f.origin === "user" ? "自订" : "精选"}
-                    {f.description ? ` · ${f.description}` : ""}
+                  <span className={f.origin === "user" ? "pill" : "pill muted-pill"}>
+                    {f.origin === "user" ? "自订" : "精选"}
                   </span>
                   <span className="feed-url muted">{f.url}</span>
-                </span>
-              </label>
+                  {f.description && (
+                    <span className="muted feed-desc">{f.description}</span>
+                  )}
+                </div>
+              </div>
+              {f.origin === "user" && (
+                <button
+                  type="button"
+                  className="icon-btn feed-delete"
+                  title="删除订阅源"
+                  aria-label={`删除订阅源 ${f.name}`}
+                  onClick={() => void onDeleteFeed(f)}
+                >
+                  ✕
+                </button>
+              )}
             </li>
           ))}
         </ul>
+        <p className="muted feed-hint">精选源不支持删除，可取消勾选停用。</p>
       </section>
 
-      <FeedDiscoverSection
-        categoryLabel={categoryLabel(discoverCategoryId, categories)}
-        discovering={discovering}
-        candidates={candidates}
-        onDiscover={() => void onDiscover()}
-        onSubscribe={(row) => void onSubscribeCandidate(row)}
-      />
+      <details className="feeds-add-block">
+        <summary>添加订阅 / 导入文章</summary>
+        <div className="tabs feeds-add-tabs">
+          {(
+            [
+              ["discover", "发现新源"],
+              ["paste", "粘贴 RSS"],
+              ["article", "导入文章"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              className={addTab === id ? "tab active" : "tab"}
+              onClick={() => setAddTab(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
-      <section className="feeds-drawer-section">
-        <h3>导入文章链接</h3>
-        <form className="feeds-paste" onSubmit={(e) => void onImportArticle(e)}>
-          <input
-            className="feeds-paste-url"
-            type="url"
-            value={articleUrl}
-            onChange={(e) => setArticleUrl(e.target.value)}
-            placeholder="https://example.com/some-article"
-            disabled={importingArticle}
+        {addTab === "discover" && (
+          <FeedDiscoverSection
+            categoryLabel={categoryLabel(discoverCategoryId, categories)}
+            discovering={discovering}
+            candidates={candidates}
+            onDiscover={() => void onDiscover()}
+            onSubscribe={(row) => void onSubscribeCandidate(row)}
           />
-          <button
-            className="btn primary"
-            type="submit"
-            disabled={importingArticle || !articleUrl.trim()}
-          >
-            {importingArticle ? "导入中…" : "导入"}
-          </button>
-        </form>
-      </section>
+        )}
 
-      <section className="feeds-drawer-section">
-        <h3>粘贴 RSS 订阅</h3>
-        <form className="feeds-paste" onSubmit={(e) => void onPasteSubscribe(e)}>
-          <input
-            value={pasteName}
-            onChange={(e) => setPasteName(e.target.value)}
-            placeholder="名称（可选）"
-            disabled={pasting}
-          />
-          <input
-            value={pasteUrl}
-            onChange={(e) => setPasteUrl(e.target.value)}
-            placeholder="https://…/rss.xml"
-            disabled={pasting}
-          />
-          <button
-            className="btn primary"
-            type="submit"
-            disabled={pasting || !pasteUrl.trim()}
-          >
-            {pasting ? "订阅中…" : "订阅"}
-          </button>
-        </form>
-      </section>
+        {addTab === "paste" && (
+          <form className="feeds-paste" onSubmit={(e) => void onPasteSubscribe(e)}>
+            <input
+              value={pasteName}
+              onChange={(e) => setPasteName(e.target.value)}
+              placeholder="名称（可选）"
+              disabled={pasting}
+            />
+            <input
+              value={pasteUrl}
+              onChange={(e) => setPasteUrl(e.target.value)}
+              placeholder="https://…/rss.xml"
+              disabled={pasting}
+            />
+            <button
+              className="btn primary"
+              type="submit"
+              disabled={pasting || !pasteUrl.trim()}
+            >
+              {pasting ? "订阅中…" : "订阅"}
+            </button>
+          </form>
+        )}
+
+        {addTab === "article" && (
+          <form className="feeds-paste" onSubmit={(e) => void onImportArticle(e)}>
+            <input
+              className="feeds-paste-url"
+              type="url"
+              value={articleUrl}
+              onChange={(e) => setArticleUrl(e.target.value)}
+              placeholder="https://example.com/some-article"
+              disabled={importingArticle}
+            />
+            <button
+              className="btn primary"
+              type="submit"
+              disabled={importingArticle || !articleUrl.trim()}
+            >
+              {importingArticle ? "导入中…" : "导入"}
+            </button>
+          </form>
+        )}
+      </details>
     </div>
   );
 }

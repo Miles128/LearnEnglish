@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, defaultAppConfig, type AppConfig } from "../api";
 import { normalizeConfig, useAppConfig } from "../store";
+import { useToast } from "../components/Toaster";
 import PageBack from "../components/PageBack";
 import { isThemePref, THEME_LABELS, THEME_PREFS, type ThemePref } from "../theme";
 import {
@@ -24,13 +25,13 @@ import {
 } from "../wordLevels";
 import ManageFeeds from "../components/ManageFeeds";
 
-type Tab = "reading" | "appearance" | "subscriptions" | "llm";
+type Tab = "reading" | "subscriptions" | "llm" | "data";
 
 const TABS = [
   ["reading", "阅读"],
-  ["appearance", "外观"],
   ["subscriptions", "订阅"],
   ["llm", "大模型"],
+  ["data", "数据"],
 ] as const;
 
 type PrefOption = { value: string | number; label: string };
@@ -84,14 +85,50 @@ const LINE_WIDTH_OPTIONS: readonly PrefOption[] = READER_LINE_WIDTHS.map(
 
 export default function Settings() {
   const { cfg: savedCfg, ready, save: saveCfg } = useAppConfig();
+  const toast = useToast();
   const [cfg, setCfg] = useState<AppConfig>(() =>
     normalizeConfig(defaultAppConfig()),
   );
+  const cfgRef = useRef(cfg);
+  useEffect(() => {
+    cfgRef.current = cfg;
+  }, [cfg]);
   const [tab, setTab] = useState<Tab>("reading");
-  const [msg, setMsg] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [repairing, setRepairing] = useState(false);
   const [repairMsg, setRepairMsg] = useState<string | null>(null);
+  const [backingUp, setBackingUp] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const saveTimer = useRef<number | undefined>(undefined);
+  const pendingSaveRef = useRef(false);
+
+  async function backupDb() {
+    setBackingUp(true);
+    try {
+      const path = await api.backupDatabase();
+      if (path) toast.ok(`已备份到 ${path}`);
+    } catch (e) {
+      toast.err(String(e));
+    } finally {
+      setBackingUp(false);
+    }
+  }
+
+  async function restoreDb() {
+    const confirmed = window.confirm(
+      "恢复将覆盖当前全部数据（文章、生词、复习进度、已认识词）。\n" +
+        "重启前当前数据不会丢失；恢复在重启拾言后生效，且会自动留一份 .pre-restore.bak。\n\n确定继续？",
+    );
+    if (!confirmed) return;
+    setRestoring(true);
+    try {
+      const msg = await api.restoreDatabase();
+      toast.ok(msg);
+    } catch (e) {
+      if (!String(e).includes("未选择备份文件")) toast.err(String(e));
+    } finally {
+      setRestoring(false);
+    }
+  }
 
   async function repairParagraphs() {
     setRepairing(true);
@@ -111,30 +148,62 @@ export default function Settings() {
     if (ready) setCfg(normalizeConfig(savedCfg));
   }, [ready, savedCfg]);
 
-  async function save() {
-    setMsg(null);
-    setError(null);
-    try {
-      await saveCfg(normalizeConfig(cfg));
-      setMsg("已保存到 config.local.json");
-    } catch (e) {
-      setError(String(e));
-    }
-  }
+  const persist = useCallback(
+    async (next: AppConfig) => {
+      try {
+        await saveCfg(next);
+      } catch (e) {
+        toast.err(String(e));
+      }
+    },
+    [saveCfg, toast],
+  );
+
+  /** Apply a patch to local state; selects persist right away. */
+  const updateNow = useCallback(
+    (patch: Partial<AppConfig>) => {
+      const next = normalizeConfig({ ...cfgRef.current, ...patch });
+      cfgRef.current = next;
+      setCfg(next);
+      void persist(next);
+    },
+    [persist],
+  );
+
+  /** Text/number inputs debounce so typing doesn't hit disk per keystroke. */
+  const updateSoon = useCallback(
+    (patch: Partial<AppConfig>) => {
+      const next = normalizeConfig({ ...cfgRef.current, ...patch });
+      cfgRef.current = next;
+      setCfg(next);
+      if (saveTimer.current) window.clearTimeout(saveTimer.current);
+      pendingSaveRef.current = true;
+      saveTimer.current = window.setTimeout(() => {
+        saveTimer.current = undefined;
+        pendingSaveRef.current = false;
+        void persist(cfgRef.current);
+      }, 800);
+    },
+    [persist],
+  );
+
+  // Flush a pending debounced save when leaving the page.
+  useEffect(() => {
+    return () => {
+      if (saveTimer.current) {
+        window.clearTimeout(saveTimer.current);
+        saveTimer.current = undefined;
+        if (pendingSaveRef.current) {
+          void saveCfg(cfgRef.current).catch(() => undefined);
+          pendingSaveRef.current = false;
+        }
+      }
+    };
+  }, [saveCfg]);
 
   return (
     <div className="page">
-      <header className="page-header page-header-slim">
-        <div>
-          <p className="muted">难度、排版与 LLM（写入本地 config.local.json）</p>
-        </div>
-        <button className="btn primary" onClick={() => void save()}>
-          保存
-        </button>
-        <PageBack />
-      </header>
-
-      <div className="tabs">
+      <div className="tabs header-tabs">
         {TABS.map(([id, label]) => (
           <button
             key={id}
@@ -145,25 +214,21 @@ export default function Settings() {
             {label}
           </button>
         ))}
+        <PageBack />
       </div>
-
-      {msg && <p className="banner ok">{msg}</p>}
-      {error && <p className="banner err">{error}</p>}
-
-      {tab === "appearance" && (
-        <section className="settings-section">
-          <h2>外观</h2>
-          <PrefSelect
-            label="主题"
-            value={isThemePref(cfg.theme) ? cfg.theme : "system"}
-            onChange={(raw) => setCfg({ ...cfg, theme: raw as ThemePref })}
-            options={THEME_OPTIONS}
-          />
-        </section>
-      )}
 
       {tab === "reading" && (
         <>
+          <section className="settings-section">
+            <h2>外观</h2>
+            <PrefSelect
+              label="主题"
+              value={isThemePref(cfg.theme) ? cfg.theme : "system"}
+              onChange={(raw) => updateNow({ theme: raw as ThemePref })}
+              options={THEME_OPTIONS}
+            />
+          </section>
+
           <section className="settings-section">
             <h2>阅读难度</h2>
             <p className="muted">
@@ -172,17 +237,13 @@ export default function Settings() {
             <PrefSelect
               label="我的 CEFR 水平"
               value={cfg.cefr_level}
-              onChange={(raw) =>
-                setCfg({ ...cfg, cefr_level: raw as CefrLevel })
-              }
+              onChange={(raw) => updateNow({ cefr_level: raw as CefrLevel })}
               options={CEFR_OPTIONS}
             />
             <PrefSelect
               label="词频上限（大约认识多少词）"
               value={cfg.freq_band}
-              onChange={(raw) =>
-                setCfg({ ...cfg, freq_band: Number(raw) as FreqBand })
-              }
+              onChange={(raw) => updateNow({ freq_band: Number(raw) as FreqBand })}
               options={FREQ_OPTIONS}
             />
             <div className="placement-settings">
@@ -203,21 +264,19 @@ export default function Settings() {
 
           <section className="settings-section">
             <h2>阅读排版</h2>
-            <p className="muted">只作用于阅读页正文。保存后打开文章即可看到效果。</p>
+            <p className="muted">只作用于阅读页正文。改动即时生效，阅读页内也可用「Aa」按钮调整。</p>
             <div className="settings-type-grid">
               <PrefSelect
                 label="字体"
                 value={cfg.reader_font}
-                onChange={(raw) =>
-                  setCfg({ ...cfg, reader_font: raw as ReaderFontId })
-                }
+                onChange={(raw) => updateNow({ reader_font: raw as ReaderFontId })}
                 options={FONT_OPTIONS}
               />
               <PrefSelect
                 label="字号"
                 value={cfg.reader_font_size}
                 onChange={(raw) =>
-                  setCfg({ ...cfg, reader_font_size: Number(raw) as ReaderFontSize })
+                  updateNow({ reader_font_size: Number(raw) as ReaderFontSize })
                 }
                 options={FONT_SIZE_OPTIONS}
               />
@@ -225,10 +284,7 @@ export default function Settings() {
                 label="行距"
                 value={cfg.reader_line_height}
                 onChange={(raw) =>
-                  setCfg({
-                    ...cfg,
-                    reader_line_height: Number(raw) as ReaderLineHeight,
-                  })
+                  updateNow({ reader_line_height: Number(raw) as ReaderLineHeight })
                 }
                 options={LINE_HEIGHT_OPTIONS}
               />
@@ -236,7 +292,7 @@ export default function Settings() {
                 label="行宽"
                 value={cfg.reader_line_width}
                 onChange={(raw) =>
-                  setCfg({ ...cfg, reader_line_width: raw as ReaderLineWidthId })
+                  updateNow({ reader_line_width: raw as ReaderLineWidthId })
                 }
                 options={LINE_WIDTH_OPTIONS}
               />
@@ -263,8 +319,7 @@ export default function Settings() {
                 max={365}
                 value={cfg.article_retention_days}
                 onChange={(e) =>
-                  setCfg({
-                    ...cfg,
+                  updateSoon({
                     article_retention_days: Math.max(
                       0,
                       Math.min(365, Number(e.target.value) || 0),
@@ -310,7 +365,7 @@ export default function Settings() {
             Base URL
             <input
               value={cfg.base_url}
-              onChange={(e) => setCfg({ ...cfg, base_url: e.target.value })}
+              onChange={(e) => updateSoon({ base_url: e.target.value })}
               placeholder="https://api.openai.com/v1"
             />
           </label>
@@ -319,7 +374,7 @@ export default function Settings() {
             <input
               type="password"
               value={cfg.api_key}
-              onChange={(e) => setCfg({ ...cfg, api_key: e.target.value })}
+              onChange={(e) => updateSoon({ api_key: e.target.value })}
               placeholder="sk-..."
             />
           </label>
@@ -327,7 +382,7 @@ export default function Settings() {
             Model
             <input
               value={cfg.model}
-              onChange={(e) => setCfg({ ...cfg, model: e.target.value })}
+              onChange={(e) => updateSoon({ model: e.target.value })}
               placeholder="gpt-4o-mini"
             />
           </label>
@@ -335,6 +390,31 @@ export default function Settings() {
             可复制 <code>config.local.json.example</code> 为{" "}
             <code>config.local.json</code> 后编辑；该文件已 gitignore。
           </p>
+        </section>
+      )}
+      {tab === "data" && (
+        <section className="settings-section">
+          <h2>备份与恢复</h2>
+          <p className="muted">
+            备份生成整个数据库的一致快照（文章、生词、复习进度、已认识词、查词历史）。
+            恢复时选择备份文件，重启拾言后生效；当前数据会自动备份为 .pre-restore.bak。
+          </p>
+          <div className="data-actions">
+            <button
+              className="btn primary"
+              onClick={() => void backupDb()}
+              disabled={backingUp}
+            >
+              {backingUp ? "备份中…" : "备份数据库"}
+            </button>
+            <button
+              className="btn"
+              onClick={() => void restoreDb()}
+              disabled={restoring}
+            >
+              {restoring ? "校验中…" : "恢复数据库…"}
+            </button>
+          </div>
         </section>
       )}
     </div>

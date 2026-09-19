@@ -1,5 +1,5 @@
 use crate::config;
-use crate::db::{self, DbState, MemoryItem};
+use crate::db::{self, DbState, LookupEntry, MemoryItem};
 use crate::error::AppError;
 use crate::srs::{apply_rating, Rating};
 use crate::vocab::{self, AddMemoryInput};
@@ -63,6 +63,53 @@ pub fn set_memory_status(
 pub fn delete_memory(state: tauri::State<'_, DbState>, id: String) -> Result<(), AppError> {
     let conn = state.lock_write()?;
     Ok(db::delete_memory(&conn, &id)?)
+}
+
+// ---- Lookup history ----
+
+/// Fire-and-forget record of one selection-popover lookup.
+#[tauri::command]
+pub fn record_lookup(
+    state: tauri::State<'_, DbState>,
+    term: String,
+    context: Option<String>,
+    article_id: Option<String>,
+) -> Result<(), AppError> {
+    let conn = state.lock_write()?;
+    Ok(db::record_lookup(
+        &conn,
+        &term,
+        context.as_deref().unwrap_or(""),
+        article_id.as_deref(),
+    )?)
+}
+
+#[tauri::command]
+pub fn list_lookups(
+    state: tauri::State<'_, DbState>,
+    search: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<Vec<LookupEntry>, AppError> {
+    let conn = state.lock_read()?;
+    Ok(db::list_lookups(
+        &conn,
+        search.as_deref(),
+        limit.unwrap_or(100),
+        offset.unwrap_or(0),
+    )?)
+}
+
+#[tauri::command]
+pub fn delete_lookup(state: tauri::State<'_, DbState>, id: i64) -> Result<(), AppError> {
+    let conn = state.lock_write()?;
+    Ok(db::delete_lookup(&conn, id)?)
+}
+
+#[tauri::command]
+pub fn clear_lookups(state: tauri::State<'_, DbState>) -> Result<(), AppError> {
+    let conn = state.lock_write()?;
+    Ok(db::clear_lookups(&conn)?)
 }
 
 /// Export the whole vocab library (words + phrases, all statuses) as a CSV

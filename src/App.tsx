@@ -9,6 +9,7 @@ import {
   shouldShowPlacementNav,
 } from "./placement/engine";
 import { useAppConfig } from "./store";
+import { useToast } from "./components/Toaster";
 import { applyTheme, isThemePref } from "./theme";
 import { api } from "./api";
 import { type RefreshProgress } from "./api";
@@ -58,7 +59,7 @@ function IconSettings() {
 export default function App() {
   const [progress, setProgress] = useState<RefreshProgress | null>(null);
   const [importingFile, setImportingFile] = useState(false);
-  const [topbarError, setTopbarError] = useState<string | null>(null);
+  const toast = useToast();
   const navigate = useNavigate();
   const location = useLocation();
   const { cfg, ready, loadError, refresh } = useAppConfig();
@@ -103,7 +104,6 @@ export default function App() {
 
   async function onImportFile() {
     if (importingFile) return;
-    setTopbarError(null);
     let selected: string | string[] | null;
     try {
       selected = await open({
@@ -111,7 +111,7 @@ export default function App() {
         filters: [{ name: "文档", extensions: ["txt", "pdf", "docx"] }],
       });
     } catch (e) {
-      setTopbarError(String(e));
+      toast.err(String(e));
       return;
     }
     if (selected === null) return;
@@ -122,7 +122,7 @@ export default function App() {
       const article = await api.importArticleFile(path);
       navigate(`/article/${article.id}`);
     } catch (e) {
-      setTopbarError(String(e));
+      toast.err(String(e));
     } finally {
       setImportingFile(false);
     }
@@ -207,10 +207,8 @@ export default function App() {
             </button>
           </div>
         )}
-        {topbarError && <p className="banner err">{topbarError}</p>}
         <Outlet />
       </main>
-
       {(showBar || showDoneBriefly) && progress && (
         <div
           className={`refresh-progress ${progress.phase === "done" ? "done" : ""}`}

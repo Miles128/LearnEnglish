@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { MemoryItem } from "./types";
+import type { LookupEntry, MemoryItem } from "./types";
 
 export type MemoryKind = "word" | "phrase";
 
@@ -44,4 +44,20 @@ export const apiMemory = {
   listKnownWords: () => invoke<string[]>("list_known_words"),
   addKnownWord: (term: string) => invoke<void>("add_known_word", { term }),
   removeKnownWord: (term: string) => invoke<void>("remove_known_word", { term }),
+
+  // Lookup history: every term resolved via the selection popover.
+  recordLookup: (term: string, context?: string | null, articleId?: string | null) =>
+    invoke<void>("record_lookup", {
+      term,
+      context: context ?? null,
+      articleId: articleId ?? null,
+    }),
+  listLookups: (search?: string, limit?: number, offset?: number) =>
+    invoke<LookupEntry[]>("list_lookups", {
+      search: search ?? null,
+      limit: limit ?? null,
+      offset: offset ?? null,
+    }),
+  deleteLookup: (id: number) => invoke<void>("delete_lookup", { id }),
+  clearLookups: () => invoke<void>("clear_lookups"),
 };

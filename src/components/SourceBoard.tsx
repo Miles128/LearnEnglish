@@ -17,6 +17,8 @@ type Props = {
   onToggleCollapsed: () => void;
   /** Forwarded to ArticleRow: hide tags until the 标签 toggle is on. */
   showTags?: boolean;
+  /** Keyboard navigation highlight (article id), forwarded to ArticleRow. */
+  highlightedId?: string | null;
 };
 
 /** One per-source board on the home page: header + article list. */
@@ -26,6 +28,7 @@ export default function SourceBoard({
   collapsed,
   onToggleCollapsed,
   showTags,
+  highlightedId,
 }: Props) {
   return (
     <section className="source-board">
@@ -49,6 +52,7 @@ export default function SourceBoard({
               article={a}
               difficulty={difficultyById.get(a.id) ?? null}
               showTags={showTags}
+              highlighted={a.id === highlightedId}
             />
           ))}
         </ul>

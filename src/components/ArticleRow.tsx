@@ -16,6 +16,8 @@ type Props = {
   showSource?: boolean;
   /** Show topic tags; the home list hides them unless 标签 is toggled on. */
   showTags?: boolean;
+  /** Keyboard navigation highlight (j/k on the home page). */
+  highlighted?: boolean;
 };
 
 /** One article row, shared by the home boards and the library list. */
@@ -24,14 +26,16 @@ export default function ArticleRow({
   difficulty,
   showSource,
   showTags = true,
+  highlighted = false,
 }: Props) {
   const blurb = articleListBlurb(article);
   const lengthLabel = articleLengthLabel(article.word_count);
+  const read = articleIsRead(article);
   return (
-    <li>
+    <li className="article-row-li" data-article-row={article.id}>
       <Link
         to={`/article/${article.id}`}
-        className={articleIsRead(article) ? "article-row is-read" : "article-row"}
+        className={`article-row${read ? " is-read" : ""}${highlighted ? " is-active" : ""}`}
       >
         <div className="article-title-line">
           <h3 className="article-title-en">{article.title}</h3>
@@ -46,7 +50,7 @@ export default function ArticleRow({
           <p className="article-row-source muted">
             {article.source}
             {article.liked ? " · ★ 收藏" : ""}
-            {articleIsRead(article) ? " · 已读" : ""}
+            {read ? " · 已读" : ""}
           </p>
         ) : null}
         {blurb ? <p className="article-summary-zh">{blurb}</p> : null}

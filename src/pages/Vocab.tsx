@@ -3,10 +3,11 @@ import { Link } from "react-router-dom";
 import { useAppConfig, useVocab } from "../store";
 import { api } from "../api";
 import KnownWords from "../components/KnownWords";
+import LookupHistory from "../components/LookupHistory";
 import MemoryLibrary from "../components/MemoryLibrary";
 import PageBack from "../components/PageBack";
 
-type Library = "vocab" | "phrases" | "known";
+type Library = "vocab" | "phrases" | "known" | "lookups";
 
 export default function Vocab() {
   const { refreshLearningTerms } = useVocab();
@@ -56,6 +57,7 @@ export default function Vocab() {
             ["vocab", "生词"],
             ["phrases", "短语组合"],
             ["known", "已认识"],
+            ["lookups", "查词"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -70,6 +72,8 @@ export default function Vocab() {
 
       {library === "known" ? (
         <KnownWords />
+      ) : library === "lookups" ? (
+        <LookupHistory />
       ) : library === "phrases" ? (
         <MemoryLibrary
           kind="phrase"

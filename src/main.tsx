@@ -4,6 +4,7 @@ import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import App from "./App";
 import ErrorBoundary from "./ErrorBoundary";
 import { AppConfigProvider, VocabProvider } from "./store";
+import { ToastProvider } from "./components/Toaster";
 import Home from "./pages/Home";
 import Reader from "./pages/Reader";
 import Vocab from "./pages/Vocab";
@@ -14,7 +15,8 @@ import Placement from "./pages/Placement";
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <AppConfigProvider>
+      <ToastProvider>
+        <AppConfigProvider>
         <VocabProvider>
           <HashRouter>
             <Routes>
@@ -30,7 +32,8 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
             </Routes>
           </HashRouter>
         </VocabProvider>
-      </AppConfigProvider>
+        </AppConfigProvider>
+      </ToastProvider>
     </ErrorBoundary>
   </React.StrictMode>,
 );

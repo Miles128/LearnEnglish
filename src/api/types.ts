@@ -3,6 +3,7 @@ import type { AppConfig as RustAppConfig } from "../../src-tauri/bindings/AppCon
 
 export type { Article } from "../../src-tauri/bindings/Article";
 export type { ArticleListItem } from "../../src-tauri/bindings/ArticleListItem";
+export type { LookupEntry } from "../../src-tauri/bindings/LookupEntry";
 export type { ArticleView } from "../../src-tauri/bindings/ArticleView";
 export type { FeedCategory } from "../../src-tauri/bindings/FeedCategory";
 export type { FeedDiscoverCandidate } from "../../src-tauri/bindings/FeedDiscoverCandidate";

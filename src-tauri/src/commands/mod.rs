@@ -6,6 +6,7 @@
 
 pub mod articles;
 pub mod config;
+pub mod data;
 pub mod feeds;
 pub mod known;
 pub mod memory;

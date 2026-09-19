@@ -20,6 +20,13 @@ pub fn set_feed_enabled(
     Ok(db::set_feed_enabled(&conn, &id, enabled)?)
 }
 
+/// Delete a user-subscribed feed (curated feeds are disable-only).
+#[tauri::command]
+pub fn delete_feed_source(state: tauri::State<'_, DbState>, id: String) -> Result<(), AppError> {
+    let conn = state.lock_write()?;
+    Ok(db::delete_user_feed(&conn, &id)?)
+}
+
 #[tauri::command]
 pub fn list_feed_categories(
     state: tauri::State<'_, DbState>,

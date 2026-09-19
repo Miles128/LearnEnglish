@@ -23,6 +23,8 @@ export type WordPopoverConfig = {
   /** Sentence stored alongside a saved word/phrase. */
   contextFor: (source: string | undefined, term: string) => string;
   onError: (message: string) => void;
+  /** Success feedback (e.g. 已加入生词库); hosts usually route this to useToast(). */
+  onSuccess?: (message: string) => void;
   onVocabAdded?: () => void;
 };
 
@@ -32,7 +34,6 @@ export type WordPopoverConfig = {
  */
 export function useWordPopover(config: WordPopoverConfig) {
   const [popover, setPopover] = useState<Popover | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
   // Latest config in a ref so the returned callbacks stay stable.
   const cfg = useRef(config);
   cfg.current = config;
@@ -52,6 +53,11 @@ export function useWordPopover(config: WordPopoverConfig) {
         // details are optional — fall through to the local gloss / LLM
       }
       const term = detail?.lemma || ruleTerm;
+      // Record the lookup (fire-and-forget): reviewable history for the
+      // Vocab page. Covers dictionary hits and AI translations alike.
+      void api
+        .recordLookup(term, cfg.current.contextFor(source, term), cfg.current.articleId)
+        .catch(() => undefined);
       if (detail) {
         setPopover({ x, y, text: term, source, detail, origin: "local", loading: false });
         return;
@@ -107,10 +113,9 @@ export function useWordPopover(config: WordPopoverConfig) {
         articleId: c.articleId,
         definitionZh: popover.translation ?? null,
       });
-      setToast(`已加入生词库：${popover.text}`);
+      c.onSuccess?.(`已加入生词库：${popover.text}`);
       setPopover(null);
       c.onVocabAdded?.();
-      setTimeout(() => setToast(null), 2500);
     } catch (e) {
       c.onError(String(e));
     }
@@ -126,9 +131,8 @@ export function useWordPopover(config: WordPopoverConfig) {
         contextSentence: c.contextFor(popover.source, popover.text),
         articleId: c.articleId,
       });
-      setToast(`已加入短语组合：${popover.text}`);
+      c.onSuccess?.(`已加入短语组合：${popover.text}`);
       setPopover(null);
-      setTimeout(() => setToast(null), 2500);
     } catch (e) {
       c.onError(String(e));
     }
@@ -138,7 +142,6 @@ export function useWordPopover(config: WordPopoverConfig) {
     popover,
     setPopover,
     closePopover,
-    toast,
     showMeaning,
     speakWord,
     addToVocab,

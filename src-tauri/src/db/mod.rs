@@ -8,12 +8,14 @@ mod articles;
 mod curated_feeds;
 mod feeds;
 mod known;
+mod lookups;
 mod memory;
 mod translations;
 
 pub use articles::*;
 pub use curated_feeds::*;
 pub use known::*;
+pub use lookups::*;
 pub use memory::*;
 pub use feeds::*;
 pub use translations::*;
@@ -301,6 +303,64 @@ pub fn db_path(app_data: PathBuf) -> PathBuf {
     app_data.join("learnenglish.db")
 }
 
+/// Staged backup file swapped in on the next launch (restore flow).
+pub fn pending_restore_path(app_data: &std::path::Path) -> PathBuf {
+    app_data.join("learnenglish.db.pending-restore")
+}
+
+/// Validate a candidate backup file: it must be a readable SQLite database
+/// with our key tables and not from a newer app version. Returns user_version.
+pub fn validate_backup_file(path: &std::path::Path) -> Result<i64, AppError> {
+    let conn = Connection::open_with_flags(
+        path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > LATEST_VERSION {
+        return Err(AppError::msg(format!(
+            "备份来自更新版本的 App（schema v{version}），当前最高支持 v{LATEST_VERSION}"
+        )));
+    }
+    for table in ["articles", "feed_sources", "memory_items"] {
+        let has: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                rusqlite::params![table],
+                |row| row.get(0),
+            )?;
+        if has == 0 {
+            return Err(AppError::msg(format!("备份缺少关键表：{table}")));
+        }
+    }
+    Ok(version)
+}
+
+/// If a restore file was staged (via restore_database), swap it in BEFORE any
+/// connections open. The current database is kept as `*.pre-restore.bak`.
+/// Returns the backup path when a swap happened.
+pub fn apply_pending_restore(app_data: &std::path::Path) -> Result<Option<PathBuf>, AppError> {
+    let pending = pending_restore_path(app_data);
+    if !pending.exists() {
+        return Ok(None);
+    }
+    validate_backup_file(&pending)?;
+    let db = db_path(app_data.to_path_buf());
+    // Stale WAL/SHM belong to the outgoing database — remove them so the
+    // swapped-in file is read as-is.
+    for suffix in ["-wal", "-shm"] {
+        let side = PathBuf::from(format!("{}{}", db.display(), suffix));
+        if side.exists() {
+            std::fs::remove_file(&side)?;
+        }
+    }
+    let backup = PathBuf::from(format!("{}.pre-restore.bak", db.display()));
+    if db.exists() {
+        std::fs::copy(&db, &backup)?;
+    }
+    std::fs::rename(&pending, &db)?;
+    Ok(Some(backup))
+}
+
 pub fn open_db(path: PathBuf) -> Result<Connection, AppError> {
     let conn = Connection::open(&path)?;
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
@@ -406,7 +466,7 @@ const LEGACY_COLUMN_ADDITIONS: &[&str] = &[
 /// Version-gated migrations. To add one: raise `LATEST_VERSION` and apply its
 /// DDL inside `migrate` when `stored < N`. Stamp each version with its own
 /// number (never `LATEST_VERSION`) so later steps are not skipped.
-const LATEST_VERSION: i64 = 11;
+const LATEST_VERSION: i64 = 12;
 
 pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
     let mut stored: i64 = conn
@@ -639,6 +699,26 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
         conn.pragma_update(None, "user_version", 11)
             ?;
         stored = 11;
+    }
+
+    if stored < 12 {
+        // Lookup history: every term the learner looked up via the selection
+        // popover (bundled dictionary or AI), reviewed in the Vocab page.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS lookup_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                term TEXT NOT NULL,
+                context TEXT NOT NULL DEFAULT '',
+                article_id TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_lookup_created ON lookup_history(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_lookup_term ON lookup_history(lower(term));",
+        )
+        ?;
+        conn.pragma_update(None, "user_version", 12)
+            ?;
+        stored = 12;
     }
 
     if stored < LATEST_VERSION {

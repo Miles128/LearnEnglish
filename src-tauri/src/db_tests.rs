@@ -996,7 +996,7 @@ fn v10_migration_merges_vocab_and_phrases_into_memory_items() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        11
+        12
     );
     let words = db::list_memory(&conn, Some("word"), None).unwrap();
     let phrases = db::list_memory(&conn, Some("phrase"), None).unwrap();
@@ -1037,10 +1037,10 @@ fn migration_snapshot_is_written_before_version_bump() {
     // Already up to date → no new snapshot.
     let current = temp_dir().join(format!("le-premigrate-current-{}.db", Uuid::new_v4()));
     let conn2 = rusqlite::Connection::open(&current).unwrap();
-    conn2.pragma_update(None, "user_version", 11).unwrap();
+    conn2.pragma_update(None, "user_version", 12).unwrap();
     db::backup_before_migration(&conn2, &current);
     assert!(!current
-        .with_file_name("learnenglish.db.premigrate-v11.bak")
+        .with_file_name("learnenglish.db.premigrate-v12.bak")
         .exists());
 
     let _ = std::fs::remove_file(path);
@@ -1397,7 +1397,7 @@ fn schema_adds_summary_zh_column() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     let memory_table: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_items'",

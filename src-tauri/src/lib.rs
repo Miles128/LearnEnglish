@@ -22,6 +22,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
+            // Swap in a staged restore file (if any) before connections open.
+            db::apply_pending_restore(&dir)?;
             let state = db::DbState::open(db::db_path(dir))?;
             {
                 let mut cfg = config::load_config()?;
@@ -47,6 +49,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::config::get_config,
             commands::config::save_config_cmd,
+            commands::data::backup_database,
+            commands::data::restore_database,
             commands::articles::list_articles,
             commands::articles::list_articles_ranked,
             commands::articles::list_library,
@@ -59,6 +63,7 @@ pub fn run() {
             commands::articles::get_reading_stats,
             commands::feeds::list_feeds,
             commands::feeds::set_feed_enabled,
+            commands::feeds::delete_feed_source,
             commands::feeds::list_feed_categories,
             commands::feeds::add_feed_category,
             commands::feeds::subscribe_feed,
@@ -81,6 +86,10 @@ pub fn run() {
             commands::memory::set_memory_status,
             commands::memory::delete_memory,
             commands::memory::export_memory_csv,
+            commands::memory::record_lookup,
+            commands::memory::list_lookups,
+            commands::memory::delete_lookup,
+            commands::memory::clear_lookups,
             commands::known::list_known_words,
             commands::known::add_known_word,
             commands::known::remove_known_word

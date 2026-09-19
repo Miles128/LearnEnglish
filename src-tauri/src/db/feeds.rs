@@ -199,8 +199,27 @@ pub fn subscribe_feed(
     })
 }
 
-fn find_feed_by_url(conn: &Connection, url: &str) -> Result<Option<FeedSource>, AppError> {
-    conn.query_row(
+/// Hard-delete a user-subscribed feed. Curated feeds are rejected: they are
+/// re-seeded with INSERT OR IGNORE at startup, so deleting one would silently
+/// resurrect on the next launch — disable them instead.
+pub fn delete_user_feed(conn: &Connection, id: &str) -> Result<(), AppError> {
+    let origin: String = conn
+        .query_row(
+            "SELECT origin FROM feed_sources WHERE id=?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(AppError::from)?
+        .ok_or_else(|| AppError::msg("订阅源不存在"))?;
+    if origin != "user" {
+        return Err(AppError::msg("精选订阅源不支持删除，可改为停用"));
+    }
+    conn.execute("DELETE FROM feed_sources WHERE id=?1", params![id])?;
+    Ok(())
+}
+
+fn find_feed_by_url(conn: &Connection, url: &str) -> Result<Option<FeedSource>, AppError> {    conn.query_row(
         "SELECT id,name,category,url,enabled,origin,description,etag,last_fetched_at,fulltext_ratio FROM feed_sources WHERE url=?1",
         params![url],
         map_feed,

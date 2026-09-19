@@ -1532,3 +1532,45 @@ fn learning_stats_uses_opens_and_new_vocab() {
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(empty_path);
 }
+
+#[test]
+fn export_memory_csv_dumps_all_libraries_with_escaping() {
+    let path = temp_dir().join(format!("le-vocab-export-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    // A word whose definition contains a comma+quote exercises RFC 4180 escaping.
+    let mut word = sample_vocab("w1", "ubiquitous", "2020-01-01T00:00:00Z");
+    word.definition_zh = "无处不在的，\"普遍\"的".into();
+    word.collocations = vec!["ubiquitous in".into(), "ubiquitous across".into()];
+    word.status = "mastered".into();
+    db::insert_memory(&conn, &word).unwrap();
+    db::insert_memory(&conn, &sample_phrase("p1", "on the house")).unwrap();
+
+    let csv = db::export_memory_csv(&conn).unwrap();
+    assert!(csv.starts_with('\u{FEFF}'), "BOM prepended for Excel/Numbers");
+    let lines: Vec<&str> = csv.trim_end_matches('\n').lines().collect();
+    assert_eq!(lines.len(), 3, "header + 2 items");
+    assert!(
+        lines[0]
+            .trim_start_matches('\u{FEFF}')
+            .starts_with("term,kind,status,definition_zh"),
+        "first line is the header (after BOM)"
+    );
+    // The word row keeps its commas/quotes wrapped; collocations joined by "; ".
+    assert!(lines[1].contains("\"无处不在的，\"\"普遍\"\"的\""));
+    assert!(lines[1].contains("ubiquitous in; ubiquitous across"));
+    assert!(lines[1].contains(",mastered,"));
+    // The phrase row is present with its kind and term.
+    assert!(lines[2].starts_with("on the house,phrase,learning"));
+
+    // Empty library still yields a valid (header-only) file.
+    db::delete_memory(&conn, "w1").unwrap();
+    db::delete_memory(&conn, "p1").unwrap();
+    let csv = db::export_memory_csv(&conn).unwrap();
+    assert_eq!(
+        csv.trim_start_matches('\u{FEFF}'),
+        "term,kind,status,definition_zh,word_type,collocations,context_sentence,created_at,next_review_at,reps,interval_days\n"
+    );
+
+    let _ = std::fs::remove_file(path);
+}

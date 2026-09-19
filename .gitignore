@@ -31,3 +31,6 @@ src-tauri/target
 
 # dictionary build cache (large downloads)
 scripts/.cache/
+
+# WorkBuddy workspace data
+.workbuddy/

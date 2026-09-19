@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, defaultAppConfig, type AppConfig } from "../api";
 import { normalizeConfig, useAppConfig } from "../store";
+import PageBack from "../components/PageBack";
 import { isThemePref, THEME_LABELS, THEME_PREFS, type ThemePref } from "../theme";
 import {
   READER_FONTS,
@@ -81,6 +82,7 @@ export default function Settings() {
         <button className="btn primary" onClick={() => void save()}>
           保存
         </button>
+        <PageBack />
       </header>
 
       <div className="tabs">

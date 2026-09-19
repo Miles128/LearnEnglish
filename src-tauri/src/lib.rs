@@ -80,6 +80,7 @@ pub fn run() {
             commands::memory::review_memory,
             commands::memory::set_memory_status,
             commands::memory::delete_memory,
+            commands::memory::export_memory_csv,
             commands::known::list_known_words,
             commands::known::add_known_word,
             commands::known::remove_known_word

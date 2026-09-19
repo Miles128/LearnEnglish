@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { type AppConfig } from "../api";
 import { useAppConfig } from "../store";
+import PageBack from "../components/PageBack";
 import {
   L0,
   PLACEMENT_TOTAL,
@@ -152,6 +153,7 @@ export default function Placement() {
               约 {PLACEMENT_TOTAL} 题，选英文词的正确中文意思。对了变难、错了变易，测完自动写入阅读难度。
             </p>
           </div>
+          <PageBack />
         </header>
         {error && <p className="banner err">{error}</p>}
         <div className="placement-actions">
@@ -181,6 +183,7 @@ export default function Placement() {
             <h1>{copy.title}</h1>
             <p className="muted">{copy.summary}</p>
           </div>
+          <PageBack />
         </header>
         {error && <p className="banner err">{error}</p>}
         {saving && <p className="muted">保存中…</p>}
@@ -220,6 +223,7 @@ export default function Placement() {
             {progress} / {PLACEMENT_TOTAL}
           </p>
         </div>
+        <PageBack />
       </header>
       {error && <p className="banner err">{error}</p>}
       {question && (

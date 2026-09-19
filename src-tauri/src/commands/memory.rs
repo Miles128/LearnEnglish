@@ -4,6 +4,7 @@ use crate::error::AppError;
 use crate::srs::{apply_rating, Rating};
 use crate::vocab::{self, AddMemoryInput};
 use tauri::AppHandle;
+use tauri_plugin_dialog::DialogExt;
 
 #[tauri::command]
 pub async fn add_memory(app: AppHandle, input: AddMemoryInput) -> Result<MemoryItem, AppError> {
@@ -62,4 +63,41 @@ pub fn set_memory_status(
 pub fn delete_memory(state: tauri::State<'_, DbState>, id: String) -> Result<(), AppError> {
     let conn = state.lock_write()?;
     Ok(db::delete_memory(&conn, &id)?)
+}
+
+/// Export the whole vocab library (words + phrases, all statuses) as a CSV
+/// file chosen via the system save dialog. Returns the written path, or
+/// `None` when the user cancels the dialog.
+#[tauri::command]
+pub async fn export_memory_csv(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DbState>,
+) -> Result<Option<String>, AppError> {
+    // Build the payload under a short-lived read lock, then release before
+    // showing the modal dialog.
+    let csv = {
+        let conn = state.lock_read()?;
+        db::export_memory_csv(&conn)?
+    };
+    let file_name = format!(
+        "shiyan-vocab-{}.csv",
+        chrono::Local::now().format("%Y%m%d-%H%M")
+    );
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("CSV", &["csv"])
+            .set_file_name(file_name)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|e| AppError::msg(e.to_string()))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let path = picked
+        .into_path()
+        .map_err(|e| AppError::msg(e.to_string()))?;
+    std::fs::write(&path, csv)?;
+    Ok(Some(path.to_string_lossy().into_owned()))
 }

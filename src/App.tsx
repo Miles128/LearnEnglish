@@ -46,15 +46,6 @@ function IconVocab() {
   );
 }
 
-function IconBack() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M19 12H5" />
-      <path d="m12 19-7-7 7-7" />
-    </svg>
-  );
-}
-
 function IconSettings() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -150,9 +141,6 @@ export default function App() {
   });
   const showBar = progress != null && progress.phase !== "done";
   const showDoneBriefly = progress?.phase === "done";
-  /** Top bar is locked across pages; only forced placement replaces it. */
-  const isHome = location.pathname === "/";
-  const isReader = location.pathname.startsWith("/article");
 
   return (
     <div className={`app-shell${progress ? " refreshing" : ""}`}>
@@ -208,19 +196,6 @@ export default function App() {
               </NavLink>
             </div>
           </header>
-          {!isHome && !isReader && (
-            <div className="page-back-row" onMouseDown={beginWindowDrag}>
-              <button
-                type="button"
-                className="btn small page-back-btn"
-                onClick={() => navigate("/")}
-                title="返回主界面"
-                aria-label="返回主界面"
-              >
-                <IconBack />
-              </button>
-            </div>
-          )}
         </>
       )}
       <main className="main">

@@ -229,12 +229,6 @@ a {
 }
 
 /* Sub-pages: back to the main interface, top-right but not in the top bar. */
-.page-back-row {
-  display: flex;
-  justify-content: flex-end;
-  padding: 12px clamp(16px, 3.5vw, 64px) 0;
-}
-
 .app-shell.refreshing .main {
   padding-bottom: 64px;
 }
@@ -289,7 +283,14 @@ a {
   margin-bottom: 22px;
 }
 
+/* 标题行吸顶：随文章滚动始终停在视口顶部（DOM 上是 .article-body 直接子元素，
+   sticky 才能覆盖全文滚动范围；-reader-heading 已收窄为摘要+meta）。 */
 .reader-title-row {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--bg);
+  padding: 8px 0 6px;
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -319,7 +320,7 @@ a {
 }
 
 .btn {
-  border: 1px solid var(--line);
+  border: none;
   background: var(--panel);
   color: var(--ink);
   padding: 9px 14px;
@@ -328,8 +329,9 @@ a {
   box-shadow: var(--shadow);
 }
 
-.btn:hover {
-  border-color: #cfc6b8;
+.btn:hover,
+.btn:focus-visible {
+  background: var(--accent-soft);
 }
 
 .btn:disabled {
@@ -339,8 +341,13 @@ a {
 
 .btn.primary {
   background: var(--accent);
-  border-color: var(--accent);
   color: #f7fffc;
+}
+
+.btn.primary:hover,
+.btn.primary:focus-visible {
+  background: var(--accent);
+  filter: brightness(0.94);
 }
 
 .btn.small {
@@ -574,11 +581,21 @@ a {
   margin-top: 0;
 }
 
-.tag-filter {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0 0 12px;
+/* Single clear entry: pushed to the right end of the view row. */
+.filter-clear {
+  margin-left: auto;
+}
+
+/* Small caption before the tag chips inside the conditions row. */
+.filter-label {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+/* +N / 收起 expander for overflow tag chips. */
+.tag-more {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .tag-chip {
@@ -867,22 +884,16 @@ a {
 
 .para-btn {
   opacity: 0;
-  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease;
   width: 26px;
   height: 26px;
   border-radius: 8px;
-  border: 1px solid var(--line);
-  background: var(--panel);
+  border: none;
+  background: transparent;
   cursor: pointer;
   color: var(--muted);
   font-size: 0.75rem;
   padding: 0;
-}
-
-.para-btn.active {
-  opacity: 1;
-  color: var(--accent);
-  border-color: var(--accent);
 }
 
 .para-block:hover .para-btn,
@@ -890,6 +901,16 @@ a {
 .para-btn:focus,
 .para-btn:focus-visible {
   opacity: 1;
+}
+
+.para-btn:hover {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.para-btn.active {
+  opacity: 1;
+  color: var(--accent);
 }
 
 .para-content p {
@@ -1006,7 +1027,6 @@ mark.vocab-hit {
   background: rgba(15, 92, 76, 0.14);
   color: inherit;
   border-radius: 3px;
-  padding: 0 2px;
   box-decoration-break: clone;
   cursor: pointer;
 }
@@ -1015,14 +1035,11 @@ mark.vocab-hit:hover {
   background: rgba(15, 92, 76, 0.26);
 }
 
+/* 普通词只给可点暗示，hover 不改背景：
+   justify + hyphens 下逐词背景重绘会让整行文字视觉抖动。 */
 .plain-word {
   cursor: pointer;
   border-radius: 2px;
-}
-
-.plain-word:hover,
-.plain-word:focus-visible {
-  background: rgba(15, 92, 76, 0.06);
 }
 
 .plain-word:focus-visible {
@@ -1176,9 +1193,76 @@ mark.vocab-hit:hover {
   font-size: 0.72rem;
 }
 
+/* 弹窗头部：词条信息 + 右上角无痕图标按钮（朗读/关闭） */
+.pop-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pop-term {
+  min-width: 0;
+}
+
+.pop-icons {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  margin: -2px -2px 0 0;
+}
+
+.pop-icon-btn {
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.pop-icon-btn:hover,
+.pop-icon-btn:focus-visible {
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+
+.pop-icon-btn.active {
+  color: var(--accent);
+}
+
+/* 弹窗底部操作行：无痕文字按钮，无边框无底色，hover 才出现背景 */
 .pop-actions {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-top: 10px;
+}
+
+.pop-link {
+  border: none;
+  background: transparent;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.pop-link:hover,
+.pop-link:focus-visible {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.pop-link.primary {
+  color: var(--accent);
+  font-weight: 500;
 }
 
 .err-inline {

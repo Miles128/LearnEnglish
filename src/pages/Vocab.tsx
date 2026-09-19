@@ -4,6 +4,7 @@ import { useAppConfig, useVocab } from "../store";
 import { api } from "../api";
 import KnownWords from "../components/KnownWords";
 import MemoryLibrary from "../components/MemoryLibrary";
+import PageBack from "../components/PageBack";
 
 type Library = "vocab" | "phrases" | "known";
 
@@ -44,6 +45,7 @@ export default function Vocab() {
           <Link className="btn small" to="/placement">
             {placementDone ? "重新测词汇量" : "测一下词汇量"}
           </Link>
+          <PageBack />
         </div>
       </header>
       {exportMsg && <p className="muted">{exportMsg}</p>}

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type ReadingStats } from "../api";
+import PageBack from "../components/PageBack";
 
 function fmtMinutes(minutes: number): string {
   if (minutes < 60) return `${minutes} 分钟`;
@@ -53,6 +54,7 @@ export default function Stats() {
         <div>
           <p className="muted">阅读统计 · 近 14 天</p>
         </div>
+        <PageBack />
       </header>
 
       <section className="stat-grid">

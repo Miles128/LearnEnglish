@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api, FeedCategory, FeedSource } from "../api";
 import FeedDiscoverSection, {
   type DiscoverRow,
@@ -7,6 +8,7 @@ import { categoryLabel } from "../readerUtils";
 
 /** Subscription manager, embedded in the Settings page (订阅 tab). */
 export default function ManageFeeds() {
+  const navigate = useNavigate();
   const [categories, setCategories] = useState<FeedCategory[]>([]);
   const [feeds, setFeeds] = useState<FeedSource[]>([]);
   const [categoryId, setCategoryId] = useState("all");
@@ -171,6 +173,8 @@ export default function ManageFeeds() {
       const article = await api.importArticleUrl(url);
       setArticleUrl("");
       setMessage(`已导入文章：${article.title}`);
+      // Same behavior as file import: land the reader on the fresh article.
+      navigate(`/article/${article.id}`);
     } catch (err) {
       setError(String(err));
     } finally {

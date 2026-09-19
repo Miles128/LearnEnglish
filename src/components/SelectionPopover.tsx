@@ -80,8 +80,7 @@ export default function SelectionPopover({
   onToggleKnown,
   known,
   onClose,
-}: Props) {
-  const ref = useRef<HTMLDivElement>(null);
+}: Props) {  const ref = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ w: 280, h: 160 });
   useLayoutEffect(() => {
     const el = ref.current;
@@ -110,14 +109,49 @@ export default function SelectionPopover({
       aria-label={popover.text}
       style={{ left: pos.x, top: pos.y + 12 }}
     >
-      <div className="pop-term">
-        {popover.text}
-        {popover.detail?.phonetic ? (
-          <span className="pop-phonetic">/ {popover.detail.phonetic} /</span>
-        ) : null}
-        {popover.detail?.pos ? (
-          <span className="pop-pos">{posLabel(popover.detail.pos)}</span>
-        ) : null}
+      <div className="pop-head">
+        <div className="pop-term">
+          {popover.text}
+          {popover.detail?.phonetic ? (
+            <span className="pop-phonetic">/ {popover.detail.phonetic} /</span>
+          ) : null}
+          {popover.detail?.pos ? (
+            <span className="pop-pos">{posLabel(popover.detail.pos)}</span>
+          ) : null}
+        </div>
+        <div className="pop-icons">
+          <button
+            className={`pop-icon-btn${speaking && speakTarget?.kind === "word" ? " active" : ""}`}
+            type="button"
+            title={speaking && speakTarget?.kind === "word" ? "停止朗读" : "朗读"}
+            aria-label={speaking && speakTarget?.kind === "word" ? "停止朗读" : "朗读"}
+            onClick={() => onSpeakWord(popover.text)}
+          >
+            {speaking && speakTarget?.kind === "word" ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" />
+              </svg>
+            ) : (
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polygon points="11 5 6 9 3 9 3 15 6 15 11 19 11 5" fill="currentColor" stroke="none" />
+                <path d="M15.5 8.5a5 5 0 0 1 0 7" />
+                <path d="M18.5 5.5a9.5 9.5 0 0 1 0 13" />
+              </svg>
+            )}
+          </button>
+          <button
+            className="pop-icon-btn"
+            type="button"
+            title="关闭"
+            aria-label="关闭"
+            onClick={onClose}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+              <line x1="6" y1="6" x2="18" y2="18" />
+              <line x1="18" y1="6" x2="6" y2="18" />
+            </svg>
+          </button>
+        </div>
       </div>
       {popover.loading && <div className="muted">翻译中…</div>}
       {popover.error && <div className="err-inline">{popover.error}</div>}
@@ -148,32 +182,19 @@ export default function SelectionPopover({
       )}
       {popover.origin === "ai" && <div className="pop-origin muted">AI 翻译</div>}
       <div className="pop-actions">
-        <button
-          className="btn small"
-          type="button"
-          onClick={() => onSpeakWord(popover.text)}
-        >
-          {speaking && speakTarget?.kind === "word" ? "停止" : "朗读"}
+        <button className="pop-link primary" onClick={onAddVocab}>
+          加入生词库
         </button>
         {onAddPhrase ? (
-          <button className="btn small primary" onClick={onAddPhrase}>
+          <button className="pop-link primary" onClick={onAddPhrase}>
             加入短语组合
           </button>
         ) : null}
-        <button
-          className={onAddPhrase ? "btn small" : "btn small primary"}
-          onClick={onAddVocab}
-        >
-          加入生词库
-        </button>
         {onToggleKnown ? (
-          <button className="btn small" onClick={onToggleKnown}>
+          <button className="pop-link" onClick={onToggleKnown}>
             {known ? "取消已知" : "标记已知"}
           </button>
         ) : null}
-        <button className="btn small" onClick={onClose}>
-          关闭
-        </button>
       </div>
     </div>
   );

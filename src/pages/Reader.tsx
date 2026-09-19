@@ -487,8 +487,7 @@ export default function Reader() {
       {toast && <p className="banner ok">{toast}</p>}
 
       <article className="article-body" onMouseUp={onMouseUp}>
-        <div className="reader-heading">
-          <div className="reader-title-row">
+        <div className="reader-title-row">
             <h1>
             {lexReady ? (
               <AnnotatedPara
@@ -550,6 +549,7 @@ export default function Reader() {
         )}
           </div>
         </div>
+        <div className="reader-heading">
           {article.summary_zh && (
             <p className="article-summary-zh">{article.summary_zh}</p>
           )}

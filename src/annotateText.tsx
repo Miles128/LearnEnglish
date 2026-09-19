@@ -61,8 +61,8 @@ function renderSpan(
     .filter(Boolean)
     .join(" ");
 
-  const title = [
-    span.hard ? "超出当前难度" : "单击翻译",
+  const accessibleName = [
+    span.hard ? "超出当前难度，单击翻译" : "单击翻译",
     span.learning ? "生词库 · 学习中" : null,
   ]
     .filter(Boolean)
@@ -95,9 +95,10 @@ function renderSpan(
     });
   };
 
+  // 用 aria-label 而非 title：原生 tooltip 在鼠标扫过时反复弹出，是阅读区行抖动的来源之一。
   const interactive = {
     key: `t-${key}`,
-    title,
+    "aria-label": accessibleName,
     role: "button" as const,
     tabIndex: 0,
     onClick,

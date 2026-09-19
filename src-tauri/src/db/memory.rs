@@ -168,3 +168,50 @@ pub fn delete_memory(conn: &Connection, id: &str) -> Result<(), AppError> {
     conn.execute("DELETE FROM memory_items WHERE id=?1", params![id])?;
     Ok(())
 }
+
+/// Escape one CSV field: wrap in quotes when it contains a comma, quote,
+/// or line break; double embedded quotes (RFC 4180).
+pub fn csv_field(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// Dump every memory item (words + phrases, all statuses) as one CSV string.
+/// A UTF-8 BOM is prepended so Excel/Numbers auto-detect the encoding;
+/// columns are Anki-import friendly (term first, meaning second).
+pub fn export_memory_csv(conn: &Connection) -> Result<String, AppError> {
+    let items = list_memory(conn, None, None)?;
+    let mut out =
+        String::from("\u{FEFF}term,kind,status,definition_zh,word_type,collocations,context_sentence,created_at,next_review_at,reps,interval_days\n");
+    for it in items {
+        let collocations = it.collocations.join("; ");
+        let next_review = it.next_review_at.as_str();
+        let reps = it.reps.to_string();
+        let interval = it.interval_days.to_string();
+        let fields = [
+            it.term.as_str(),
+            it.kind.as_str(),
+            it.status.as_str(),
+            it.definition_zh.as_str(),
+            it.word_type.as_str(),
+            collocations.as_str(),
+            it.context_sentence.as_str(),
+            it.created_at.as_str(),
+            next_review,
+            reps.as_str(),
+            interval.as_str(),
+        ];
+        out.push_str(
+            &fields
+                .iter()
+                .map(|f| csv_field(f))
+                .collect::<Vec<_>>()
+                .join(","),
+        );
+        out.push('\n');
+    }
+    Ok(out)
+}

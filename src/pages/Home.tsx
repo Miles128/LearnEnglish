@@ -48,6 +48,8 @@ function IconRefresh() {
 }
 
 const PAGE_SIZE = 60;
+/** Tags shown in the filter row before folding into a +N expander. */
+const TAG_PREVIEW = 5;
 /** 今日推荐: the first N ranked unread articles, shown expanded. */
 const TOP_PICKS = 10;
 
@@ -59,6 +61,8 @@ export default function Home() {
   const [activeTags, setActiveTags] = useState<string[]>([]);
   /** Tags + filters stay hidden until the 筛选 toggle is opened. */
   const [filtersOpen, setFiltersOpen] = useState(false);
+  /** Tag chips fold into a +N expander; reset when the panel closes. */
+  const [tagsExpanded, setTagsExpanded] = useState(false);
   const [categories, setCategories] = useState<FeedCategory[]>([]);
   const [articles, setArticles] = useState<ArticleListItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -206,6 +210,27 @@ export default function Home() {
       setLoadingMore(false);
     }
   }
+
+  // Infinite scroll: a sentinel near the list bottom triggers loadMore.
+  // Ref indirection keeps the observer callback on the latest closure.
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreRef = useRef(loadMore);
+  useEffect(() => {
+    loadMoreRef.current = loadMore;
+  });
+  useEffect(() => {
+    if (!hasMore) return;
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) loadMoreRef.current();
+      },
+      { rootMargin: "600px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasMore]);
 
   // Refresh lives on the list it refreshes: signal Home via the shared event.
   async function onRefresh() {
@@ -433,7 +458,10 @@ export default function Home() {
           <button
             type="button"
             className={hasFilter ? "linklike active" : "linklike"}
-            onClick={() => setFiltersOpen((o) => !o)}
+            onClick={() => {
+              if (filtersOpen) setTagsExpanded(false);
+              setFiltersOpen(!filtersOpen);
+            }}
             aria-expanded={filtersOpen}
           >
             筛选
@@ -452,39 +480,6 @@ export default function Home() {
 
       {filtersOpen && (
         <>
-          {availableTags.length > 0 && (
-            <div className="tag-filter">
-              {availableTags.map((tag) => {
-                const on = activeTags.includes(tag);
-                return (
-                  <button
-                    key={tag}
-                    type="button"
-                    className={on ? "tag-chip active" : "tag-chip"}
-                    onClick={() =>
-                      setActiveTags((prev) =>
-                        prev.includes(tag)
-                          ? prev.filter((t) => t !== tag)
-                          : [...prev, tag],
-                      )
-                    }
-                  >
-                    {tag}
-                  </button>
-                );
-              })}
-              {activeTags.length > 0 && (
-                <button
-                  type="button"
-                  className="tag-chip clear"
-                  onClick={() => setActiveTags([])}
-                >
-                  清除筛选
-                </button>
-              )}
-            </div>
-          )}
-
           <div className="library-filters">
             <div className="filter-row">
               <div className="filter-group">
@@ -505,14 +500,26 @@ export default function Home() {
                     {label}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  className={likedOnly ? "tag-chip active" : "tag-chip"}
+                  onClick={() => setLikedOnly((v) => !v)}
+                >
+                  ★ 收藏
+                </button>
               </div>
-              <button
-                type="button"
-                className={likedOnly ? "tag-chip active" : "tag-chip"}
-                onClick={() => setLikedOnly((v) => !v)}
-              >
-                ★ 收藏
-              </button>
+              {hasFilter && (
+                <button
+                  type="button"
+                  className="tag-chip clear filter-clear"
+                  onClick={clearFilters}
+                >
+                  清除筛选
+                </button>
+              )}
+            </div>
+
+            <div className="filter-row">
               <select
                 className="filter-select"
                 value={sourceFilter}
@@ -525,34 +532,59 @@ export default function Home() {
                   </option>
                 ))}
               </select>
-              {hasFilter && (
-                <button type="button" className="tag-chip clear" onClick={clearFilters}>
-                  清除筛选
-                </button>
-              )}
-            </div>
-
-            <div className="filter-row">
-              <div className="filter-group">
-                <button
-                  type="button"
-                  className={levelFilter === "all" ? "tag-chip active" : "tag-chip"}
-                  onClick={() => setLevelFilter("all")}
-                >
-                  全部难度
-                </button>
+              <select
+                className="filter-select"
+                value={levelFilter}
+                onChange={(e) =>
+                  setLevelFilter(e.target.value as DifficultyLevel | "all")
+                }
+              >
+                <option value="all">全部难度</option>
                 {DIFFICULTY_LEVELS.map((level) => (
-                  <button
-                    key={level}
-                    type="button"
-                    className={levelFilter === level ? "tag-chip active" : "tag-chip"}
-                    onClick={() => setLevelFilter(level)}
-                  >
+                  <option key={level} value={level}>
                     {difficultyLabel(level)}
-                    {levelCounts.get(level) ? ` ${levelCounts.get(level)}` : ""}
-                  </button>
+                    {levelCounts.get(level) ? ` (${levelCounts.get(level)})` : ""}
+                  </option>
                 ))}
-              </div>
+              </select>
+              {availableTags.length > 0 && (
+                <>
+                  <span className="filter-label">标签</span>
+                  {(tagsExpanded
+                    ? availableTags
+                    : availableTags.slice(0, TAG_PREVIEW)
+                  ).map((tag) => {
+                    const on = activeTags.includes(tag);
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        className={on ? "tag-chip active" : "tag-chip"}
+                        onClick={() =>
+                          setActiveTags((prev) =>
+                            prev.includes(tag)
+                              ? prev.filter((t) => t !== tag)
+                              : [...prev, tag],
+                          )
+                        }
+                      >
+                        {tag}
+                      </button>
+                    );
+                  })}
+                  {availableTags.length > TAG_PREVIEW && (
+                    <button
+                      type="button"
+                      className="tag-chip tag-more"
+                      onClick={() => setTagsExpanded((v) => !v)}
+                    >
+                      {tagsExpanded
+                        ? "收起"
+                        : `+${availableTags.length - TAG_PREVIEW}`}
+                    </button>
+                  )}
+                </>
+              )}
             </div>
           </div>
         </>
@@ -584,7 +616,10 @@ export default function Home() {
 
       {!loading && articles.length === 0 && !error && (
         <div className="empty">
-          <p>还没有文章。点「刷新」或粘贴链接导入。</p>
+          <p>
+            还没有文章。点上方「刷新」拉取订阅；也可以用右上角按钮导入文件，
+            或在 设置 → 订阅 里粘贴文章链接。
+          </p>
         </div>
       )}
       {!loading && articles.length > 0 && visible.length === 0 && !error && (
@@ -680,15 +715,8 @@ export default function Home() {
       )}
 
       {hasMore && (
-        <div className="load-more-row">
-          <button
-            type="button"
-            className="btn"
-            onClick={() => void loadMore()}
-            disabled={loadingMore}
-          >
-            {loadingMore ? "加载中…" : "加载更多"}
-          </button>
+        <div ref={sentinelRef} className="load-more-row">
+          {loadingMore && <p className="muted">加载中…</p>}
         </div>
       )}
     </div>

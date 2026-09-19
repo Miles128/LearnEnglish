@@ -128,10 +128,9 @@ export default function Reader() {
   const rootRef = useRef<HTMLDivElement>(null);
   const clickGuardRef = useRef(false);
   const readCompletedRef = useRef(false);
-  /** Accumulated visible+focused dwell, used for the finish threshold. */
+  /** Accumulated visible+focused dwell, feeds stats and interest ranking. */
   const dwellMsRef = useRef(0);
   const atBottomRef = useRef(false);
-  const wordCountRef = useRef(0);
 
   const tts = useTts();
   const { speaking, speakTarget, startSpeak, stopSpeak } = tts;
@@ -213,17 +212,12 @@ export default function Reader() {
   const title = useMemo(() => article?.title ?? "阅读", [article]);
   const liked = likedOverride ?? article?.liked ?? false;
 
-  useEffect(() => {
-    wordCountRef.current = article?.word_count ?? 0;
-  }, [article]);
-
-  /** Finish = reached the bottom AND dwelled at least words/200 minutes. */
+  /** Finish = reached the bottom. Dwell still accrues for stats/ranking,
+   *  but it no longer gates the read flag — the old words/200-minutes
+   *  threshold meant fast readers never got marked 已读 at all. */
   const tryComplete = useCallback(() => {
     if (!id || readCompletedRef.current) return;
     if (!atBottomRef.current) return;
-    const wc = wordCountRef.current;
-    const requiredMs = wc > 0 ? (wc / 200) * 60_000 : 0;
-    if (dwellMsRef.current < requiredMs) return;
     readCompletedRef.current = true;
     void api.markArticleProgress(id, 0, true).catch(() => undefined);
   }, [id]);
@@ -488,62 +482,14 @@ export default function Reader() {
       ref={rootRef}
       style={readingCssVars(reading)}
     >
-      <header className="page-header page-header-slim page-header-end">
-        <div className="page-header-actions">
-          <button
-            className="icon-btn"
-            type="button"
-            onClick={() => navigate("/")}
-            title="返回主界面"
-            aria-label="返回主界面"
-          >
-            <IconBack />
-          </button>
-          <button
-            className="icon-btn"
-            type="button"
-            onClick={toggleLiked}
-            title={liked ? "取消收藏，之后不再优先推荐同类文章" : "收藏，之后优先推荐同类文章"}
-            aria-label={liked ? "取消收藏" : "收藏"}
-            aria-pressed={liked}
-          >
-            {liked ? <IconStarFilled /> : <IconStar />}
-          </button>
-          <button
-            className="icon-btn"
-            type="button"
-            onClick={speakArticle}
-            disabled={paragraphs.length === 0}
-            title={articleSpeaking ? "停止朗读" : "朗读全文"}
-            aria-label={articleSpeaking ? "停止朗读" : "朗读全文"}
-          >
-            {articleSpeaking ? <IconStop /> : <IconVolume />}
-          </button>
-          {busyFull ? (
-            <button className="btn small" type="button" disabled>
-              {translateProgressLabel(fullProgress) ?? "…"}
-            </button>
-          ) : (
-            <button
-              className="icon-btn"
-              type="button"
-              onClick={() => void toggleFullTranslation()}
-              title={showFullZh ? "隐藏译文" : "全文翻译"}
-              aria-label={showFullZh ? "隐藏译文" : "全文翻译"}
-              aria-pressed={showFullZh}
-            >
-              {showFullZh ? <IconEyeOff /> : <IconTranslate />}
-            </button>
-          )}
-        </div>
-      </header>
 
       {error && <p className="banner err">{error}</p>}
       {toast && <p className="banner ok">{toast}</p>}
 
       <article className="article-body" onMouseUp={onMouseUp}>
         <div className="reader-heading">
-          <h1>
+          <div className="reader-title-row">
+            <h1>
             {lexReady ? (
               <AnnotatedPara
                 text={title}
@@ -556,6 +502,54 @@ export default function Reader() {
               title
             )}
           </h1>
+<div className="page-header-actions">
+        <button
+          className="icon-btn"
+          type="button"
+          onClick={() => navigate("/")}
+          title="返回主界面"
+          aria-label="返回主界面"
+        >
+          <IconBack />
+        </button>
+        <button
+          className="icon-btn"
+          type="button"
+          onClick={toggleLiked}
+          title={liked ? "取消收藏，之后不再优先推荐同类文章" : "收藏，之后优先推荐同类文章"}
+          aria-label={liked ? "取消收藏" : "收藏"}
+          aria-pressed={liked}
+        >
+          {liked ? <IconStarFilled /> : <IconStar />}
+        </button>
+        <button
+          className="icon-btn"
+          type="button"
+          onClick={speakArticle}
+          disabled={paragraphs.length === 0}
+          title={articleSpeaking ? "停止朗读" : "朗读全文"}
+          aria-label={articleSpeaking ? "停止朗读" : "朗读全文"}
+        >
+          {articleSpeaking ? <IconStop /> : <IconVolume />}
+        </button>
+        {busyFull ? (
+          <button className="btn small" type="button" disabled>
+            {translateProgressLabel(fullProgress) ?? "…"}
+          </button>
+        ) : (
+          <button
+            className="icon-btn"
+            type="button"
+            onClick={() => void toggleFullTranslation()}
+            title={showFullZh ? "隐藏译文" : "全文翻译"}
+            aria-label={showFullZh ? "隐藏译文" : "全文翻译"}
+            aria-pressed={showFullZh}
+          >
+            {showFullZh ? <IconEyeOff /> : <IconTranslate />}
+          </button>
+        )}
+          </div>
+        </div>
           {article.summary_zh && (
             <p className="article-summary-zh">{article.summary_zh}</p>
           )}

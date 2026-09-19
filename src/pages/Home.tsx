@@ -22,6 +22,11 @@ import { useAppConfig, useVocab } from "../store";
 import { ensureLexiconLoaded, isFreqBand, type FreqBand } from "../wordLevels";
 import SourceBoard from "../components/SourceBoard";
 import ArticleRow from "../components/ArticleRow";
+import {
+  loadCollapsedSources,
+  saveCollapsedSources,
+  toggleSourceCollapsed,
+} from "../sourceCollapse";
 import { lastArticlePath } from "../useArticle";
 import SelectionPopover from "../components/SelectionPopover";
 import {
@@ -69,6 +74,10 @@ export default function Home() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [learningStats, setLearningStats] = useState<LearningStats | null>(null);
+  /** Collapsed source boards (incl. 今日推荐 via "home-top-picks"), persisted. */
+  const [collapsedSources, setCollapsedSources] = useState<Set<string>>(
+    () => loadCollapsedSources(),
+  );
 
   const navigate = useNavigate();
   const { cfg } = useAppConfig();
@@ -283,6 +292,28 @@ export default function Home() {
     [orderedArticles, picksIds],
   );
 
+  // Collapse state lives here so 全部折叠/全部展开 can flip every board.
+  const boardKeys = useMemo(
+    () => ["home-top-picks", ...sections.map((s) => s.source)],
+    [sections],
+  );
+  const allBoardsCollapsed =
+    boardKeys.length > 0 && boardKeys.every((k) => collapsedSources.has(k));
+
+  function toggleSourceBoard(key: string) {
+    setCollapsedSources((prev) => {
+      const next = toggleSourceCollapsed(prev, key);
+      saveCollapsedSources(next);
+      return next;
+    });
+  }
+
+  function toggleAllBoards() {
+    const next = allBoardsCollapsed ? new Set<string>() : new Set(boardKeys);
+    saveCollapsedSources(next);
+    setCollapsedSources(next);
+  }
+
   // The top bar drives refresh + feed management; Home only reacts.
   useEffect(() => {
     function onRefreshed(e: Event) {
@@ -401,26 +432,6 @@ export default function Home() {
           )}
           <button
             type="button"
-            className={likedOnly ? "linklike active" : "linklike"}
-            onClick={() => {
-              setLikedOnly((v) => !v);
-              setFiltersOpen(true);
-            }}
-          >
-            收藏
-          </button>
-          <button
-            type="button"
-            className={readFilter === "read" ? "linklike active" : "linklike"}
-            onClick={() => {
-              setReadFilter((v) => (v === "read" ? "unfinished" : "read"));
-              setFiltersOpen(true);
-            }}
-          >
-            已读
-          </button>
-          <button
-            type="button"
             className={hasFilter ? "linklike active" : "linklike"}
             onClick={() => setFiltersOpen((o) => !o)}
             aria-expanded={filtersOpen}
@@ -481,7 +492,6 @@ export default function Home() {
                   [
                     ["unfinished", "未完成"],
                     ["unread", "未读"],
-                    ["reading", "在读"],
                     ["read", "已读"],
                     ["all", "全部"],
                   ] as const
@@ -599,6 +609,21 @@ export default function Home() {
         )
       ) : (
         <>
+          <div className="boards-toolbar">
+            <span className="muted">
+              {sections.length} 个来源
+              {allBoardsCollapsed ? " · 已全部折叠" : ""}
+            </span>
+            <button
+              type="button"
+              className="linklike"
+              onClick={toggleAllBoards}
+              disabled={boardKeys.length === 0}
+            >
+              {allBoardsCollapsed ? "全部展开" : "全部折叠"}
+            </button>
+          </div>
+
           {topPicks.length > 0 && (
             <div className="source-boards top-picks">
               <SourceBoard
@@ -607,9 +632,9 @@ export default function Home() {
                   category: topPicks[0].category,
                   articles: topPicks,
                 }}
-                categories={categories}
                 difficultyById={difficultyById}
-                collapseKey="home-top-picks"
+                collapsed={collapsedSources.has("home-top-picks")}
+                onToggleCollapsed={() => toggleSourceBoard("home-top-picks")}
                 showTags={filtersOpen}
               />
             </div>
@@ -620,8 +645,9 @@ export default function Home() {
               <SourceBoard
                 key={sec.source}
                 section={sec}
-                categories={categories}
                 difficultyById={difficultyById}
+                collapsed={collapsedSources.has(sec.source)}
+                onToggleCollapsed={() => toggleSourceBoard(sec.source)}
                 showTags={filtersOpen}
               />
             ))}

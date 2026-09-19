@@ -284,18 +284,27 @@ a {
   margin-bottom: 14px;
 }
 
-.page-header-end {
-  justify-content: flex-end;
-}
 
 .reader-heading {
   margin-bottom: 22px;
 }
 
-.reader-heading h1 {
-  font-size: 1.45rem;
-  line-height: 1.35;
-  margin: 0 0 8px;
+.reader-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.reader-title-row h1 {
+  flex: 1;
+  font-size: calc(var(--reader-size, 18px) + 2pt);
+  line-height: 1.3;
+  margin: 0;
+}
+
+.reader-title-row .page-header-actions {
+  flex-shrink: 0;
+  padding-top: 3px;
 }
 
 .page h1 {
@@ -737,6 +746,20 @@ a {
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+/* Row above the boards: source count + 全部折叠/全部展开. */
+.boards-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: -8px;
+  font-size: 0.85rem;
+}
+
+.boards-toolbar .linklike {
+  font-size: 0.85rem;
 }
 
 .source-board-head {

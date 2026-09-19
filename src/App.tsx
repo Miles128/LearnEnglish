@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   shouldForcePlacement,
@@ -12,6 +13,19 @@ import { applyTheme, isThemePref } from "./theme";
 import { api } from "./api";
 import { type RefreshProgress } from "./api";
 import "./App.css";
+
+/**
+ * Deterministic window drag: the injected data-tauri-drag-region script only
+ * reacts when the exact mousedown target carries the attribute, which child
+ * elements (nav, brand, spacing) defeat. Call startDragging() ourselves
+ * unless the press landed on an interactive control.
+ */
+function beginWindowDrag(e: { button: number; target: EventTarget | null }) {
+  if (e.button !== 0) return;
+  const el = e.target as HTMLElement | null;
+  if (el?.closest("button, a, input, select, textarea, [role='button']")) return;
+  void getCurrentWindow().startDragging();
+}
 
 function IconImport() {
   return (
@@ -143,7 +157,7 @@ export default function App() {
   return (
     <div className={`app-shell${progress ? " refreshing" : ""}`}>
       {hideNav ? (
-        <header className="topbar" data-tauri-drag-region>
+        <header className="topbar" onMouseDown={beginWindowDrag}>
           <nav className="topbar-nav" data-tauri-drag-region>
             <span className="brand-mini" data-tauri-drag-region>
               拾言
@@ -157,7 +171,7 @@ export default function App() {
         </header>
       ) : (
         <>
-          <header className="topbar" data-tauri-drag-region>
+          <header className="topbar" onMouseDown={beginWindowDrag}>
             <nav className="topbar-nav" data-tauri-drag-region>
               <span className="brand-mini" data-tauri-drag-region>
                 拾言
@@ -195,7 +209,7 @@ export default function App() {
             </div>
           </header>
           {!isHome && !isReader && (
-            <div className="page-back-row" data-tauri-drag-region>
+            <div className="page-back-row" onMouseDown={beginWindowDrag}>
               <button
                 type="button"
                 className="btn small page-back-btn"

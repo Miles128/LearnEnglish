@@ -36,6 +36,10 @@ export const apiMemory = {
     invoke<void>("set_memory_status", { id, status }),
   deleteMemory: (id: string) => invoke<void>("delete_memory", { id }),
 
+  // Export the whole vocab library (words + phrases) as CSV; returns the
+  // written path, or null when the save dialog was cancelled.
+  exportVocabCsv: () => invoke<string | null>("export_memory_csv"),
+
   // Known words: marked as already known, so they stop being highlighted.
   listKnownWords: () => invoke<string[]>("list_known_words"),
   addKnownWord: (term: string) => invoke<void>("add_known_word", { term }),

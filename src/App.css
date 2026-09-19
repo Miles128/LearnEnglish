@@ -191,6 +191,38 @@ a {
   cursor: default;
 }
 
+/* Reader 文章操作图标按钮（返回/收藏/朗读/翻译），与 topbar-btn 同风格。 */
+.icon-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 7px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.icon-btn svg {
+  display: block;
+}
+
+.icon-btn:hover {
+  color: var(--ink);
+  background: var(--accent-soft);
+}
+
+.icon-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.icon-btn[aria-pressed="true"] {
+  color: var(--accent);
+}
+
 .main {
   min-width: 0;
   flex: 1;

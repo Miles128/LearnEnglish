@@ -7,7 +7,7 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { api, type FeedCategory, type TranslateProgress } from "../api";
 import {
@@ -38,8 +38,76 @@ import {
   type DifficultyPrefs,
 } from "../wordLevels";
 
+function IconBack() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M19 12H5" />
+      <path d="m12 19-7-7 7-7" />
+    </svg>
+  );
+}
+
+function IconStar() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26" />
+    </svg>
+  );
+}
+
+function IconStarFilled() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26" />
+    </svg>
+  );
+}
+
+function IconVolume() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M11 5 6 9H2v6h4l5 4z" />
+      <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+      <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+    </svg>
+  );
+}
+
+function IconStop() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  );
+}
+
+function IconTranslate() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="m5 8 6 6" />
+      <path d="m4 14 6-6 2-3" />
+      <path d="M2 5h12" />
+      <path d="M7 2h1" />
+      <path d="m22 22-5-10-5 10" />
+      <path d="M14 18h6" />
+    </svg>
+  );
+}
+
+function IconEyeOff() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+      <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+      <path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+      <line x1="2" x2="22" y1="2" y2="22" />
+    </svg>
+  );
+}
+
 export default function Reader() {
   const { id } = useParams();
+  const navigate = useNavigate();
   const {
     article,
     paragraphs,
@@ -423,29 +491,50 @@ export default function Reader() {
       <header className="page-header page-header-slim page-header-end">
         <div className="page-header-actions">
           <button
-            className="btn"
+            className="icon-btn"
             type="button"
-            onClick={toggleLiked}
-            title={liked ? "取消收藏" : "收藏，之后优先推荐同类文章"}
+            onClick={() => navigate("/")}
+            title="返回主界面"
+            aria-label="返回主界面"
           >
-            {liked ? "★ 已收藏" : "☆ 收藏"}
+            <IconBack />
           </button>
           <button
-            className="btn"
+            className="icon-btn"
+            type="button"
+            onClick={toggleLiked}
+            title={liked ? "取消收藏，之后不再优先推荐同类文章" : "收藏，之后优先推荐同类文章"}
+            aria-label={liked ? "取消收藏" : "收藏"}
+            aria-pressed={liked}
+          >
+            {liked ? <IconStarFilled /> : <IconStar />}
+          </button>
+          <button
+            className="icon-btn"
             type="button"
             onClick={speakArticle}
             disabled={paragraphs.length === 0}
             title={articleSpeaking ? "停止朗读" : "朗读全文"}
+            aria-label={articleSpeaking ? "停止朗读" : "朗读全文"}
           >
-            {articleSpeaking ? "停止朗读" : "朗读全文"}
+            {articleSpeaking ? <IconStop /> : <IconVolume />}
           </button>
-          <button className="btn" onClick={() => void toggleFullTranslation()} disabled={busyFull}>
-            {busyFull
-              ? (translateProgressLabel(fullProgress) ?? "…")
-              : showFullZh
-                ? "隐藏译文"
-                : "全文翻译"}
-          </button>
+          {busyFull ? (
+            <button className="btn small" type="button" disabled>
+              {translateProgressLabel(fullProgress) ?? "…"}
+            </button>
+          ) : (
+            <button
+              className="icon-btn"
+              type="button"
+              onClick={() => void toggleFullTranslation()}
+              title={showFullZh ? "隐藏译文" : "全文翻译"}
+              aria-label={showFullZh ? "隐藏译文" : "全文翻译"}
+              aria-pressed={showFullZh}
+            >
+              {showFullZh ? <IconEyeOff /> : <IconTranslate />}
+            </button>
+          )}
         </div>
       </header>
 

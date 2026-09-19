@@ -138,12 +138,13 @@ export default function App() {
   const showDoneBriefly = progress?.phase === "done";
   /** Top bar is locked across pages; only forced placement replaces it. */
   const isHome = location.pathname === "/";
+  const isReader = location.pathname.startsWith("/article");
 
   return (
     <div className={`app-shell${progress ? " refreshing" : ""}`}>
       {hideNav ? (
         <header className="topbar" data-tauri-drag-region>
-          <nav className="topbar-nav">
+          <nav className="topbar-nav" data-tauri-drag-region>
             <span className="brand-mini" data-tauri-drag-region>
               拾言
             </span>
@@ -157,7 +158,7 @@ export default function App() {
       ) : (
         <>
           <header className="topbar" data-tauri-drag-region>
-            <nav className="topbar-nav">
+            <nav className="topbar-nav" data-tauri-drag-region>
               <span className="brand-mini" data-tauri-drag-region>
                 拾言
               </span>
@@ -193,7 +194,7 @@ export default function App() {
               </NavLink>
             </div>
           </header>
-          {!isHome && (
+          {!isHome && !isReader && (
             <div className="page-back-row" data-tauri-drag-region>
               <button
                 type="button"

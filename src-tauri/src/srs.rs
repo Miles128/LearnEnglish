@@ -29,8 +29,10 @@ pub struct SrsFields<'a> {
     pub next_review_at: &'a mut String,
 }
 
-/// Simplified SRS: again ~10m, hard 1d, easy 1→3→7→14 days.
-/// Mastered when consecutive_know >= 3 and interval is at 14-day step.
+/// Simplified SRS: again ~10m, hard 1d, easy 1→7→14 days.
+/// Mastered when 3 *consecutive* easy ratings reach the 14-day step: any
+/// again/hard rating resets the streak. (PRD requires "3 consecutive easy
+/// ratings reaching the 14-day step", so the ladder has 3 steps.)
 pub fn apply_rating_fields(fields: SrsFields<'_>, rating: Rating) {
     let SrsFields {
         status,
@@ -48,7 +50,9 @@ pub fn apply_rating_fields(fields: SrsFields<'_>, rating: Rating) {
             *next_review_at = (now + Duration::minutes(10)).to_rfc3339();
         }
         Rating::Hard => {
-            // Gentle reminder: schedule tomorrow, but don't wipe the easy streak.
+            // Gentle reminder: schedule tomorrow, but a fuzzy recall is not
+            // an easy one — the consecutive-easy streak restarts.
+            *consecutive_know = 0;
             *interval_days = 1.0;
             *next_review_at = (now + Duration::days(1)).to_rfc3339();
         }
@@ -56,12 +60,12 @@ pub fn apply_rating_fields(fields: SrsFields<'_>, rating: Rating) {
             *consecutive_know += 1;
             let next = match *interval_days {
                 x if x < 1.0 => 1.0,
-                x if x < 3.0 => 3.0,
                 x if x < 7.0 => 7.0,
                 _ => 14.0,
             };
             *interval_days = next;
             *next_review_at = (now + Duration::days(next as i64)).to_rfc3339();
+            // PRD: 3 consecutive easy ratings reaching the 14-day step → mastered.
             if *consecutive_know >= 3 && (next - 14.0).abs() < f64::EPSILON {
                 *status = "mastered".into();
             }
@@ -107,31 +111,40 @@ mod tests {
 
     #[test]
     fn easy_progresses_and_masters() {
+        // Ladder 1→7→14: 3 consecutive easies reach the 14-day step and graduate.
         let mut item = sample();
         apply_rating(&mut item, Rating::Easy);
         assert_eq!(item.interval_days, 1.0);
         assert_eq!(item.status, "learning");
         apply_rating(&mut item, Rating::Easy);
-        assert_eq!(item.interval_days, 3.0);
-        apply_rating(&mut item, Rating::Easy);
         assert_eq!(item.interval_days, 7.0);
         assert_eq!(item.status, "learning");
         apply_rating(&mut item, Rating::Easy);
         assert_eq!(item.interval_days, 14.0);
-        assert!(item.consecutive_know >= 3);
+        assert_eq!(item.consecutive_know, 3);
         assert_eq!(item.status, "mastered");
     }
 
     #[test]
-    fn hard_schedules_tomorrow_without_wiping_streak() {
+    fn hard_schedules_tomorrow_and_breaks_streak() {
         let mut item = sample();
         apply_rating(&mut item, Rating::Easy);
         apply_rating(&mut item, Rating::Easy);
         assert_eq!(item.consecutive_know, 2);
         apply_rating(&mut item, Rating::Hard);
         assert_eq!(item.interval_days, 1.0);
-        assert_eq!(item.consecutive_know, 2, "hard keeps the easy streak");
+        assert_eq!(item.consecutive_know, 0, "hard breaks the easy streak");
         assert_eq!(item.status, "learning");
+    }
+
+    #[test]
+    fn interrupted_streak_never_masters() {
+        let mut item = sample();
+        for rating in [Rating::Easy, Rating::Easy, Rating::Hard, Rating::Easy] {
+            apply_rating(&mut item, rating);
+        }
+        assert_eq!(item.status, "learning");
+        assert_eq!(item.consecutive_know, 1);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { memo } from "react";
 import Markdown from "react-markdown";
 
 const MARKDOWN_ANNOTATE_TAGS = [
@@ -28,7 +29,7 @@ type Props = {
   onSpeak: () => void;
 };
 
-export default function ReaderParagraph({
+export default memo(function ReaderParagraph({
   text,
   asMarkdown,
   annotateChildren,
@@ -92,4 +93,4 @@ export default function ReaderParagraph({
       </div>
     </div>
   );
-}
+});

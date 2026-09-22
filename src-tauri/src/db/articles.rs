@@ -27,8 +27,14 @@ pub fn list_articles(
     )
 }
 
-/// Read-state filter. "Finished" means scrolled to the end + dwell threshold;
-/// merely opening an article puts it in `Reading`.
+/// Limit clamped: SQLite treats a negative LIMIT as "no limit", so a bad
+/// caller could request the whole table (× 6000-char excerpt per row).
+const MAX_LIST_LIMIT: i64 = 500;
+
+/// Read-state filter. "Finished" means scrolled to the end (the reader sets
+/// the flag on reaching the bottom; dwell time only feeds stats/ranking and
+/// no longer gates completion). Merely opening an article puts it in
+/// `Reading`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ReadState {
     #[default]
@@ -114,11 +120,15 @@ pub fn query_articles(
     if query.recent_first {
         sql.push_str(" ORDER BY fetched_at DESC, published_at DESC, id ASC");
     } else {
-        sql.push_str(" ORDER BY source ASC, fetched_at DESC, published_at DESC, id ASC");
+        // For ranked scoring, prefer recent articles over alphabetical source
+        // ordering so the window is not starved by source name.
+        sql.push_str(" ORDER BY fetched_at DESC, published_at DESC, id ASC");
     }
     sql.push_str(" LIMIT ? OFFSET ?");
-    params.push(rusqlite::types::Value::Integer(limit.unwrap_or(60)));
-    params.push(rusqlite::types::Value::Integer(offset.unwrap_or(0)));
+    params.push(rusqlite::types::Value::Integer(
+        limit.unwrap_or(60).clamp(1, MAX_LIST_LIMIT),
+    ));
+    params.push(rusqlite::types::Value::Integer(offset.unwrap_or(0).max(0)));
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
@@ -217,14 +227,24 @@ pub fn learning_stats(conn: &Connection) -> Result<super::LearningStats, AppErro
             |row| row.get(0),
         )
         ?;
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    let opened_today: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM articles WHERE substr(last_opened_at,1,10) = ?1",
-            params![today],
-            |row| row.get(0),
-        )
-        ?;
+    // "Today" means the machine-local day, matching `reading_stats`.
+    let today = chrono::Local::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    let opened_today: i64 = {
+        let mut stmt = conn.prepare(
+            "SELECT last_opened_at FROM articles WHERE last_opened_at IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut count = 0i64;
+        for row in rows {
+            if local_day(&row?) == today {
+                count += 1;
+            }
+        }
+        count
+    };
     let top_source = conn
         .query_row(
             "SELECT source FROM articles WHERE last_opened_at IS NOT NULL
@@ -271,90 +291,79 @@ pub fn learning_stats(conn: &Connection) -> Result<super::LearningStats, AppErro
 }
 
 /// Reading statistics for the stats page (last 14 days + totals).
+/// Calendar day of an RFC3339 timestamp in the machine-local timezone. The
+/// app runs on the reader's own Mac, so stats follow the wall clock they see.
+/// Unparseable values fall back to the UTC date prefix (previous behavior).
+pub(crate) fn local_day(rfc3339: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(rfc3339)
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d")
+                .to_string()
+        })
+        .unwrap_or_else(|_| rfc3339.get(..10).unwrap_or("").to_string())
+}
+
 pub fn reading_stats(conn: &Connection) -> Result<super::ReadingStats, AppError> {
     const DAILY_DAYS: i64 = 14;
 
-    // `last_opened_at` is RFC3339 UTC, so the first 10 chars are the date.
-    let mut days: Vec<super::ReadingDay> = Vec::new();
+    // Aggregate in Rust so days are machine-local, not UTC substrings.
+    // (articles, dwell_ms sum, word_count sum) per local day.
+    let mut by_date: std::collections::HashMap<String, (i64, i64, i64)> =
+        std::collections::HashMap::new();
     {
-        let mut stmt = conn
-            .prepare(
-                "SELECT date(substr(last_opened_at,1,10)) AS d,
-                        COUNT(*),
-                        CAST(IFNULL(SUM(dwell_ms),0)/60000 AS INTEGER),
-                        IFNULL(SUM(word_count),0)
-                 FROM articles
-                 WHERE last_opened_at IS NOT NULL
-                 GROUP BY d",
-            )
-            ?;
-        let by_date: std::collections::HashMap<String, super::ReadingDay> = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    super::ReadingDay {
-                        date: String::new(),
-                        articles: row.get(1)?,
-                        minutes: row.get(2)?,
-                        words: row.get(3)?,
-                    },
-                ))
-            })
-            ?
-            .collect::<Result<std::collections::HashMap<_, _>, _>>()
-            ?;
-
-        let today = chrono::Utc::now().date_naive();
-        for offset in (0..DAILY_DAYS).rev() {
-            let date = (today - chrono::Duration::days(offset))
-                .format("%Y-%m-%d")
-                .to_string();
-            days.push(
-                by_date
-                    .get(&date)
-                    .map(|d| super::ReadingDay { date: date.clone(), ..d.clone() })
-                    .unwrap_or(super::ReadingDay {
-                        date,
-                        articles: 0,
-                        minutes: 0,
-                        words: 0,
-                    }),
-            );
+        let mut stmt = conn.prepare(
+            "SELECT last_opened_at, IFNULL(dwell_ms,0), IFNULL(word_count,0)
+             FROM articles WHERE last_opened_at IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (opened_at, dwell_ms, word_count) = row?;
+            let bucket = by_date.entry(local_day(&opened_at)).or_insert((0, 0, 0));
+            bucket.0 += 1;
+            bucket.1 += dwell_ms;
+            bucket.2 += word_count;
         }
     }
 
-    // Streak: consecutive days with activity, starting today or yesterday.
-    let streak_days: i64 = {
-        let mut stmt = conn
-            .prepare(
-                "SELECT DISTINCT date(substr(last_opened_at,1,10)) AS d
-                 FROM articles WHERE last_opened_at IS NOT NULL ORDER BY d DESC",
-            )
-            ?;
-        let dates: Vec<String> = stmt
-            .query_map([], |row| row.get::<_, String>(0))
-            ?
-            .collect::<Result<Vec<_>, _>>()
-            ?;
-        let present: std::collections::HashSet<&str> = dates.iter().map(|s| s.as_str()).collect();
-        let today = chrono::Utc::now().date_naive();
-        let start = if present.contains(today.format("%Y-%m-%d").to_string().as_str()) {
-            today
-        } else if present
-            .contains((today - chrono::Duration::days(1)).format("%Y-%m-%d").to_string().as_str())
-        {
-            today - chrono::Duration::days(1)
-        } else {
-            return Ok(build_stats(conn, days, 0)?);
-        };
-        let mut streak = 0i64;
-        let mut cursor = start;
-        while present.contains(cursor.format("%Y-%m-%d").to_string().as_str()) {
-            streak += 1;
-            cursor -= chrono::Duration::days(1);
-        }
-        streak
+    let today = chrono::Local::now().date_naive();
+    let mut days: Vec<super::ReadingDay> = Vec::new();
+    for offset in (0..DAILY_DAYS).rev() {
+        let date = (today - chrono::Duration::days(offset))
+            .format("%Y-%m-%d")
+            .to_string();
+        let (articles, dwell_sum, words) = by_date.get(&date).copied().unwrap_or((0, 0, 0));
+        days.push(super::ReadingDay {
+            date,
+            articles,
+            minutes: dwell_sum / 60000,
+            words,
+        });
+    }
+
+    // Streak: consecutive local days with activity, starting today or yesterday.
+    let present: std::collections::HashSet<&str> =
+        by_date.keys().map(|s| s.as_str()).collect();
+    let day_key = |d: chrono::NaiveDate| d.format("%Y-%m-%d").to_string();
+    let start = if present.contains(day_key(today).as_str()) {
+        today
+    } else if present.contains(day_key(today - chrono::Duration::days(1)).as_str()) {
+        today - chrono::Duration::days(1)
+    } else {
+        return build_stats(conn, days, 0);
     };
+    let mut streak_days = 0i64;
+    let mut cursor = start;
+    while present.contains(day_key(cursor).as_str()) {
+        streak_days += 1;
+        cursor -= chrono::Duration::days(1);
+    }
 
     build_stats(conn, days, streak_days)
 }
@@ -541,6 +550,7 @@ pub fn insert_article_if_new(conn: &Connection, a: &Article) -> Result<bool, App
 /// (the RSS refresh path does exactly that).
 /// Keeps id / url / title / source / category / published_at / origin intact.
 /// Clears `summary_zh` so the refresh pipeline regenerates it for the new body.
+/// Also clears `tags_json` so stale tags (describing the old body) are replaced.
 pub fn refresh_article_content(conn: &Connection, a: &Article) -> Result<bool, AppError> {
     let changed = conn
         .execute(
@@ -550,6 +560,25 @@ pub fn refresh_article_content(conn: &Connection, a: &Article) -> Result<bool, A
             params![a.title, a.content_text, a.fetched_at, a.word_count, a.extraction_source, a.url],
         )
         ?;
+    if changed > 0 {
+        // Paragraph translations are keyed by index: a new body makes every
+        // stored row point at the wrong paragraph. Invalidate them here, on
+        // the same connection the caller locked, so the body swap and the
+        // invalidation are never observed separately by another writer.
+        let id: Option<String> = conn
+            .query_row("SELECT id FROM articles WHERE url=?1", params![a.url], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        if let Some(id) = id {
+            super::delete_paragraph_translations(conn, &id)?;
+            // Tags describe the old body; clear so `fill_missing_tags` refills.
+            conn.execute(
+                "UPDATE articles SET tags_json='' WHERE id=?1",
+                params![id],
+            )?;
+        }
+    }
     Ok(changed > 0)
 }
 
@@ -703,8 +732,7 @@ pub fn backfill_word_counts(conn: &Connection) -> Result<usize, AppError> {
             "SELECT id, content_text FROM articles WHERE word_count = 0",
         )?;
         let mapped = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
-        let collected = mapped.collect::<Result<Vec<_>, _>>()?;
-        collected
+        mapped.collect::<Result<Vec<_>, _>>()?
     };
     let mut stamped = 0;
     for (id, text) in rows {
@@ -904,6 +932,9 @@ pub fn set_article_body(
         "UPDATE articles SET content_text=?1, word_count=?2, quality='fulltext', extraction_source=?3 WHERE id=?4",
         params![content_text, word_count, extraction_source, id],
     )?;
+    // Same index-key invalidation as `refresh_article_content`: the repaired
+    // body re-splits into different paragraphs.
+    super::delete_paragraph_translations(conn, id)?;
     Ok(())
 }
 

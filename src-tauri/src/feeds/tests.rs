@@ -4,7 +4,7 @@ use std::collections::HashSet;
 #[test]
 fn blocks_link_roundups_and_transcripts() {
     assert!(is_blocked_content("Weekly Links, 09/04/2026", "body"));
-    assert!(is_blocked_content("Lit Hub Daily: September 11", "body"));
+    assert!(is_blocked_content("Link Roundup: Climate Edition", "body"));
     assert!(is_blocked_content("Transcript: Seth Bernstein", "body"));
     assert!(is_blocked_content("LWiAI Podcast #256", "body"));
     // Pure link dump (density, not title).
@@ -16,6 +16,10 @@ fn blocks_link_roundups_and_transcripts() {
     // A normal essay is kept.
     let essay = "plain prose about the world ".repeat(200);
     assert!(!is_blocked_content("A normal essay", &essay));
+    // Bare "daily"/"links" in a title must not trigger the roundup filter.
+    assert!(!is_blocked_content("Daily Rituals of a Translator", &essay));
+    assert!(!is_blocked_content("Links Between Poverty and Health", &essay));
+    assert!(!is_blocked_content("A Review of Weekly Radio Dramas", &essay));
 }
 
 #[test]
@@ -27,13 +31,10 @@ fn public_http_url_accepts_normal_targets() {
 #[test]
 fn public_http_url_blocks_private_and_local_targets() {
     for bad in [
-        "http://localhost/x",
-        "http://127.0.0.1/x",
         "http://10.0.0.5/x",
         "http://192.168.1.1/x",
         "http://172.16.0.1/x",
         "http://169.254.169.254/latest/meta-data",
-        "http://[::1]/x",
         "http://[fe80::1]/x",
         "http://[::ffff:127.0.0.1]/x",
         "ftp://example.com/x",
@@ -41,6 +42,253 @@ fn public_http_url_blocks_private_and_local_targets() {
     ] {
         assert!(ensure_public_http_url(bad).is_err(), "should block {bad}");
     }
+}
+
+/// Loopback is allowed in test builds only, so integration tests can run a
+/// fake feed server. Production builds (`cfg!(test)` false) still block it.
+#[test]
+fn loopback_allowed_for_tests_only() {
+    assert!(cfg!(test));
+    for ok in [
+        "http://localhost/x",
+        "http://127.0.0.1/x",
+        "http://[::1]/x",
+    ] {
+        assert!(ensure_public_http_url(ok).is_ok(), "should allow {ok}");
+    }
+}
+
+/// A malicious server that answers with a 302 to a blocked metadata endpoint.
+/// The shared client must refuse the hop instead of following it.
+#[test]
+fn redirect_to_blocked_host_is_rejected() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("port").port();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+        stream
+            .write_all(
+                b"HTTP/1.1 302 Found\r\nLocation: http://169.254.169.254/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            )
+            .expect("write 302");
+    });
+    let err = net::HTTP
+        .get(format!("http://127.0.0.1:{port}/feed"))
+        .send()
+        .expect_err("redirect to a blocked host must be rejected");
+    // The custom policy error lives in the source chain (`{:?}` prints it).
+    let chain = format!("{err:?}");
+    assert!(
+        chain.contains("重定向"),
+        "unexpected error chain: {chain}"
+    );
+    server.join().expect("server thread");
+}
+
+/// A server advertising a gigabyte body is rejected before reading anything.
+#[test]
+fn oversized_content_length_is_rejected() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("port").port();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 1073741824\r\nConnection: close\r\n\r\n",
+            )
+            .expect("write headers");
+        // Client must already have errored; the unread body is never sent.
+    });
+    let resp = net::HTTP
+        .get(format!("http://127.0.0.1:{port}/big"))
+        .send()
+        .expect("headers")
+        .error_for_status()
+        .expect("status");
+    let err = net::read_limited_bytes(resp).expect_err("1GB advertisement must be rejected");
+    assert!(err.to_string().contains("过大"), "unexpected error: {err}");
+    server.join().expect("server thread");
+}
+
+/// A server lying about its length (chunked, endless body) is cut off mid-stream.
+#[test]
+fn lying_chunked_body_is_cut_off() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("port").port();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf);
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+            .expect("write headers");
+        // One chunk just over the cap.
+        let chunk = vec![b'x'; net::MAX_RESPONSE_BYTES + 1];
+        let _ = stream.write_all(format!("{:x}\r\n", chunk.len()).as_bytes());
+        let _ = stream.write_all(&chunk);
+        let _ = stream.write_all(b"\r\n0\r\n\r\n");
+    });
+    let resp = net::HTTP
+        .get(format!("http://127.0.0.1:{port}/endless"))
+        .send()
+        .expect("headers")
+        .error_for_status()
+        .expect("status");
+    let err = net::read_limited_bytes(resp).expect_err("endless body must be cut off");
+    assert!(err.to_string().contains("过大"), "unexpected error: {err}");
+    server.join().expect("server thread");
+}
+
+/// End-to-end refresh against a fake feed server: the RSS-trusted long item
+/// is stored without a page fetch, the short teaser triggers exactly one
+/// page fetch, and ETag/304 makes the second refresh a no-op.
+#[test]
+fn refresh_ingests_feed_and_honors_etag() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    // ~700 English words: clears both the RSS-trust and word-count gates.
+    let prose: String = (0..50)
+        .map(|_| "The quick brown fox jumps over the lazy dog near the quiet river bank. ")
+        .collect();
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("port").port();
+    let now = chrono::Utc::now().to_rfc2822();
+    let feed_xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <rss version=\"2.0\" xmlns:content=\"http://purl.org/rss/1.0/modules/content/\">\n\
+         <channel><title>Test Feed</title><link>http://127.0.0.1:{port}/</link>\
+         <description>test</description>\n\
+         <item><title>Longform One</title><link>http://127.0.0.1:{port}/p1</link>\
+         <guid isPermaLink=\"false\">test-p1</guid><pubDate>{now}</pubDate>\
+         <description>A long story.</description>\
+         <content:encoded><![CDATA[<p>{prose}</p>]]></content:encoded></item>\n\
+         <item><title>Short Two</title><link>http://127.0.0.1:{port}/p2</link>\
+         <guid isPermaLink=\"false\">test-p2</guid><pubDate>{now}</pubDate>\
+         <description>A short teaser.</description></item>\n\
+         </channel></rss>"
+    );
+    let article_html = format!(
+        "<html><head><title>Short Two</title></head>\
+         <body><article><h1>Short Two</h1><p>{prose}</p><p>{prose}</p></article></body></html>"
+    );
+    // Exactly 3 requests: /feed.xml + /p2 on refresh 1, /feed.xml (304) on
+    // refresh 2. Extra requests would fail fast (connection refused) rather
+    // than hang the test.
+    let server = std::thread::spawn(move || {
+        for stream in listener.incoming().take(3) {
+            let mut stream = stream.expect("accept");
+            let mut buf = vec![0u8; 8192];
+            let mut head = Vec::new();
+            loop {
+                let n = stream.read(&mut buf).expect("read request");
+                if n == 0 {
+                    break;
+                }
+                head.extend_from_slice(&buf[..n]);
+                if head.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let head = String::from_utf8_lossy(&head);
+            let path = head
+                .lines()
+                .next()
+                .unwrap_or("")
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or("/");
+            let etag_match = head
+                .lines()
+                .any(|l| l.to_ascii_lowercase().starts_with("if-none-match:") && l.contains("test-etag-1"));
+            let (status, body, content_type) = if path == "/feed.xml" && etag_match {
+                ("HTTP/1.1 304 Not Modified", String::new(), "application/rss+xml")
+            } else if path == "/feed.xml" {
+                ("HTTP/1.1 200 OK", feed_xml.clone(), "application/rss+xml")
+            } else if path == "/p2" {
+                ("HTTP/1.1 200 OK", article_html.clone(), "text/html")
+            } else {
+                ("HTTP/1.1 404 Not Found", String::new(), "text/plain")
+            };
+            let _ = stream.write_all(
+                format!(
+                    "{status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nETag: test-etag-1\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+        }
+    });
+
+    let dir = std::env::temp_dir().join(format!("shiyan-refresh-it-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = crate::db::DbState::open(crate::db::db_path(dir.clone())).unwrap();
+    {
+        let conn = db.lock_write().unwrap();
+        let test_feed = crate::db::subscribe_feed(
+            &conn,
+            "Test Feed",
+            "tech",
+            &format!("http://127.0.0.1:{port}/feed.xml"),
+            "integration fixture",
+        )
+        .unwrap();
+        // Opening the DB seeds ~80 curated feeds (all enabled). Refresh would
+        // then crawl the real internet — disable everything but the fixture.
+        for feed in crate::db::list_feeds(&conn).unwrap() {
+            if feed.id != test_feed.id {
+                crate::db::set_feed_enabled(&conn, &feed.id, false).unwrap();
+            }
+        }
+    }
+    // No API key in tests: card/tag enrichment must no-op instead of failing.
+    let cfg = crate::config::AppConfig::default();
+    assert!(cfg.api_key.trim().is_empty());
+
+    let first = refresh_feeds(&db, &cfg, |_: RefreshProgress| {}).expect("refresh 1");
+    // No API key in tests: card/tag enrichment reports errors but must not
+    // block ingestion.
+    assert!(
+        first.errors.iter().all(|e| e.contains("API Key")),
+        "only no-key enrichment errors allowed: {:?}",
+        first.errors
+    );
+    assert_eq!(first.added_or_updated, 2, "both items ingested");
+    assert_eq!(first.feeds_unchanged, 0);
+    {
+        let conn = db.lock_read().unwrap();
+        assert_eq!(crate::db::list_article_urls(&conn).unwrap().len(), 2);
+        let feeds = crate::db::list_feeds(&conn).unwrap();
+        let enabled: Vec<_> = feeds.iter().filter(|f| f.enabled).collect();
+        assert_eq!(enabled.len(), 1, "only the fixture feed stays enabled");
+        assert_eq!(enabled[0].etag, "test-etag-1", "ETag persisted");
+    }
+
+    let second = refresh_feeds(&db, &cfg, |_: RefreshProgress| {}).expect("refresh 2");
+    assert!(
+        second.errors.iter().all(|e| e.contains("API Key")),
+        "only no-key enrichment errors allowed: {:?}",
+        second.errors
+    );
+    assert_eq!(second.feeds_unchanged, 1, "304 makes refresh a no-op");
+    assert_eq!(second.added_or_updated, 0);
+
+    server.join().expect("server thread");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn dummy_feed(id: &str, enabled: bool) -> crate::db::FeedSource {

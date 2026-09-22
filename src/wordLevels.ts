@@ -73,10 +73,6 @@ export function ensureLexiconLoaded(): Promise<void> {
   return loadPromise;
 }
 
-export function isLexiconLoaded(): boolean {
-  return loaded;
-}
-
 export function normalizeKey(term: string): string {
   return term
     .trim()
@@ -100,44 +96,102 @@ export function lookupWord(term: string): WordLevelEntry | null {
   const direct = lexicon.get(key);
   if (direct) return direct;
 
-  const candidates = inflectionCandidates(key);
-  for (const c of candidates) {
+  for (const c of lemmaCandidates(key)) {
     const hit = lexicon.get(c);
     if (hit) return hit;
   }
   return null;
 }
 
-function inflectionCandidates(key: string): string[] {
-  if (key.includes(" ")) return [];
+/**
+ * Rule-based base-form candidates for a surface form, most likely first.
+ * Single implementation shared by lexicon lookup (`lookupWord`,
+ * `findLemmaKey`) and the lookup lemma policy (`lemma.ts`): fix rules here
+ * once instead of in two places. Kept small and conservative — only
+ * structures unambiguous enough to be worth a base form.
+ */
+export function lemmaCandidates(word: string): string[] {
+  const w = word.toLowerCase();
+  if (w.length < 3 || w.includes(" ")) return [];
   const out: string[] = [];
-  const push = (s: string) => {
-    if (s && s !== key && s.length >= 2) out.push(s);
+  const push = (c: string) => {
+    if (c && c !== w && c.length >= 2 && !out.includes(c)) out.push(c);
   };
 
-  if (key.endsWith("'s")) push(key.slice(0, -2));
-  if (key.endsWith("s") && !key.endsWith("ss")) push(key.slice(0, -1));
-  if (key.endsWith("es")) push(key.slice(0, -2));
-  if (key.endsWith("ies")) push(`${key.slice(0, -3)}y`);
-  if (key.endsWith("ing")) {
-    push(key.slice(0, -3));
-    push(`${key.slice(0, -3)}e`);
-    if (key.length > 5 && key[key.length - 4] === key[key.length - 5]) {
-      push(key.slice(0, -4));
-    }
+  // possessives / contractions
+  if (w.endsWith("'s")) push(w.slice(0, -2));
+  if (w.endsWith("'")) push(w.slice(0, -1));
+
+  // plurals
+  if (w.endsWith("ies") && w.length > 3) push(`${w.slice(0, -3)}y`);
+  if (w.endsWith("ves")) {
+    push(`${w.slice(0, -3)}f`);
+    push(`${w.slice(0, -3)}fe`);
   }
-  if (key.endsWith("ed")) {
-    push(key.slice(0, -2));
-    push(`${key.slice(0, -1)}`); // e.g. liked -> like via -d? handled by -e
-    push(`${key.slice(0, -2)}e`);
-    if (key.length > 4 && key[key.length - 3] === key[key.length - 4]) {
-      push(key.slice(0, -3));
-    }
+  if (w.endsWith("es")) {
+    push(w.slice(0, -2));
+    if (/(ch|sh|ss|x|z)es$/.test(w)) push(w.slice(0, -2));
   }
-  if (key.endsWith("er")) push(key.slice(0, -2));
-  if (key.endsWith("est")) push(key.slice(0, -3));
-  if (key.endsWith("ly")) push(key.slice(0, -2));
+  if (w.endsWith("s") && !w.endsWith("ss") && !w.endsWith("us") && !w.endsWith("is")) {
+    push(w.slice(0, -1));
+  }
+  if (w.endsWith("men")) push(`${w.slice(0, -3)}man`);
+
+  // -ing (running → run, making → make)
+  if (w.endsWith("ing") && w.length > 4) {
+    const stem = w.slice(0, -3);
+    if (stem.length >= 2 && stem[stem.length - 1] === stem[stem.length - 2]) {
+      push(stem.slice(0, -1)); // doubled consonant
+    }
+    push(stem);
+    push(`${stem}e`);
+  }
+
+  // -ed (walked → walk, studied → study, stopped → stop, liked → like)
+  if (w.endsWith("ed") && w.length > 3) {
+    const stem = w.slice(0, -2);
+    if (w.endsWith("ied")) push(`${w.slice(0, -3)}y`);
+    if (stem.length >= 2 && stem[stem.length - 1] === stem[stem.length - 2]) {
+      push(stem.slice(0, -1));
+    }
+    push(stem);
+    push(`${stem}e`);
+  }
+
+  // comparative / superlative (bigger → big, nicer → nice)
+  if (w.endsWith("est") && w.length > 4) {
+    const stem = w.slice(0, -3);
+    if (stem.length >= 2 && stem[stem.length - 1] === stem[stem.length - 2]) {
+      push(stem.slice(0, -1));
+    }
+    push(stem);
+    push(`${stem}e`);
+  }
+  if (w.endsWith("er") && w.length > 3) {
+    const stem = w.slice(0, -2);
+    if (stem.length >= 2 && stem[stem.length - 1] === stem[stem.length - 2]) {
+      push(stem.slice(0, -1));
+    }
+    push(stem);
+    push(`${stem}e`);
+  }
+
+  // adverbs
+  if (w.endsWith("ly") && w.length > 4) {
+    push(w.slice(0, -2));
+    if (w.endsWith("ily")) push(`${w.slice(0, -3)}y`);
+    push(w.slice(0, -2) + "e");
+  }
+
   return out;
+}
+
+/** CEFR steps above the learner's level; 0 when within reach. */
+export function cefrStepsAbove(
+  entry: WordLevelEntry,
+  level: CefrLevel,
+): number {
+  return Math.max(0, CEFR_RANK[entry.cefr] - CEFR_RANK[level]);
 }
 
 /**
@@ -253,7 +307,7 @@ export function annotateText(
 
 function findLemmaKey(surface: string): string {
   if (lexicon.has(surface)) return surface;
-  for (const c of inflectionCandidates(surface)) {
+  for (const c of lemmaCandidates(surface)) {
     if (lexicon.has(c)) return c;
   }
   return surface;
@@ -290,10 +344,6 @@ function coalesceText(spans: AnnotatedSpan[]): AnnotatedSpan[] {
     }
   }
   return out;
-}
-
-export function defaultDifficultyPrefs(): DifficultyPrefs {
-  return { cefrLevel: "B1", freqBand: 3000 };
 }
 
 export type LexiconTerm = {

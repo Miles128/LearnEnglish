@@ -80,8 +80,42 @@ export default function SelectionPopover({
   onToggleKnown,
   known,
   onClose,
-}: Props) {  const ref = useRef<HTMLDivElement>(null);
+}: Props) {
+  const ref = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ w: 280, h: 160 });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+  }, []);
+  useLayoutEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const el = ref.current;
+      if (!el) return;
+      const focusables = el.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || active === el)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -107,6 +141,7 @@ export default function SelectionPopover({
       role="dialog"
       aria-modal="true"
       aria-label={popover.text}
+      tabIndex={-1}
       style={{ left: pos.x, top: pos.y + 12 }}
     >
       <div className="pop-head">

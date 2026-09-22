@@ -10,7 +10,7 @@ use tauri_plugin_dialog::DialogExt;
 pub async fn add_memory(app: AppHandle, input: AddMemoryInput) -> Result<MemoryItem, AppError> {
     let cfg = config::load_config()?;
     crate::commands::spawn_db(app, move |state| {
-        Ok(vocab::add_or_merge_memory(state, &cfg, input)?)
+        vocab::add_or_merge_memory(state, &cfg, input)
     })
     .await
 }
@@ -22,7 +22,7 @@ pub fn list_memory(
     status: Option<String>,
 ) -> Result<Vec<MemoryItem>, AppError> {
     let conn = state.lock_read()?;
-    Ok(db::list_memory(&conn, kind.as_deref(), status.as_deref())?)
+    db::list_memory(&conn, kind.as_deref(), status.as_deref())
 }
 
 #[tauri::command]
@@ -31,7 +31,7 @@ pub fn due_memory(
     kind: Option<String>,
 ) -> Result<Vec<MemoryItem>, AppError> {
     let conn = state.lock_read()?;
-    Ok(db::due_memory(&conn, kind.as_deref())?)
+    db::due_memory(&conn, kind.as_deref())
 }
 
 #[tauri::command]
@@ -56,13 +56,13 @@ pub fn set_memory_status(
     status: String,
 ) -> Result<(), AppError> {
     let conn = state.lock_write()?;
-    Ok(db::set_memory_status(&conn, &id, &status)?)
+    db::set_memory_status(&conn, &id, &status)
 }
 
 #[tauri::command]
 pub fn delete_memory(state: tauri::State<'_, DbState>, id: String) -> Result<(), AppError> {
     let conn = state.lock_write()?;
-    Ok(db::delete_memory(&conn, &id)?)
+    db::delete_memory(&conn, &id)
 }
 
 // ---- Lookup history ----
@@ -76,12 +76,12 @@ pub fn record_lookup(
     article_id: Option<String>,
 ) -> Result<(), AppError> {
     let conn = state.lock_write()?;
-    Ok(db::record_lookup(
+    db::record_lookup(
         &conn,
         &term,
         context.as_deref().unwrap_or(""),
         article_id.as_deref(),
-    )?)
+    )
 }
 
 #[tauri::command]
@@ -92,24 +92,24 @@ pub fn list_lookups(
     offset: Option<usize>,
 ) -> Result<Vec<LookupEntry>, AppError> {
     let conn = state.lock_read()?;
-    Ok(db::list_lookups(
+    db::list_lookups(
         &conn,
         search.as_deref(),
         limit.unwrap_or(100),
         offset.unwrap_or(0),
-    )?)
+    )
 }
 
 #[tauri::command]
 pub fn delete_lookup(state: tauri::State<'_, DbState>, id: i64) -> Result<(), AppError> {
     let conn = state.lock_write()?;
-    Ok(db::delete_lookup(&conn, id)?)
+    db::delete_lookup(&conn, id)
 }
 
 #[tauri::command]
 pub fn clear_lookups(state: tauri::State<'_, DbState>) -> Result<(), AppError> {
     let conn = state.lock_write()?;
-    Ok(db::clear_lookups(&conn)?)
+    db::clear_lookups(&conn)
 }
 
 /// Export the whole vocab library (words + phrases, all statuses) as a CSV

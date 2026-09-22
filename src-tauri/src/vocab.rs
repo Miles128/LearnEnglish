@@ -13,6 +13,7 @@ use uuid::Uuid;
 static CHAT_CLIENT: LazyLock<Client> = LazyLock::new(|| {
     Client::builder()
         .timeout(std::time::Duration::from_secs(90))
+        .connect_timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("build reqwest client")
 });
@@ -79,7 +80,7 @@ fn chat_json<T: for<'de> Deserialize<'de>>(
             serde_json::from_str(strip_fences(&raw2))
                 .map_err(|e| {
                     AppError::msg(format!(
-                        "parse {label}: {first_err}; retry also failed: {e}; raw={raw2}"
+                        "parse {label}: {first_err}; retry also failed: {e}"
                     ))
                 })
         }
@@ -491,10 +492,17 @@ fn chat_body(cfg: &AppConfig, system: &str, user: &str, json_mode: bool) -> Resu
             .post(&url)
             .bearer_auth(&cfg.api_key)
             .json(&body)
-            .send()?
-            .error_for_status()
-            .map_err(|e| AppError::msg(format!("LLM {e}")))?;
-        let parsed: ChatResponse = resp.json()?;
+            .send()?;
+        // Keep the reqwest error so `is_retryable` can see the HTTP status
+        // (429 / 5xx must be retried; converting to `Msg` loses that).
+        let resp = resp.error_for_status()?;
+        // Bound the LLM response so a rogue endpoint can't OOM us; also
+        // truncate error context so raw model output never leaks to the UI.
+        let body: String = {
+            let bytes = crate::feeds::net::read_limited_bytes(resp)?;
+            String::from_utf8_lossy(&bytes).into_owned()
+        };
+        let parsed: ChatResponse = serde_json::from_str(&body)?;
         parsed
             .choices
             .first()
@@ -554,7 +562,9 @@ where
 
 #[cfg(test)]
 mod clip_tests {
-    use super::{backoff_ms, chat_completions_url, clip_zh, is_retryable, with_retry};
+    use super::{
+        backoff_ms, chat_completions_url, clip_zh, is_retryable, translate_text, with_retry,
+    };
     use crate::error::AppError;
 
     fn json_err() -> AppError {
@@ -596,6 +606,19 @@ mod clip_tests {
         );
         assert_eq!(out.unwrap(), 7);
         assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn translate_without_key_fails_before_network() {
+        // Default config carries no key: every LLM entry point must refuse
+        // with an actionable message instead of attempting a request.
+        let cfg = crate::config::AppConfig::default();
+        assert!(cfg.api_key.trim().is_empty());
+        let err = translate_text(&cfg, "hello").expect_err("must not call LLM without a key");
+        assert!(
+            err.to_string().contains("API Key"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

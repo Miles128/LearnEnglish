@@ -7,10 +7,21 @@
  */
 
 import {
+  cefrStepsAbove,
   FREQ_BANDS,
   lookupWord,
+  normalizeKey,
+  type DifficultyPrefs,
   type FreqBand,
 } from "./wordLevels";
+
+/**
+ * Single source of truth for the learner profile: the same `{cefrLevel,
+ * freqBand}` drives both the list difficulty index (here) and the reader
+ * underline rule (`isHardWord`), so "graded easy" never means "fully
+ * underlined".
+ */
+export type { DifficultyPrefs };
 
 export const DIFFICULTY_LEVELS = [
   "easy",
@@ -112,15 +123,11 @@ function bandOf(rank: number): FreqBand {
   return FREQ_BANDS[FREQ_BANDS.length - 1]!;
 }
 
-/** Learner profile for the local difficulty index: word-frequency size only. */
-export type DifficultyPrefs = {
-  freqBand: FreqBand;
-};
-
 /**
- * Weight of a word outside the comfort zone, by frequency alone:
- * `1 + 0.5·(bands above)`; 0 inside; 0.5 for OOV (names / unlisted words
- * are not evidence of difficulty).
+ * Weight of a word outside the comfort zone: `1 + 0.5·(steps above)`, where
+ * steps is the worse of the frequency-band gap and the CEFR gap — the same
+ * OR-rule as the underline (`isHardWord`). 0 only when inside both; 0.5 for
+ * OOV (names / unlisted words are not evidence of difficulty).
  */
 export function wordDifficultyWeight(
   term: string,
@@ -130,12 +137,15 @@ export function wordDifficultyWeight(
   if (learning) return 1.5;
   const entry = lookupWord(term);
   if (!entry) return 0.5;
-  if (entry.rank <= prefs.freqBand) return 0;
-  const bandSteps = Math.max(
-    0,
-    BAND_INDEX[bandOf(entry.rank)] - BAND_INDEX[prefs.freqBand],
-  );
-  return 1 + 0.5 * bandSteps;
+  const bandSteps =
+    entry.rank <= prefs.freqBand
+      ? 0
+      : Math.max(
+          0,
+          BAND_INDEX[bandOf(entry.rank)] - BAND_INDEX[prefs.freqBand],
+        );
+  const steps = Math.max(bandSteps, cefrStepsAbove(entry, prefs.cefrLevel));
+  return steps === 0 ? 0 : 1 + 0.5 * steps;
 }
 
 /** Long sentences add a little difficulty — deliberately a low weight. */
@@ -160,6 +170,8 @@ export type DifficultyResult = {
   /** Raw score; bucket it with `difficultyFromScore` + calibrated edges. */
   score: number;
   avgSentenceWords: number;
+  /** Fraction of tokens the learner knows (lexicon + known/learning lists). */
+  coverage: number;
 };
 
 /**
@@ -180,16 +192,22 @@ export function articleDifficulty(
   if (tokens.length < 40) return null;
 
   const learning = new Set(
-    learningTerms.map((t) => t.trim().toLowerCase()).filter((t) => t.length >= 2),
+    learningTerms.map(normalizeKey).filter((t) => t.length >= 2),
   );
   const known = new Set(
-    knownTerms.map((t) => t.trim().toLowerCase()).filter((t) => t.length >= 2),
+    knownTerms.map(normalizeKey).filter((t) => t.length >= 2),
   );
 
   let total = 0;
+  let covered = 0;
   for (const tok of tokens) {
-    if (known.has(tok)) continue; // known words add no difficulty
+    if (known.has(tok)) {
+      covered += 1;
+      continue; // known words add no difficulty
+    }
     total += wordDifficultyWeight(tok, prefs, learning.has(tok));
+    // Words already in the learning set are also "recognised" for coverage.
+    if (learning.has(tok)) covered += 1;
   }
   const density = total / tokens.length;
 
@@ -198,7 +216,7 @@ export function articleDifficulty(
     sentences.length > 0 ? tokens.length / sentences.length : tokens.length;
 
   const score = density * sentenceFactor(avgSentenceWords);
-  return { score, avgSentenceWords };
+  return { score, avgSentenceWords, coverage: covered / tokens.length };
 }
 
 export function difficultyLabel(level: DifficultyLevel): string {

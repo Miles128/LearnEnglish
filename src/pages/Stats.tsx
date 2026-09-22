@@ -57,6 +57,10 @@ export default function Stats() {
         <PageBack />
       </header>
 
+      {stats.articles_total === 0 && (
+        <p className="muted">还没有阅读记录。读完几篇后，这里会出现阅读统计。</p>
+      )}
+
       <section className="stat-grid">
         <div className="stat-card">
           <span className="stat-value">{fmtMinutes(stats.minutes_total)}</span>

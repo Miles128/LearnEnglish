@@ -8,7 +8,7 @@ import {
   type DifficultyPrefs,
 } from "./difficulty";
 import { articleNeedsCardZh } from "./homeDerived";
-import type { FreqBand } from "./wordLevels";
+import type { CefrLevel, FreqBand } from "./wordLevels";
 
 /**
  * Home-domain hooks, split out of Home.tsx so the page stays a thin
@@ -124,6 +124,7 @@ type DifficultyOptions = {
   articles: ArticleListItem[];
   learningTerms: string[];
   knownTerms: string[];
+  cefrLevel: CefrLevel;
   freqBand: FreqBand;
 };
 
@@ -137,11 +138,12 @@ export function useHomeDifficulty({
   articles,
   learningTerms,
   knownTerms,
+  cefrLevel,
   freqBand,
 }: DifficultyOptions) {
   const difficultyPrefs = useMemo<DifficultyPrefs>(
-    () => ({ freqBand }),
-    [freqBand],
+    () => ({ cefrLevel, freqBand }),
+    [cefrLevel, freqBand],
   );
   return useMemo(() => {
     const scored: { id: string; score: number | null }[] = [];

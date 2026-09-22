@@ -1,12 +1,13 @@
 /**
  * English word-form reduction (lemma lookup for clicks/translations).
  *
- * Rule-based with an irregular table — no dictionary needed for the common
- * inflections that show up in news text. Only single words are reduced;
- * phrases pass through untouched.
+ * Policy layer: irregular table first, then a candidate that exists in the
+ * lexicon, then the most likely rule-based form. The candidate rules live in
+ * `wordLevels.lemmaCandidates` (single implementation shared with the
+ * annotator); only single words are reduced, phrases pass through untouched.
  */
 
-import { lookupWord, normalizeKey } from "./wordLevels";
+import { lemmaCandidates, lookupWord, normalizeKey } from "./wordLevels";
 
 /** Irregular forms worth hard-coding (news-frequency verbs/nouns/adjectives). */
 const IRREGULAR: Record<string, string> = {
@@ -43,87 +44,6 @@ const IRREGULAR: Record<string, string> = {
   more: "much", most: "much", less: "little", least: "little",
   farther: "far", farthest: "far", further: "far", furthest: "far",
 };
-
-/**
- * Rule-based candidates for a surface form, most likely first.
- * Kept small and conservative: only structures that are unambiguous enough
- * to be worth a base form.
- */
-export function lemmaCandidates(word: string): string[] {
-  const w = word.toLowerCase();
-  if (w.length < 3) return [];
-  const out: string[] = [];
-  const push = (c: string) => {
-    if (c && c !== w && c.length >= 2 && !out.includes(c)) out.push(c);
-  };
-
-  // possessives / contractions
-  if (w.endsWith("'s")) push(w.slice(0, -2));
-  if (w.endsWith("'")) push(w.slice(0, -1));
-
-  // plurals
-  if (w.endsWith("ies") && w.length > 3) push(`${w.slice(0, -3)}y`);
-  if (w.endsWith("ves")) {
-    push(`${w.slice(0, -3)}f`);
-    push(`${w.slice(0, -3)}fe`);
-  }
-  if (w.endsWith("es")) {
-    push(w.slice(0, -2));
-    if (/(ch|sh|ss|x|z)es$/.test(w)) push(w.slice(0, -2));
-  }
-  if (w.endsWith("s") && !w.endsWith("ss") && !w.endsWith("us") && !w.endsWith("is")) {
-    push(w.slice(0, -1));
-  }
-  if (w.endsWith("men")) push(`${w.slice(0, -3)}man`);
-
-  // -ing (running → run, making → make)
-  if (w.endsWith("ing") && w.length > 4) {
-    const stem = w.slice(0, -3);
-    if (stem.length >= 2 && stem[stem.length - 1] === stem[stem.length - 2]) {
-      push(stem.slice(0, -1)); // doubled consonant
-    }
-    push(stem);
-    push(`${stem}e`);
-  }
-
-  // -ed (walked → walk, studied → study, stopped → stop, liked → like)
-  if (w.endsWith("ed") && w.length > 3) {
-    const stem = w.slice(0, -2);
-    if (w.endsWith("ied")) push(`${w.slice(0, -3)}y`);
-    if (stem.length >= 2 && stem[stem.length - 1] === stem[stem.length - 2]) {
-      push(stem.slice(0, -1));
-    }
-    push(stem);
-    push(`${stem}e`);
-  }
-
-  // comparative / superlative (bigger → big, nicer → nice)
-  if (w.endsWith("est") && w.length > 4) {
-    const stem = w.slice(0, -3);
-    if (stem.length >= 2 && stem[stem.length - 1] === stem[stem.length - 2]) {
-      push(stem.slice(0, -1));
-    }
-    push(stem);
-    push(`${stem}e`);
-  }
-  if (w.endsWith("er") && w.length > 3) {
-    const stem = w.slice(0, -2);
-    if (stem.length >= 2 && stem[stem.length - 1] === stem[stem.length - 2]) {
-      push(stem.slice(0, -1));
-    }
-    push(stem);
-    push(`${stem}e`);
-  }
-
-  // adverbs
-  if (w.endsWith("ly") && w.length > 4) {
-    push(w.slice(0, -2));
-    if (w.endsWith("ily")) push(`${w.slice(0, -3)}y`);
-    push(w.slice(0, -2) + "e");
-  }
-
-  return out;
-}
 
 /**
  * Reduce a token to its base form:

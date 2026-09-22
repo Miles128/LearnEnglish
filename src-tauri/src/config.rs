@@ -7,8 +7,11 @@ use ts_rs::TS;
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct AppConfig {
+    #[serde(default)]
     pub base_url: String,
+    #[serde(default)]
     pub api_key: String,
+    #[serde(default)]
     pub model: String,
     #[serde(default)]
     pub disabled_feeds: Vec<String>,
@@ -108,21 +111,26 @@ impl Default for AppConfig {
 }
 
 /// Packaged-app data dir. Must match `identifier` in tauri.conf.json.
-const BUNDLE_ID_DIR: &str = "com.sihai.learnenglish";
+const BUNDLE_ID_DIR: &str = "com.sihai.shiyan";
 
 pub fn config_path() -> PathBuf {
-    if let Ok(p) = std::env::var("LEARNENGLISH_CONFIG") {
+    if let Ok(p) = std::env::var("SHIYAN_CONFIG") {
         return PathBuf::from(p);
     }
-    // Prefer project root when running via `pnpm tauri dev`
-    let candidates = [
-        PathBuf::from("config.local.json"),
-        PathBuf::from("../config.local.json"),
-        PathBuf::from("../../config.local.json"),
-    ];
-    for c in candidates {
-        if c.exists() {
-            return c;
+    // Only probe relative paths in debug builds (dev convenience). Release
+    // builds always use the packaged app-data directory to prevent accidentally
+    // reading/writing a `config.local.json` from a random working directory.
+    #[cfg(debug_assertions)]
+    {
+        let candidates = [
+            PathBuf::from("config.local.json"),
+            PathBuf::from("../config.local.json"),
+            PathBuf::from("../../config.local.json"),
+        ];
+        for c in candidates {
+            if c.exists() {
+                return c;
+            }
         }
     }
     // Packaged app fallback: ~/Library/Application Support/<BUNDLE_ID_DIR>/

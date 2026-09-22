@@ -15,7 +15,7 @@
   --card: #fff;
   --hover-fill: #fff;
   --glow-a: #efe7d8;
-  --glow-b: #dbeee8;
+  --glow-b: #eae0d3;
   --progress-a: #0f5c4c;
   --progress-b: #1a7a66;
   font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "LXGW WenKai",
@@ -41,7 +41,7 @@
     --card: #1f2226;
     --hover-fill: #24282d;
     --glow-a: rgba(120, 100, 70, 0.16);
-    --glow-b: rgba(50, 110, 95, 0.16);
+    --glow-b: rgba(140, 108, 74, 0.14);
     --progress-a: #2f8f77;
     --progress-b: #45ab90;
 }
@@ -64,7 +64,7 @@
     --card: #1f2226;
     --hover-fill: #24282d;
     --glow-a: rgba(120, 100, 70, 0.16);
-    --glow-b: rgba(50, 110, 95, 0.16);
+    --glow-b: rgba(140, 108, 74, 0.14);
     --progress-a: #2f8f77;
     --progress-b: #45ab90;
   }
@@ -79,11 +79,32 @@ body,
 #root {
   margin: 0;
   height: 100%;
-  background:
-    radial-gradient(1200px 600px at 10% -10%, var(--glow-a) 0%, transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, var(--glow-b) 0%, transparent 50%),
-    var(--bg);
   color: var(--ink);
+}
+
+html {
+  background: var(--bg);
+}
+
+/* Page backdrop: one fixed layer, painted once. It used to live on
+   html+body+#root (three stacked copies) and the `background` shorthand's
+   default repeat tiled the glow again on every viewport height of scrolling. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      1200px 600px at 10% -10%,
+      var(--glow-a) 0%,
+      transparent 55%
+    )
+    no-repeat,
+    radial-gradient(900px 500px at 100% 0%, var(--glow-b) 0%, transparent 50%)
+    no-repeat,
+    var(--bg);
 }
 
 button,

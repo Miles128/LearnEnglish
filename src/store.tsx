@@ -9,7 +9,7 @@ import {
 } from "react";
 import { api, defaultAppConfig, type AppConfig } from "./api";
 import { normalizeReadingPrefs } from "./readingPrefs";
-import { isCefrLevel, isFreqBand } from "./wordLevels";
+import { isCefrLevel, isFreqBand, normalizeKey } from "./wordLevels";
 
 /** Merge raw config over defaults, clamping difficulty fields. */
 export function normalizeConfig(raw: AppConfig): AppConfig {
@@ -113,6 +113,7 @@ type VocabState = {
   refreshLearningTerms: () => Promise<void>;
   /** Lowercased terms the learner marked as already known. */
   knownTerms: string[];
+  refreshKnownTerms: () => Promise<void>;
   markKnown: (term: string) => Promise<void>;
   unmarkKnown: (term: string) => Promise<void>;
 };
@@ -125,8 +126,11 @@ export function VocabProvider({ children }: { children: ReactNode }) {
 
   const refreshLearningTerms = useCallback(async () => {
     try {
-      const list = await api.listMemory("word", "learning");
-      setLearningTerms(list.map((v) => v.term));
+      const [words, phrases] = await Promise.all([
+        api.listMemory("word", "learning"),
+        api.listMemory("phrase", "learning"),
+      ]);
+      setLearningTerms([...words, ...phrases].map((v) => v.term));
     } catch {
       // highlight list is optional
     }
@@ -141,14 +145,14 @@ export function VocabProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const markKnown = useCallback(async (term: string) => {
-    const key = term.trim().toLowerCase();
+    const key = normalizeKey(term);
     if (!key) return;
     await api.addKnownWord(key);
     setKnownTerms((prev) => (prev.includes(key) ? prev : [...prev, key]));
   }, []);
 
   const unmarkKnown = useCallback(async (term: string) => {
-    const key = term.trim().toLowerCase();
+    const key = normalizeKey(term);
     await api.removeKnownWord(key);
     setKnownTerms((prev) => prev.filter((t) => t !== key));
   }, []);
@@ -163,10 +167,11 @@ export function VocabProvider({ children }: { children: ReactNode }) {
       learningTerms,
       refreshLearningTerms,
       knownTerms,
+      refreshKnownTerms,
       markKnown,
       unmarkKnown,
     }),
-    [learningTerms, refreshLearningTerms, knownTerms, markKnown, unmarkKnown],
+    [learningTerms, refreshLearningTerms, knownTerms, refreshKnownTerms, markKnown, unmarkKnown],
   );
   return (
     <VocabContext.Provider value={value}>{children}</VocabContext.Provider>

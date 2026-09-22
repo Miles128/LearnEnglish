@@ -100,6 +100,7 @@ export default function Settings() {
   const [restoring, setRestoring] = useState(false);
   const saveTimer = useRef<number | undefined>(undefined);
   const pendingSaveRef = useRef(false);
+  const seededRef = useRef(false);
 
   async function backupDb() {
     setBackingUp(true);
@@ -145,7 +146,12 @@ export default function Settings() {
   const readingPreview = useMemo(() => resolveReadingPrefs(cfg), [cfg]);
 
   useEffect(() => {
-    if (ready) setCfg(normalizeConfig(savedCfg));
+    // Only seed local state on first ready; subsequent `savedCfg` changes
+    // (from our own debounced saves) must not overwrite in-progress edits.
+    if (ready && !seededRef.current) {
+      seededRef.current = true;
+      setCfg(normalizeConfig(savedCfg));
+    }
   }, [ready, savedCfg]);
 
   const persist = useCallback(

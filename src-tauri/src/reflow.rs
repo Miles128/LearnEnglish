@@ -20,8 +20,21 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
+/// Paragraph-split generation. Bump this whenever a reflow rule changes how
+/// text splits into paragraphs: the startup cleanup keys its one-time marker
+/// off this version, so stale index-keyed paragraph translations are cleared
+/// again instead of rendering against the wrong paragraphs.
+pub const REFLOW_VERSION: u32 = 2;
+
 static RE_HYPHEN_BREAK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"([A-Za-z])-[ \t]*\n[ \t]*([a-z])").unwrap());
+/// Left-hand words of hyphenated compounds ("well-known", "part-time"): a
+/// line break after such a hyphen is typographic, not syllable hyphenation,
+/// so the hyphen must survive the rejoin.
+const COMPOUND_HEADS: &[&str] = &[
+    "well", "self", "half", "full", "part", "cross", "long", "short", "low", "high", "mid", "all",
+    "ill", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+];
 static RE_BLANK_RUN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n[ \t]*\n+").unwrap());
 static RE_SPACE_RUN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[ \t]{2,}").unwrap());
 static RE_SPACE_BEFORE_PUNCT: LazyLock<Regex> = LazyLock::new(|| {
@@ -59,7 +72,7 @@ const TOKEN_SUFFIX: &[&str] = &[
 
 pub fn reflow(text: &str) -> Vec<String> {
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    let joined = RE_HYPHEN_BREAK.replace_all(&normalized, "$1$2");
+    let joined = rejoin_hyphen_breaks(&normalized);
 
     let mut paragraphs: Vec<String> = Vec::new();
     for block in RE_BLANK_RUN.split(&joined) {
@@ -71,10 +84,50 @@ pub fn reflow(text: &str) -> Vec<String> {
         }
     }
 
-    if paragraphs.len() == 1 {
-        paragraphs = split_long_block(&paragraphs[0]);
-    }
+    // Any over-long paragraph gets re-split at sentence boundaries, not just
+    // when the whole body happens to be one block.
+    paragraphs = paragraphs
+        .into_iter()
+        .flat_map(|p| {
+            if p.chars().count() > LONG_BLOCK_CHARS {
+                split_long_block(&p)
+            } else {
+                vec![p]
+            }
+        })
+        .collect();
     paragraphs
+}
+
+/// Join line-break hyphens ("exam-\\nple" → "example"), keeping the hyphen of
+/// compound words ("state-of-the-\\nart" → "state-of-the-art").
+fn rejoin_hyphen_breaks(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0usize;
+    for caps in RE_HYPHEN_BREAK.captures_iter(text) {
+        let m = caps.get(0).unwrap();
+        out.push_str(&text[last..m.start()]);
+        let word_start = {
+            let b = text.as_bytes();
+            let mut i = m.start();
+            while i > 0 && b[i - 1].is_ascii_alphabetic() {
+                i -= 1;
+            }
+            i
+        };
+        let left_word = &text[word_start..m.start() + 1];
+        let chain = word_start > 0 && text.as_bytes()[word_start - 1] == b'-';
+        let compound =
+            chain || COMPOUND_HEADS.contains(&left_word.to_ascii_lowercase().as_str());
+        out.push_str(caps.get(1).unwrap().as_str());
+        if compound {
+            out.push('-');
+        }
+        out.push_str(caps.get(2).unwrap().as_str());
+        last = m.end();
+    }
+    out.push_str(&text[last..]);
+    out
 }
 
 /// Normalize typography and spacing inside a single paragraph.
@@ -129,16 +182,18 @@ fn split_block_into_paragraphs(block: &str) -> Vec<String> {
 }
 
 fn is_list_item(line: &str) -> bool {
-    let mut chars = line.chars();
+    let trimmed = line.trim_start();
+    let mut chars = trimmed.chars();
     match chars.next() {
         Some('-' | '*' | '\u{2022}' | '\u{00b7}' | '\u{2013}') => {
             chars.next().is_none_or(char::is_whitespace)
         }
         Some(c) if c.is_ascii_digit() => {
-            let rest: String = chars.collect();
-            let rest = rest.trim_start();
-            let mut it = rest.chars();
-            matches!(it.next(), Some('.' | ')')) && it.next().is_some_and(char::is_whitespace)
+            // Multi-digit numbering: "10. Tenth", "12) Twelfth".
+            let rest: String = chars.by_ref().take_while(|c| c.is_ascii_digit()).collect();
+            let _ = rest;
+            matches!(chars.next(), Some('.' | ')'))
+                && chars.next().is_some_and(char::is_whitespace)
         }
         _ => false,
     }
@@ -373,6 +428,22 @@ mod tests {
         assert_eq!(reflow("exam-\nple text"), vec!["example text"]);
         // A real hyphen inside a line is untouched.
         assert_eq!(reflow("a well-known fact"), vec!["a well-known fact"]);
+    }
+
+    #[test]
+    fn keeps_compound_hyphens_at_line_breaks() {
+        assert_eq!(
+            reflow("a state-of-the-\nart model"),
+            vec!["a state-of-the-art model"]
+        );
+        assert_eq!(
+            reflow("a well-\nknown fact"),
+            vec!["a well-known fact"]
+        );
+        assert_eq!(
+            reflow("the twenty-\nfirst century"),
+            vec!["the twenty-first century"]
+        );
     }
 
     #[test]

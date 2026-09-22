@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter};
 #[tauri::command]
 pub fn list_feeds(state: tauri::State<'_, DbState>) -> Result<Vec<FeedSource>, AppError> {
     let conn = state.lock_read()?;
-    Ok(db::list_feeds(&conn)?)
+    db::list_feeds(&conn)
 }
 
 #[tauri::command]
@@ -17,14 +17,14 @@ pub fn set_feed_enabled(
     enabled: bool,
 ) -> Result<(), AppError> {
     let conn = state.lock_write()?;
-    Ok(db::set_feed_enabled(&conn, &id, enabled)?)
+    db::set_feed_enabled(&conn, &id, enabled)
 }
 
 /// Delete a user-subscribed feed (curated feeds are disable-only).
 #[tauri::command]
 pub fn delete_feed_source(state: tauri::State<'_, DbState>, id: String) -> Result<(), AppError> {
     let conn = state.lock_write()?;
-    Ok(db::delete_user_feed(&conn, &id)?)
+    db::delete_user_feed(&conn, &id)
 }
 
 #[tauri::command]
@@ -32,7 +32,7 @@ pub fn list_feed_categories(
     state: tauri::State<'_, DbState>,
 ) -> Result<Vec<FeedCategory>, AppError> {
     let conn = state.lock_read()?;
-    Ok(db::list_feed_categories(&conn)?)
+    db::list_feed_categories(&conn)
 }
 
 #[tauri::command]
@@ -41,7 +41,7 @@ pub fn add_feed_category(
     label: String,
 ) -> Result<FeedCategory, AppError> {
     let conn = state.lock_write()?;
-    Ok(db::add_feed_category(&conn, &label)?)
+    db::add_feed_category(&conn, &label)
 }
 
 #[derive(serde::Deserialize)]
@@ -58,13 +58,13 @@ pub fn subscribe_feed(
     input: SubscribeFeedInput,
 ) -> Result<FeedSource, AppError> {
     let conn = state.lock_write()?;
-    Ok(db::subscribe_feed(
+    db::subscribe_feed(
         &conn,
         &input.name,
         &input.category,
         &input.url,
         input.description.as_deref().unwrap_or(""),
-    )?)
+    )
 }
 
 #[tauri::command]
@@ -84,7 +84,7 @@ pub async fn discover_feeds(
             db::get_feed_category(&conn, &category_id)?
         };
         let cat = cat.ok_or_else(|| format!("未知分类：{category_id}"))?;
-        Ok(vocab::discover_rss_feeds(&cfg, &cat.id, &cat.label)?)
+        vocab::discover_rss_feeds(&cfg, &cat.id, &cat.label)
     })
     .await
 }
@@ -105,13 +105,13 @@ pub async fn refresh_feeds(app: AppHandle) -> Result<RefreshResult, AppError> {
     let cfg = crate::config::load_config()?;
     let emit_app = app.clone();
     crate::commands::spawn_db(app, move |state| {
-        Ok(feeds::refresh_feeds(
+        feeds::refresh_feeds(
             state,
             &cfg,
             move |progress: RefreshProgress| {
                 let _ = emit_app.emit("refresh-progress", &progress);
             },
-        )?)
+        )
     })
     .await
 }

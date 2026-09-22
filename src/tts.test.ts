@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  claimTtsOwner,
   createTtsController,
+  isTtsOwner,
   normalizeSpeakText,
   pickEnglishVoice,
+  releaseTtsOwner,
   type SpeechSynthesisLike,
   type SpeechSynthesisUtteranceLike,
   type SpeechSynthesisVoiceLike,
@@ -186,5 +189,27 @@ describe("createTtsController", () => {
     tts.speak("Two");
     expect(states.filter((s) => s === false).length).toBe(1); // initial only
     expect(states[states.length - 1]).toBe(true);
+  });
+});
+
+describe("tts ownership", () => {
+  it("a newer claim steals ownership from an older speaker", () => {
+    const a = {};
+    const b = {};
+    claimTtsOwner(a);
+    expect(isTtsOwner(a)).toBe(true);
+    claimTtsOwner(b);
+    expect(isTtsOwner(a)).toBe(false);
+    expect(isTtsOwner(b)).toBe(true);
+  });
+
+  it("release only succeeds for the current owner", () => {
+    const a = {};
+    const b = {};
+    claimTtsOwner(a);
+    expect(releaseTtsOwner(b)).toBe(false);
+    expect(isTtsOwner(a)).toBe(true);
+    expect(releaseTtsOwner(a)).toBe(true);
+    expect(isTtsOwner(a)).toBe(false);
   });
 });

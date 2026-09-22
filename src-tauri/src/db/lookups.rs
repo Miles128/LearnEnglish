@@ -30,6 +30,12 @@ fn map_lookup(row: &rusqlite::Row<'_>) -> rusqlite::Result<LookupEntry> {
 const LOOKUP_SELECT: &str =
     "SELECT id,term,context,article_id,created_at FROM lookup_history";
 
+/// History cap: every lookup is one row, so an unbounded table is a slow
+/// privacy leak. Oldest rows past the cap are trimmed on every insert.
+pub const MAX_LOOKUP_ROWS: i64 = 2000;
+/// Re-selecting the same word within minutes is one lookup, not many.
+const LOOKUP_DEDUP_MINUTES: i64 = 10;
+
 pub fn record_lookup(
     conn: &Connection,
     term: &str,
@@ -40,10 +46,33 @@ pub fn record_lookup(
     if term.is_empty() {
         return Ok(());
     }
+    let now = Utc::now();
+    let recent: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM lookup_history
+          WHERE lower(term)=lower(?1) AND created_at > ?2",
+        params![
+            term,
+            (now - chrono::Duration::minutes(LOOKUP_DEDUP_MINUTES)).to_rfc3339()
+        ],
+        |row| row.get(0),
+    )?;
+    if recent > 0 {
+        return Ok(());
+    }
+    // Bound the stored context so a full-page selection can't bloat the DB.
+    const MAX_CONTEXT_CHARS: usize = 300;
+    let context: String = context.chars().take(MAX_CONTEXT_CHARS).collect();
     conn.execute(
         "INSERT INTO lookup_history (term, context, article_id, created_at)
          VALUES (?1, ?2, ?3, ?4)",
-        params![term, context, article_id, Utc::now().to_rfc3339()],
+        params![term, context, article_id, now.to_rfc3339()],
+    )?;
+    conn.execute(
+        "DELETE FROM lookup_history WHERE id NOT IN (
+            SELECT id FROM lookup_history
+            ORDER BY created_at DESC, id DESC LIMIT ?1
+         )",
+        params![MAX_LOOKUP_ROWS],
     )?;
     Ok(())
 }
@@ -58,8 +87,10 @@ pub fn list_lookups(
     let mut sql = String::from(LOOKUP_SELECT);
     let mut values: Vec<rusqlite::types::Value> = Vec::new();
     if let Some(q) = search.map(str::trim).filter(|q| !q.is_empty()) {
-        sql.push_str(" WHERE lower(term) LIKE ?1 OR context LIKE ?1");
-        values.push(format!("%{}%", q.to_lowercase()).into());
+        // Escape LIKE metacharacters so `%`/`_` in the query are literals.
+        let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+        sql.push_str(" WHERE lower(term) LIKE ?1 ESCAPE '\\' OR context LIKE ?1 ESCAPE '\\'");
+        values.push(format!("%{}%", escaped.to_lowercase()).into());
     }
     sql.push_str(" ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?");
     values.push((limit as i64).into());
@@ -84,6 +115,7 @@ pub fn clear_lookups(conn: &Connection) -> Result<(), AppError> {
     Ok(())
 }
 
+#[cfg(test)]
 pub fn count_lookups(conn: &Connection) -> Result<i64, AppError> {
     Ok(conn.query_row("SELECT COUNT(*) FROM lookup_history", [], |r| {
         r.get(0)
@@ -137,5 +169,27 @@ mod tests {
         let conn = setup();
         record_lookup(&conn, "   ", "ctx", None).unwrap();
         assert_eq!(count_lookups(&conn).unwrap(), 0);
+    }
+
+    #[test]
+    fn record_debounces_repeat_lookups() {
+        let conn = setup();
+        record_lookup(&conn, "Fragile", "ctx one", None).unwrap();
+        record_lookup(&conn, "fragile", "ctx two", None).unwrap();
+        assert_eq!(count_lookups(&conn).unwrap(), 1, "same term, case-insensitive");
+        record_lookup(&conn, "treaty", "ctx", None).unwrap();
+        assert_eq!(count_lookups(&conn).unwrap(), 2);
+    }
+
+    #[test]
+    fn record_trims_history_to_cap() {
+        let conn = setup();
+        for i in 0..(MAX_LOOKUP_ROWS + 50) {
+            // Distinct terms defeat the repeat-term debounce.
+            record_lookup(&conn, &format!("term-{i:05}"), "ctx", None).unwrap();
+        }
+        assert_eq!(count_lookups(&conn).unwrap(), MAX_LOOKUP_ROWS);
+        let newest = list_lookups(&conn, None, 1, 0).unwrap();
+        assert_eq!(newest[0].term, format!("term-{:05}", MAX_LOOKUP_ROWS + 49));
     }
 }

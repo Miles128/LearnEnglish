@@ -465,6 +465,56 @@ fn refresh_article_content_updates_longer_body() {
 }
 
 #[test]
+fn body_replacement_invalidates_paragraph_translations() {
+    let path = temp_dir().join(format!("le-invalidate-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    let a = db::Article {
+        id: "inv1".into(),
+        url: "https://example.com/invalidate".into(),
+        title: "Old".into(),
+        source: "T".into(),
+        category: "tech".into(),
+        published_at: None,
+        content_text: "old body ".repeat(60),
+        fetched_at: "2020-01-01T00:00:00Z".into(),
+        origin: "rss".into(),
+        summary_zh: String::new(),
+        last_opened_at: None,
+        open_count: 0,
+        ..Default::default()
+    };
+    db::insert_article_if_new(&conn, &a).unwrap();
+    db::save_translation(&conn, "inv1", "paragraph", "0", "old", "旧", "test").unwrap();
+    db::save_translation(&conn, "inv1", "selection", "abc", "hi", "嗨", "test").unwrap();
+
+    // Refresh upgrade drops paragraph rows but keeps selections.
+    let mut update = a.clone();
+    update.content_text = "new body ".repeat(60);
+    assert!(db::refresh_article_content(&conn, &update).unwrap());
+    assert!(db::get_translation(&conn, "inv1", "paragraph", "0")
+        .unwrap()
+        .is_none());
+    assert!(db::get_translation(&conn, "inv1", "selection", "abc")
+        .unwrap()
+        .is_some());
+
+    // No-op refresh (same body) leaves fresh rows alone.
+    db::save_translation(&conn, "inv1", "paragraph", "0", "new", "新", "test").unwrap();
+    assert!(!db::refresh_article_content(&conn, &update).unwrap());
+    assert!(db::get_translation(&conn, "inv1", "paragraph", "0")
+        .unwrap()
+        .is_some());
+
+    // Repair path invalidates as well.
+    db::set_article_body(&conn, "inv1", &"repaired ".repeat(60), 120, "page").unwrap();
+    assert!(db::get_translation(&conn, "inv1", "paragraph", "0")
+        .unwrap()
+        .is_none());
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn refresh_article_content_skips_url_imports() {
     let path = temp_dir().join(format!("le-refresh-url-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");
@@ -1031,7 +1081,7 @@ fn migration_snapshot_is_written_before_version_bump() {
     conn.pragma_update(None, "user_version", 5).unwrap();
 
     db::backup_before_migration(&conn, &path);
-    let backup = path.with_file_name("learnenglish.db.premigrate-v5.bak");
+    let backup = path.with_file_name("shiyan.db.premigrate-v5.bak");
     assert!(backup.exists(), "pre-migration snapshot should exist");
 
     // Already up to date → no new snapshot.
@@ -1040,7 +1090,7 @@ fn migration_snapshot_is_written_before_version_bump() {
     conn2.pragma_update(None, "user_version", 12).unwrap();
     db::backup_before_migration(&conn2, &current);
     assert!(!current
-        .with_file_name("learnenglish.db.premigrate-v12.bak")
+        .with_file_name("shiyan.db.premigrate-v12.bak")
         .exists());
 
     let _ = std::fs::remove_file(path);
@@ -1102,6 +1152,46 @@ fn add_or_merge_memory_reuses_existing_term() {
 }
 
 #[test]
+fn add_or_merge_memory_preserves_srs_progress() {
+    let dir = temp_dir().join(format!("le-vocab-srs-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let state = db::DbState::open(db::db_path(dir.clone())).unwrap();
+    let cfg = crate::config::AppConfig::default();
+    let input = |ctx: &str| crate::vocab::AddMemoryInput {
+        kind: "word".into(),
+        term: "persevere".into(),
+        context_sentence: ctx.into(),
+        article_id: None,
+        definition_zh: Some("坚持".into()),
+        word_type: Some("verb".into()),
+        collocations: Some(vec![]),
+    };
+    let first = crate::vocab::add_or_merge_memory(&state, &cfg, input("Keep going.")).unwrap();
+
+    // Simulate two successful reviews.
+    {
+        let conn = state.lock_write().unwrap();
+        let mut item = db::get_memory_by_term(&conn, "word", "persevere")
+            .unwrap()
+            .expect("exists");
+        item.reps = 2;
+        item.consecutive_know = 2;
+        item.interval_days = 3.0;
+        db::update_memory_review(&conn, &item).unwrap();
+    }
+
+    // Re-adding the same word merges metadata but never resets SRS state.
+    let merged =
+        crate::vocab::add_or_merge_memory(&state, &cfg, input("Still going.")).unwrap();
+    assert_eq!(merged.id, first.id);
+    assert_eq!(merged.reps, 2);
+    assert_eq!(merged.consecutive_know, 2);
+    assert_eq!(merged.interval_days, 3.0);
+    assert_eq!(merged.status, "learning");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn add_or_merge_memory_unifies_word_and_phrase_kinds() {
     let dir = temp_dir().join(format!("le-memory-kinds-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -1151,6 +1241,43 @@ fn known_words_add_list_remove_roundtrip() {
 
     // Removing a missing term is a no-op, not an error.
     db::remove_known_word(&conn, "ghost").unwrap();
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn known_words_normalize_apostrophes_and_legacy_rows() {
+    let path = temp_dir().join(format!("le-known-norm-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+
+    // Curly apostrophes fold to straight ones on write.
+    db::add_known_word(&conn, "it’s").unwrap();
+    db::add_known_word(&conn, "it's").unwrap();
+    assert_eq!(db::list_known_words(&conn).unwrap(), vec!["it's".to_string()]);
+    db::remove_known_word(&conn, "IT’S").unwrap();
+    assert!(db::list_known_words(&conn).unwrap().is_empty());
+
+    // Legacy rows written before normalization are canonicalized once,
+    // with collisions collapsed ('don’t' and 'DON’T' fold to one row,
+    // while plain 'dont' is a different word and stays).
+    conn.execute(
+        "INSERT INTO known_words (term, created_at) VALUES ('don’t', 'x'), ('DON’T', 'x'), ('dont', 'x')",
+        [],
+    )
+    .unwrap();
+    let fixed = db::normalize_known_words_once(&conn).unwrap();
+    assert_eq!(fixed, 2, "both non-canonical rows are rewritten");
+    assert_eq!(
+        db::list_known_words(&conn).unwrap(),
+        vec!["don't".to_string(), "dont".to_string()]
+    );
+    // Second run is a no-op even with fresh legacy-shaped rows.
+    conn.execute(
+        "INSERT INTO known_words (term, created_at) VALUES ('can’t', 'x')",
+        [],
+    )
+    .unwrap();
+    assert_eq!(db::normalize_known_words_once(&conn).unwrap(), 0);
 
     let _ = std::fs::remove_file(path);
 }
@@ -1338,6 +1465,15 @@ fn reflow_cleanup_clears_paragraph_translations_once() {
         .unwrap()
         .is_some());
 
+    // The one-time marker is versioned off REFLOW_VERSION: bumping the
+    // version is what re-arms the cleanup after a reflow rule change.
+    let marker = db::get_meta(
+        &conn,
+        &format!("reflow_translations_cleared_v{}", crate::reflow::REFLOW_VERSION),
+    )
+    .unwrap();
+    assert_eq!(marker.as_deref(), Some("done"));
+
     // Guarded by app_meta: a second run is a no-op even with new rows.
     db::save_translation(&conn, "a1", "paragraph", "0", "Hello", "你好", "test").unwrap();
     assert_eq!(feeds::clear_stale_paragraph_translations_once(&conn).unwrap(), 0);
@@ -1346,6 +1482,46 @@ fn reflow_cleanup_clears_paragraph_translations_once() {
         .is_some());
 
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn stats_day_is_offset_aware_not_a_substring() {
+    // Same instant written with different offsets lands on the same local
+    // day, whatever the machine timezone is.
+    assert_eq!(
+        db::local_day("2024-06-15T12:00:00Z"),
+        db::local_day("2024-06-15T14:00:00+02:00")
+    );
+    let day = db::local_day("2024-06-15T12:00:00Z");
+    assert_eq!(day.len(), 10, "YYYY-MM-DD shape");
+    // Unparseable values keep the old UTC-prefix behavior instead of panicking.
+    assert_eq!(db::local_day("2024-06-15 garbage"), "2024-06-15");
+    assert_eq!(db::local_day("garbage"), "");
+}
+
+#[test]
+fn vacuum_into_file_produces_valid_backup() {
+    let path = temp_dir().join(format!("le-vacuum-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    db::upsert_article(&conn, &sample_article("a1")).unwrap();
+    let dest = temp_dir().join(format!("le-vacuum-out-{}.db", Uuid::new_v4()));
+    let _ = std::fs::remove_file(&dest);
+
+    db::vacuum_into_file(&conn, &dest).unwrap();
+    assert!(dest.exists(), "VACUUM INTO must write the snapshot");
+    // The snapshot passes the same validation as a user-supplied backup file.
+    let version = db::validate_backup_file(&dest).unwrap();
+    assert!(version >= 1);
+    let check = rusqlite::Connection::open(&dest).unwrap();
+    let count: i64 = check
+        .query_row("SELECT COUNT(*) FROM articles WHERE id='a1'", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 1);
+
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&dest);
 }
 
 #[test]
@@ -1573,4 +1749,68 @@ fn export_memory_csv_dumps_all_libraries_with_escaping() {
     );
 
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn bundle_id_rename_adopts_legacy_data_dir_once() {
+    let parent = temp_dir().join(format!("le-bundle-{}", Uuid::new_v4()));
+    let legacy = parent.join("com.sihai.learnenglish");
+    let current = parent.join("com.sihai.shiyan");
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::write(legacy.join("learnenglish.db"), b"fake-db").unwrap();
+    std::fs::write(legacy.join("learnenglish.db-wal"), b"fake-wal").unwrap();
+    std::fs::write(legacy.join("config.local.json"), b"{}").unwrap();
+
+    let copied = db::migrate_legacy_app_dir(&current).unwrap();
+    assert_eq!(copied, 3, "db + wal + config move over");
+    // DB files are adopted under the new name; config keeps its own name.
+    assert_eq!(
+        std::fs::read(current.join("shiyan.db")).unwrap(),
+        b"fake-db"
+    );
+    assert_eq!(
+        std::fs::read(current.join("shiyan.db-wal")).unwrap(),
+        b"fake-wal"
+    );
+    assert!(current.join("config.local.json").exists());
+    // Copy, never move: the old dir stays as a backup.
+    assert!(legacy.join("learnenglish.db").exists());
+
+    // Second run is a no-op and never overwrites new data.
+    std::fs::write(current.join("shiyan.db"), b"new-db").unwrap();
+    assert_eq!(db::migrate_legacy_app_dir(&current).unwrap(), 0);
+    assert_eq!(std::fs::read(current.join("shiyan.db")).unwrap(), b"new-db");
+
+    // No legacy dir at all is also a no-op.
+    let bare_parent = temp_dir().join(format!("le-bundle-bare-{}", Uuid::new_v4()));
+    let fresh = bare_parent.join("com.sihai.shiyan");
+    assert_eq!(db::migrate_legacy_app_dir(&fresh).unwrap(), 0);
+
+    let _ = std::fs::remove_dir_all(parent);
+    let _ = std::fs::remove_dir_all(bare_parent);
+}
+
+#[test]
+fn db_file_rename_happens_in_place_and_is_idempotent() {
+    // Already on the new bundle id, but the DB still carries the legacy name.
+    let dir = temp_dir().join(format!("le-dbfile-{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("learnenglish.db"), b"fake-db").unwrap();
+    std::fs::write(dir.join("learnenglish.db-wal"), b"fake-wal").unwrap();
+    std::fs::write(dir.join("learnenglish.db.premigrate-v10.bak"), b"old").unwrap();
+    std::fs::write(dir.join("config.local.json"), b"{}").unwrap();
+
+    assert_eq!(db::migrate_legacy_app_dir(&dir).unwrap(), 3);
+    assert_eq!(std::fs::read(dir.join("shiyan.db")).unwrap(), b"fake-db");
+    assert_eq!(std::fs::read(dir.join("shiyan.db-wal")).unwrap(), b"fake-wal");
+    assert!(dir.join("shiyan.db.premigrate-v10.bak").exists());
+    // Legacy names are gone and unrelated files are untouched.
+    assert!(!dir.join("learnenglish.db").exists());
+    assert!(!dir.join("learnenglish.db-wal").exists());
+    assert!(dir.join("config.local.json").exists());
+
+    // Rerun is a no-op once the new-named DB exists.
+    assert_eq!(db::migrate_legacy_app_dir(&dir).unwrap(), 0);
+
+    let _ = std::fs::remove_dir_all(dir);
 }

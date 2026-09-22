@@ -12,7 +12,7 @@ use super::filters::{
     choose_article_body, is_blocked_content, is_english_article, is_readable_article_body,
     looks_like_paywall, looks_truncated, rss_trust_chars,
 };
-use super::net::{ensure_public_http_url, HTTP};
+use super::net::{ensure_public_http_url, read_limited_bytes, HTTP};
 use super::{MIN_ARTICLE_WORDS};
 use crate::config::AppConfig;
 use crate::db::{self, Article, DbState, FeedSource};
@@ -28,6 +28,9 @@ use uuid::Uuid;
 /// How many feeds download concurrently. Bounded to keep polite to servers
 /// and to preserve per-feed progress ordering in the UI.
 const PARALLEL_FEEDS: usize = 4;
+/// Articles written per write-lock hold. Releasing the lock between batches
+/// keeps one feed's download from starving readers and other workers.
+const WRITE_BATCH_SIZE: usize = 10;
 
 #[derive(Debug, Default, Serialize, TS)]
 #[ts(export)]
@@ -48,6 +51,7 @@ pub struct RefreshResult {
     pub errors: Vec<String>,
 }
 
+#[derive(Default)]
 pub(crate) struct DownloadStats {
     skipped_existing: usize,
     skipped_short: usize,
@@ -61,21 +65,8 @@ pub(crate) struct DownloadStats {
     rss_fulltext_hits: usize,
     /// Entries considered for new content (denominator of fulltext_ratio).
     evaluated: usize,
-}
-
-impl Default for DownloadStats {
-    fn default() -> Self {
-        Self {
-            skipped_existing: 0,
-            skipped_short: 0,
-            skipped_non_english: 0,
-            skipped_duplicate: 0,
-            skipped_blocked: 0,
-            skipped_old: 0,
-            rss_fulltext_hits: 0,
-            evaluated: 0,
-        }
-    }
+    /// Entries skipped because the page-fetch budget was exhausted.
+    skipped_budget: usize,
 }
 
 pub(crate) struct FeedDownload {
@@ -229,53 +220,80 @@ pub fn refresh_feeds(
                         }
                         {
                             let stats = download.stats;
-                            let conn = db.lock_write();
-                            match conn {
-                                Err(e) => {
-                                    ok = false;
-                                    (shared.lock().expect("refresh lock"))
-                                        .errors
-                                        .push(format!("{}: {e}", feed.name));
-                                }
-                                Ok(conn) => {
-                                    let mut stats = stats;
-                                    for article in &download.articles {
-                                        if title_index
-                                            .lock()
-                                            .expect("title index lock")
-                                            .is_dup(&article.title)
-                                        {
-                                            stats.skipped_duplicate += 1;
-                                            continue;
-                                        }
-                                        match db::insert_article_if_new(&conn, article) {
-                                            Ok(true) => {
-                                                known_urls
-                                                    .lock()
-                                                    .expect("known urls lock")
-                                                    .insert(article.url.clone());
-                                                title_index
-                                                    .lock()
-                                                    .expect("title index lock")
-                                                    .insert(&article.title);
-                                                (shared.lock().expect("refresh lock"))
-                                                    .added_or_updated += 1;
-                                            }
-                                            Ok(false) => {
-                                                stats.skipped_existing += 1;
-                                            }
+                            let mut stats = stats;
+                                    // Insert in small batches, releasing the
+                                    // write lock between batches so one feed's
+                                    // download cannot starve readers or the
+                                    // other refresh workers.
+                                    let mut write_ok = true;
+                                    'batches: for chunk in
+                                        download.articles.chunks(WRITE_BATCH_SIZE)
+                                    {
+                                        let conn = match db.lock_write() {
                                             Err(e) => {
                                                 ok = false;
                                                 (shared.lock().expect("refresh lock"))
                                                     .errors
                                                     .push(format!("{}: {e}", feed.name));
-                                                break;
+                                                write_ok = false;
+                                                break 'batches;
+                                            }
+                                            Ok(conn) => conn,
+                                        };
+                                        for article in chunk {
+                                            if title_index
+                                                .lock()
+                                                .expect("title index lock")
+                                                .is_dup(&article.title)
+                                            {
+                                                stats.skipped_duplicate += 1;
+                                                continue;
+                                            }
+                                            match db::insert_article_if_new(&conn, article) {
+                                                Ok(true) => {
+                                                    known_urls
+                                                        .lock()
+                                                        .expect("known urls lock")
+                                                        .insert(article.url.clone());
+                                                    title_index
+                                                        .lock()
+                                                        .expect("title index lock")
+                                                        .insert(&article.title);
+                                                    (shared.lock().expect("refresh lock"))
+                                                        .added_or_updated += 1;
+                                                }
+                                                Ok(false) => {
+                                                    stats.skipped_existing += 1;
+                                                }
+                                                Err(e) => {
+                                                    ok = false;
+                                                    (shared.lock().expect("refresh lock"))
+                                                        .errors
+                                                        .push(format!("{}: {e}", feed.name));
+                                                    write_ok = false;
+                                                    break 'batches;
+                                                }
                                             }
                                         }
                                     }
-                                    for update in &download.updates {
-                                        if let Ok(true) = db::refresh_article_content(&conn, update) {
-                                            (shared.lock().expect("refresh lock")).updated += 1;
+                                    if write_ok {
+                                        match db.lock_write() {
+                                            Err(e) => {
+                                                ok = false;
+                                                (shared.lock().expect("refresh lock"))
+                                                    .errors
+                                                    .push(format!("{}: {e}", feed.name));
+                                            }
+                                            Ok(conn) => {
+                                                for update in &download.updates {
+                                                    if let Ok(true) =
+                                                        db::refresh_article_content(&conn, update)
+                                                    {
+                                                        (shared.lock().expect("refresh lock"))
+                                                            .updated += 1;
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                     if stats.evaluated > 0 {
@@ -290,8 +308,6 @@ pub fn refresh_feeds(
                                     result.skipped_short += stats.skipped_short;
                                     result.skipped_non_english += stats.skipped_non_english;
                                     result.skipped_duplicate += stats.skipped_duplicate;
-                                }
-                            }
                         }
                         match db.lock_write() {
                             Ok(conn) => {
@@ -342,7 +358,7 @@ pub fn refresh_feeds(
         "translate",
         0,
         0,
-        "正在翻译标题与简介…".into(),
+        "正在补简介…".into(),
         download_weight,
     );
 
@@ -376,7 +392,7 @@ pub fn refresh_feeds(
             if total == 0 {
                 "标题与简介完成".into()
             } else {
-                format!("正在翻译标题与简介 {done}/{total}")
+                format!("正在补简介 {done}/{total}")
             },
             download_weight.saturating_add(translate_pct).min(99),
         );
@@ -433,11 +449,7 @@ fn download_feed_articles(
         .get(reqwest::header::ETAG)
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
-    let bytes = resp
-        .error_for_status()
-        ?
-        .bytes()
-        ?;
+    let bytes = read_limited_bytes(resp.error_for_status()?)?;
 
     let parsed = parser::parse(&bytes[..]).map_err(|e| AppError::msg(e.to_string()))?;
     let feed_language = parsed.language.clone();
@@ -447,8 +459,6 @@ fn download_feed_articles(
 
     let mut page_fetches = 0usize;
     const MAX_PAGE_FETCHES: usize = 12;
-
-    let known_guard = known_urls.lock().map_err(|_| "known urls poisoned")?;
 
     for entry in parsed.entries.into_iter().take(40) {
         let url = entry
@@ -496,7 +506,13 @@ fn download_feed_articles(
         // Already downloaded — only upgrade when the RSS body itself is now
         // trusted full-text AND meaningfully longer than what we stored.
         // Never page-fetch known URLs again (budget preserved for new ones).
-        if known_guard.contains(&url) {
+        // The `known_urls` set is read under a short lock; the guard is
+        // dropped before any network I/O in the page-fetch branch below.
+        let is_known = known_urls
+            .lock()
+            .map_err(|_| "known urls poisoned")?
+            .contains(&url);
+        if is_known {
             let stored_len = known_lengths.get(&url).copied().unwrap_or(0);
             stats.evaluated += 1;
             if rss_text.chars().count() >= trust_chars
@@ -546,7 +562,7 @@ fn download_feed_articles(
         } else {
             stats.evaluated += 1;
             if page_fetches >= MAX_PAGE_FETCHES {
-                stats.skipped_short += 1;
+                stats.skipped_budget += 1;
                 continue;
             }
             page_fetches += 1;
@@ -608,6 +624,7 @@ fn download_feed_articles(
 
 /// Build an article whose body already passed the readability gate.
 /// Stamps word count + quality so refresh never re-derives them.
+#[allow(clippy::too_many_arguments)]
 fn fulltext_article(
     id: String,
     url: String,

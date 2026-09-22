@@ -1,4 +1,4 @@
-# LearnEnglish Mac MVP — Design Spec
+# Shiyan Mac MVP — Design Spec
 
 **Date:** 2026-08-10  
 **Status:** Approved

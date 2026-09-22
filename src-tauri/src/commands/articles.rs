@@ -38,15 +38,18 @@ pub async fn list_articles(
 ) -> Result<Vec<ArticleListItem>, AppError> {
     crate::commands::spawn_db(app, move |state| {
         let conn = state.lock_read()?;
-        Ok(db::list_articles(&conn, category.as_deref(), limit, offset)?)
+        db::list_articles(&conn, category.as_deref(), limit, offset)
     })
     .await
 }
 
-/// Ranked window size for interest scoring. Ranking the most recent few
-/// hundred articles is plenty for a daily reading session.
-const RANK_WINDOW: i64 = 400;
+/// Ranked window size for interest scoring. Wide enough that cursor pages can
+/// reach past the first few screens of a daily reading session.
+const RANK_WINDOW: i64 = 800;
 
+/// Cursor + paging params must stay flat for the `invoke` contract, hence the
+/// arity.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn list_articles_ranked(
     app: AppHandle,
@@ -56,6 +59,8 @@ pub async fn list_articles_ranked(
     unread_only: Option<bool>,
     limit: Option<i64>,
     offset: Option<i64>,
+    cursor_score: Option<f64>,
+    cursor_id: Option<String>,
 ) -> Result<Vec<ArticleListItem>, AppError> {
     let tags = tags.unwrap_or_default();
     crate::commands::spawn_db(app, move |state| {
@@ -97,13 +102,13 @@ pub async fn list_articles_ranked(
         let now = chrono::Utc::now();
         let day_key = i64::from(now.num_days_from_ce());
         let ranked = crate::rank::rank_articles(items, &affinity, now, day_key);
+        let cursor = match (cursor_score, cursor_id) {
+            (Some(score), Some(id)) => Some((score, id)),
+            _ => None,
+        };
         let start = offset.unwrap_or(0).max(0) as usize;
         let take = limit.unwrap_or(60).max(0) as usize;
-        Ok(ranked
-            .into_iter()
-            .skip(start)
-            .take(take)
-            .collect())
+        Ok(crate::rank::page_ranked(ranked, cursor, start, take))
     })
     .await
 }
@@ -130,7 +135,7 @@ pub async fn list_library(
     };
     crate::commands::spawn_db(app, move |state| {
         let conn = state.lock_read()?;
-        Ok(db::query_articles(
+        db::query_articles(
             &conn,
             &db::ArticleQuery {
                 category: category.as_deref(),
@@ -142,7 +147,7 @@ pub async fn list_library(
             },
             limit,
             offset,
-        )?)
+        )
     })
     .await
 }
@@ -153,7 +158,7 @@ pub fn list_article_sources(
     state: tauri::State<'_, DbState>,
 ) -> Result<Vec<(String, i64)>, AppError> {
     let conn = state.lock_read()?;
-    Ok(db::list_article_sources(&conn)?)
+    db::list_article_sources(&conn)
 }
 
 /// One-off translation without article caching (used outside the reader,
@@ -161,7 +166,7 @@ pub fn list_article_sources(
 #[tauri::command]
 pub async fn translate_plain_text(text: String) -> Result<String, AppError> {
     let cfg = crate::config::load_config()?;
-    crate::commands::spawn_blocking_err(move || Ok(vocab::translate_text(&cfg, &text)?)).await
+    crate::commands::spawn_blocking_err(move || vocab::translate_text(&cfg, &text)).await
 }
 
 /// Backfill topic tags (bounded per call; refresh also runs a batch).
@@ -172,7 +177,7 @@ pub async fn fill_missing_tags(app: AppHandle, limit: Option<usize>) -> Result<u
         return Ok(0);
     }
     crate::commands::spawn_db(app, move |state| {
-        Ok(feeds::fill_missing_tags(state, &cfg, limit.unwrap_or(200), |_, _| {})?)
+        feeds::fill_missing_tags(state, &cfg, limit.unwrap_or(200), |_, _| {})
     })
     .await
 }
@@ -185,12 +190,12 @@ pub fn mark_article_progress(
     read_completed: bool,
 ) -> Result<(), AppError> {
     let conn = state.lock_write()?;
-    Ok(db::add_article_reading_progress(
+    db::add_article_reading_progress(
         &conn,
         &id,
         dwell_ms_delta,
         read_completed,
-    )?)
+    )
 }
 
 #[tauri::command]
@@ -200,7 +205,7 @@ pub fn set_article_liked(
     liked: bool,
 ) -> Result<(), AppError> {
     let conn = state.lock_write()?;
-    Ok(db::set_article_liked(&conn, &id, liked)?)
+    db::set_article_liked(&conn, &id, liked)
 }
 
 #[tauri::command]
@@ -209,7 +214,7 @@ pub fn get_article_view(
     id: String,
 ) -> Result<Option<ArticleView>, AppError> {
     let conn = state.lock_read()?;
-    Ok(load_article_view(&conn, &id)?)
+    load_article_view(&conn, &id)
 }
 
 #[tauri::command]
@@ -218,7 +223,7 @@ pub fn mark_article_opened(
     id: String,
 ) -> Result<(), AppError> {
     let conn = state.lock_write()?;
-    Ok(db::mark_article_opened(&conn, &id)?)
+    db::mark_article_opened(&conn, &id)
 }
 
 /// Reading statistics for the stats page.
@@ -227,7 +232,7 @@ pub fn get_reading_stats(
     state: tauri::State<'_, DbState>,
 ) -> Result<crate::db::ReadingStats, AppError> {
     let conn = state.lock_read()?;
-    Ok(db::reading_stats(&conn)?)
+    db::reading_stats(&conn)
 }
 
 #[tauri::command]
@@ -235,7 +240,7 @@ pub fn get_learning_stats(
     state: tauri::State<'_, DbState>,
 ) -> Result<LearningStats, AppError> {
     let conn = state.lock_read()?;
-    Ok(db::learning_stats(&conn)?)
+    db::learning_stats(&conn)
 }
 
 #[tauri::command]
@@ -247,14 +252,14 @@ pub async fn translate_paragraph(
 ) -> Result<TranslationRow, AppError> {
     let cfg = crate::config::load_config()?;
     crate::commands::spawn_db(app, move |state| {
-        Ok(translate::translate_and_cache(
+        translate::translate_and_cache(
             state,
             &cfg,
             &article_id,
             "paragraph",
             &paragraph_index.to_string(),
             &text,
-        )?)
+        )
     })
     .await
 }
@@ -268,14 +273,14 @@ pub async fn translate_selection(
     let cfg = crate::config::load_config()?;
     crate::commands::spawn_db(app, move |state| {
         let scope_key = translate::stable_scope_key(&text);
-        Ok(translate::translate_and_cache(
+        translate::translate_and_cache(
             state,
             &cfg,
             &article_id,
             "selection",
             &scope_key,
             &text,
-        )?)
+        )
     })
     .await
 }
@@ -288,14 +293,14 @@ pub async fn translate_full_article(
     let cfg = crate::config::load_config()?;
     let emit_app = app.clone();
     crate::commands::spawn_db(app, move |state| {
-        Ok(translate::translate_full_article(
+        translate::translate_full_article(
             state,
             &cfg,
             &article_id,
             |p| {
                 let _ = emit_app.emit("translate-progress", p);
             },
-        )?)
+        )
     })
     .await
 }
@@ -307,7 +312,7 @@ pub async fn fill_missing_card_zh(app: AppHandle) -> Result<usize, AppError> {
         return Ok(0);
     }
     crate::commands::spawn_db(app, move |state| {
-        Ok(feeds::fill_missing_card_zh(state, &cfg, 80, |_, _| {})?)
+        feeds::fill_missing_card_zh(state, &cfg, 80, |_, _| {})
     })
     .await
 }
@@ -315,7 +320,7 @@ pub async fn fill_missing_card_zh(app: AppHandle) -> Result<usize, AppError> {
 #[tauri::command]
 pub async fn import_article_url(app: AppHandle, url: String) -> Result<Article, AppError> {
     crate::commands::spawn_db(app, move |state| {
-        Ok(feeds::import_article_from_url(state, &url)?)
+        feeds::import_article_from_url(state, &url)
     })
     .await
 }
@@ -327,7 +332,7 @@ pub async fn repair_paragraphs(
     limit: Option<usize>,
 ) -> Result<usize, AppError> {
     crate::commands::spawn_db(app, move |state| {
-        Ok(feeds::repair_missing_paragraphs(state, limit.unwrap_or(30))?)
+        feeds::repair_missing_paragraphs(state, limit.unwrap_or(30))
     })
     .await
 }
@@ -335,7 +340,7 @@ pub async fn repair_paragraphs(
 #[tauri::command]
 pub async fn import_article_file(app: AppHandle, path: String) -> Result<Article, AppError> {
     crate::commands::spawn_db(app, move |state| {
-        Ok(import_file::import_article_from_file(state, &path)?)
+        import_file::import_article_from_file(state, &path)
     })
     .await
 }

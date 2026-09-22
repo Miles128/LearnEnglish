@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type LookupEntry } from "../api";
 import { useVocab } from "../store";
+import { normalizeKey } from "../wordLevels";
 import { useToast } from "./Toaster";
-
 /**
  * Lookup history: every term resolved through the selection popover, with
  * quick paths into the vocab/known libraries.
@@ -12,7 +12,7 @@ export default function LookupHistory() {
   const [q, setQ] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [added, setAdded] = useState<Set<number>>(new Set());
-  const { refreshLearningTerms } = useVocab();
+  const { refreshLearningTerms, markKnown: storeMarkKnown, refreshKnownTerms } = useVocab();
   const toast = useToast();
 
   const load = useCallback(async (search: string) => {
@@ -25,7 +25,16 @@ export default function LookupHistory() {
   }, []);
 
   useEffect(() => {
-    void load(q);
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      void load(q).then(() => {
+        if (!alive) return;
+      });
+    }, 250);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
   }, [load, q]);
 
   async function addToVocab(entry: LookupEntry) {
@@ -47,8 +56,9 @@ export default function LookupHistory() {
 
   async function markKnown(entry: LookupEntry) {
     try {
-      await api.addKnownWord(entry.term.trim().toLowerCase());
+      await storeMarkKnown(normalizeKey(entry.term));
       setAdded((prev) => new Set(prev).add(entry.id));
+      void refreshKnownTerms();
       toast.ok(`已标记认识：${entry.term}`);
     } catch (e) {
       toast.err(String(e));

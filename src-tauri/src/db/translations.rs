@@ -79,6 +79,20 @@ pub fn clear_paragraph_translations(conn: &Connection) -> Result<usize, AppError
     Ok(removed)
 }
 
+/// Drop one article's cached paragraph translations. A stored paragraph
+/// `scope_key` is a paragraph index that only matches one exact body split,
+/// so any body replacement must invalidate these rows in the same write.
+pub fn delete_paragraph_translations(
+    conn: &Connection,
+    article_id: &str,
+) -> Result<usize, AppError> {
+    let removed = conn.execute(
+        "DELETE FROM translations WHERE scope='paragraph' AND article_id=?1",
+        params![article_id],
+    )?;
+    Ok(removed)
+}
+
 fn map_translation(row: &rusqlite::Row<'_>) -> rusqlite::Result<TranslationRow> {
     Ok(TranslationRow {
         id: row.get(0)?,

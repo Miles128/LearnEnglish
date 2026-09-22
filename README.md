@@ -2,7 +2,7 @@
 
 本地优先的 Mac 英语阅读 App：自动收录经典英文新闻全文，干净阅读，按需翻译，生词复习。
 
-> 对内品牌：**拾言** · 对外/包名：**Shiyan** · 仓库暂名：`LearnEnglish`
+> 对内品牌：**拾言** · 对外/包名：**Shiyan** · 仓库：`Shiyan`
 
 ## 为什么做
 
@@ -67,7 +67,7 @@ Tauri 2 · React · TypeScript · Vite · SQLite · OpenAI 兼容 Chat Completio
 ## 文档
 
 - [PRD](documents/PRD.md)
-- [Design Spec](docs/superpowers/specs/2026-08-10-learnenglish-mac-mvp-design.md)
+- [Design Spec](docs/superpowers/specs/2026-08-10-shiyan-mac-mvp-design.md)
 
 ## License
 

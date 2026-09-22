@@ -2288,31 +2288,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
-name = "learnenglish"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "feed-rs",
- "html2text",
- "pdf-extract",
- "readability",
- "regex",
- "reqwest 0.12.28",
- "rusqlite",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "thiserror 2.0.20",
- "ts-rs",
- "url",
- "uuid",
- "zip",
-]
-
-[[package]]
 name = "libappindicator"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4168,6 +4143,31 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
  "digest",
+]
+
+[[package]]
+name = "shiyan"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "feed-rs",
+ "html2text",
+ "pdf-extract",
+ "readability",
+ "regex",
+ "reqwest 0.12.28",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "thiserror 2.0.20",
+ "ts-rs",
+ "url",
+ "uuid",
+ "zip",
 ]
 
 [[package]]

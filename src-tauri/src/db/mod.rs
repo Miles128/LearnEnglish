@@ -48,11 +48,13 @@ impl DbState {
     }
 
     pub fn lock_write(&self) -> Result<MutexGuard<'_, Connection>, AppError> {
-        self.write.lock().map_err(|_| AppError::Locked)
+        // Recover from a poisoned lock instead of failing every future call:
+        // the connection state is still usable after a panic in a caller.
+        Ok(self.write.lock().unwrap_or_else(|e| e.into_inner()))
     }
 
     pub fn lock_read(&self) -> Result<MutexGuard<'_, Connection>, AppError> {
-        self.read.lock().map_err(|_| AppError::Locked)
+        Ok(self.read.lock().unwrap_or_else(|e| e.into_inner()))
     }
 }
 
@@ -298,14 +300,103 @@ pub struct MemoryItem {
     pub created_at: String,
 }
 
+const DB_FILE_NAME: &str = "shiyan.db";
+
+/// Bundle id before the rename to `com.sihai.shiyan`. First launch under the
+/// new id adopts this dir (see `migrate_legacy_app_dir`).
+const LEGACY_BUNDLE_DIR: &str = "com.sihai.learnenglish";
+
+/// Database file name used before the rename to `shiyan.db`. Both the bundle
+/// dir and this file name are adopted once on launch.
+const LEGACY_DB_FILE_NAME: &str = "learnenglish.db";
+
 pub fn db_path(app_data: PathBuf) -> PathBuf {
     std::fs::create_dir_all(&app_data).ok();
-    app_data.join("learnenglish.db")
+    app_data.join(DB_FILE_NAME)
+}
+
+/// Map a legacy DB file name (`learnenglish.db`, plus its `-wal` / `-shm` /
+/// `.premigrate-*.bak` siblings) to the new name. Non-DB files (e.g.
+/// `config.local.json`) are left untouched.
+fn adopt_db_file_name(name: &str) -> Option<String> {
+    name.strip_prefix(LEGACY_DB_FILE_NAME)
+        .map(|rest| format!("{DB_FILE_NAME}{rest}"))
+}
+
+/// Rename any legacy-named DB files already sitting in `app_data` (i.e. the app
+/// was launched under the new bundle id but before the DB file rename). Never
+/// overwrites an existing new-named file.
+fn rename_db_files_in_place(app_data: &std::path::Path) -> Result<usize, AppError> {
+    let mut renamed = 0usize;
+    for entry in std::fs::read_dir(app_data)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(target_name) = adopt_db_file_name(&name.to_string_lossy()) else {
+            continue;
+        };
+        let target = app_data.join(target_name);
+        if target.exists() {
+            continue;
+        }
+        std::fs::rename(entry.path(), &target)?;
+        renamed += 1;
+    }
+    Ok(renamed)
+}
+
+/// One-time adoption after the rename to the `com.sihai.shiyan` bundle id and
+/// the `shiyan.db` file name:
+///
+/// 1. If a legacy-named DB (`learnenglish.db*`) already sits in the new data
+///    dir, rename it in place.
+/// 2. Otherwise, if the legacy bundle dir holds a legacy-named DB, copy every
+///    file over (DB, WAL/SHM, config, backups, staged restores), renaming the
+///    DB files to the new name so history survives the move.
+///
+/// Copy, never move: the old dir stays as a backup, a failed copy just means
+/// this launch starts fresh with old data untouched for manual recovery, and
+/// the `new db exists` guard makes reruns a no-op that can never overwrite
+/// new data.
+pub fn migrate_legacy_app_dir(app_data: &std::path::Path) -> Result<usize, AppError> {
+    let db = db_path(app_data.to_path_buf());
+    if db.exists() {
+        return Ok(0);
+    }
+    let mut changed = rename_db_files_in_place(app_data)?;
+    if db.exists() {
+        return Ok(changed);
+    }
+    let Some(parent) = app_data.parent() else {
+        return Ok(changed);
+    };
+    let legacy = parent.join(LEGACY_BUNDLE_DIR);
+    if !legacy.join(LEGACY_DB_FILE_NAME).exists() {
+        return Ok(changed);
+    }
+    for entry in std::fs::read_dir(&legacy)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let target_name =
+            adopt_db_file_name(&name.to_string_lossy()).unwrap_or_else(|| name.to_string_lossy().into_owned());
+        let dest = app_data.join(target_name);
+        if dest.exists() {
+            continue;
+        }
+        std::fs::copy(entry.path(), &dest)?;
+        changed += 1;
+    }
+    Ok(changed)
 }
 
 /// Staged backup file swapped in on the next launch (restore flow).
 pub fn pending_restore_path(app_data: &std::path::Path) -> PathBuf {
-    app_data.join("learnenglish.db.pending-restore")
+    app_data.join(format!("{DB_FILE_NAME}.pending-restore"))
 }
 
 /// Validate a candidate backup file: it must be a readable SQLite database
@@ -345,20 +436,43 @@ pub fn apply_pending_restore(app_data: &std::path::Path) -> Result<Option<PathBu
     }
     validate_backup_file(&pending)?;
     let db = db_path(app_data.to_path_buf());
-    // Stale WAL/SHM belong to the outgoing database — remove them so the
-    // swapped-in file is read as-is.
-    for suffix in ["-wal", "-shm"] {
-        let side = PathBuf::from(format!("{}{}", db.display(), suffix));
-        if side.exists() {
-            std::fs::remove_file(&side)?;
-        }
-    }
-    let backup = PathBuf::from(format!("{}.pre-restore.bak", db.display()));
+    // Checkpoint the WAL first so the backup captures *all* committed
+    // transactions. Removing -wal/-shm before copying loses anything not yet
+    // merged into the main database file.
     if db.exists() {
+        {
+            let conn = Connection::open(&db)?;
+            let _ = conn.pragma_update(None, "wal_checkpoint", "TRUNCATE");
+            let _ = conn.execute_batch("PRAGMA journal_mode = DELETE;");
+        }
+        // Now safe to remove side files — they are empty after checkpoint.
+        for suffix in ["-wal", "-shm"] {
+            let side = PathBuf::from(format!("{}{}", db.display(), suffix));
+            if side.exists() {
+                std::fs::remove_file(&side)?;
+            }
+        }
+        let backup = PathBuf::from(format!("{}.pre-restore.bak", db.display()));
         std::fs::copy(&db, &backup)?;
+        drop(backup);
     }
     std::fs::rename(&pending, &db)?;
-    Ok(Some(backup))
+    Ok(Some(PathBuf::from(format!(
+        "{}.pre-restore.bak",
+        db.display()
+    ))))
+}
+
+/// Consistent whole-database snapshot via `VACUUM INTO`. The target path is
+/// passed as a bound parameter (covered by test against the bundled SQLite),
+/// so no filename quoting is needed. Must run outside a transaction, and the
+/// destination must not already exist.
+pub fn vacuum_into_file(conn: &Connection, dest: &std::path::Path) -> Result<(), AppError> {
+    conn.execute(
+        "VACUUM INTO ?1",
+        rusqlite::params![dest.to_string_lossy()],
+    )?;
+    Ok(())
 }
 
 pub fn open_db(path: PathBuf) -> Result<Connection, AppError> {
@@ -383,14 +497,11 @@ pub(crate) fn backup_before_migration(conn: &Connection, path: &std::path::Path)
     if stored == 0 || stored >= LATEST_VERSION {
         return;
     }
-    let backup = path.with_file_name(format!("learnenglish.db.premigrate-v{stored}.bak"));
+    let backup = path.with_file_name(format!("{DB_FILE_NAME}.premigrate-v{stored}.bak"));
     if backup.exists() {
         return;
     }
-    let _ = conn.execute(
-        "VACUUM INTO ?1",
-        rusqlite::params![backup.to_string_lossy()],
-    );
+    let _ = vacuum_into_file(conn, &backup);
 }
 
 const BASELINE_SCHEMA: &str = r#"
@@ -635,7 +746,10 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
     if stored < 10 {
         // Unify vocab + phrases into one `memory_items` table with a `kind`
         // column. Both libraries share the same columns and SRS state.
-        conn.execute_batch(
+        // Wrapped in a single transaction so a crash mid-migration leaves the
+        // version stamp and DDL in a consistent state.
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS memory_items (
                 id TEXT PRIMARY KEY,
                 kind TEXT NOT NULL DEFAULT 'word',
@@ -679,10 +793,9 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
                 ON memory_items(kind, status);
             CREATE INDEX IF NOT EXISTS idx_memory_next ON memory_items(next_review_at);
             CREATE INDEX IF NOT EXISTS idx_memory_article ON memory_items(article_id);",
-        )
-        ?;
-        conn.pragma_update(None, "user_version", 10)
-            ?;
+        )?;
+        tx.pragma_update(None, "user_version", 10)?;
+        tx.commit()?;
         stored = 10;
     }
 

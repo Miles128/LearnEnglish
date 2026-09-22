@@ -1,12 +1,12 @@
 [package]
-name = "learnenglish"
+name = "shiyan"
 version = "0.1.0"
-description = "Learn English via free articles on Mac"
+description = "Shiyan (拾言) — local-first English reading app for Mac"
 authors = ["sihai"]
 edition = "2021"
 
 [lib]
-name = "learnenglish_lib"
+name = "shiyan_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

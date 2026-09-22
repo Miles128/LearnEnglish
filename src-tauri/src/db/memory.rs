@@ -170,12 +170,20 @@ pub fn delete_memory(conn: &Connection, id: &str) -> Result<(), AppError> {
 }
 
 /// Escape one CSV field: wrap in quotes when it contains a comma, quote,
-/// or line break; double embedded quotes (RFC 4180).
+/// or line break; double embedded quotes (RFC 4180). Prefix a single quote
+/// for fields starting with `=`, `+`, `-`, or `@` to prevent CSV formula
+/// injection when opened in spreadsheet applications.
 pub fn csv_field(s: &str) -> String {
+    let s = if s.starts_with('=') || s.starts_with('+') || s.starts_with('-') || s.starts_with('@')
+    {
+        format!("'{s}")
+    } else {
+        s.to_string()
+    };
     if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
-        s.to_string()
+        s
     }
 }
 

@@ -18,17 +18,15 @@ const MAX_DECOMPRESSED_BYTES: u64 = 50 * 1024 * 1024;
 static RE_BLANK_RUN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").unwrap());
 
 pub fn import_article_from_file(db: &DbState, path: &str) -> Result<Article, AppError> {
-    let path = PathBuf::from(path.trim());
-    if path.as_os_str().is_empty() {
+    let raw = PathBuf::from(path.trim());
+    if raw.as_os_str().is_empty() {
         return Err("未选择文件".into());
     }
+    // Resolve symlinks / `..` up front so every check below runs against the
+    // real file, not a path that changes meaning between checks.
+    let path = std::fs::canonicalize(&raw).map_err(|_| AppError::msg("文件不存在"))?;
     if !path.is_file() {
         return Err("文件不存在".into());
-    }
-
-    let meta = std::fs::metadata(&path).map_err(|e| format!("无法读取文件：{e}"))?;
-    if meta.len() > MAX_FILE_BYTES {
-        return Err("文件过大（上限 20MB）".into());
     }
 
     let ext = path
@@ -36,6 +34,15 @@ pub fn import_article_from_file(db: &DbState, path: &str) -> Result<Article, App
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
+    // "doc" passes through to its dedicated hint below.
+    if !matches!(ext.as_str(), "txt" | "pdf" | "docx" | "doc") {
+        return Err("暂不支持该格式（仅 .txt / .pdf / .docx）".into());
+    }
+
+    let meta = std::fs::metadata(&path).map_err(|e| format!("无法读取文件：{e}"))?;
+    if meta.len() > MAX_FILE_BYTES {
+        return Err("文件过大（上限 20MB）".into());
+    }
 
     let bytes = std::fs::read(&path).map_err(|e| format!("无法读取文件：{e}"))?;
     // Parser crates can panic on malformed input; contain it instead of taking
@@ -164,7 +171,7 @@ fn docx_xml_to_text(xml: &str) -> String {
     while let Some(ch) = chars.next() {
         if ch == '<' {
             tag.clear();
-            while let Some(c) = chars.next() {
+            for c in chars.by_ref() {
                 if c == '>' {
                     break;
                 }
@@ -272,6 +279,27 @@ mod tests {
         assert_eq!(article.category, "other");
         assert!(article.url.starts_with("file://import/"));
         assert!(article.content_text.chars().count() >= MIN_FULLTEXT_CHARS);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reject_unsupported_extension_and_missing_path() {
+        let dir = std::env::temp_dir().join(format!("shiyan-import-gate-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("t.sqlite");
+        let db = db::DbState::open(db_path).unwrap();
+
+        let exe = dir.join("evil.exe");
+        std::fs::write(&exe, b"not a document").unwrap();
+        let err =
+            import_article_from_file(&db, exe.to_str().unwrap()).expect_err("exe rejected");
+        assert!(err.to_string().contains("暂不支持该格式"), "{err}");
+
+        let missing = dir.join("nope.txt");
+        let err =
+            import_article_from_file(&db, missing.to_str().unwrap()).expect_err("missing file");
+        assert!(err.to_string().contains("不存在"), "{err}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

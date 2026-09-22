@@ -1,7 +1,7 @@
 //! Fetching a public article page and extracting title + main text.
 
 use super::filters::{is_readable_article_body, looks_like_paywall};
-use super::net::ensure_public_http_url;
+use super::net::{ensure_public_http_url, read_limited_bytes};
 use crate::error::AppError;
 use reqwest::blocking::Client;
 use std::sync::LazyLock;
@@ -52,15 +52,19 @@ pub(crate) struct ExtractedPage {
 /// Fetch a public article URL and extract title + main text (no paywall bypass).
 pub(crate) fn extract_article_page(client: &Client, url: &str) -> Result<ExtractedPage, AppError> {
     let parsed = ensure_public_http_url(url)?;
-    let html = client
-        .get(url)
-        .header(
-            "Accept",
-            "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
-        )
-        .send()?
-        .error_for_status()?
-        .text()?;
+    let bytes = read_limited_bytes(
+        client
+            .get(url)
+            .header(
+                "Accept",
+                "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+            )
+            .send()?
+            .error_for_status()?,
+    )?;
+    // Lossy like reqwest's old `.text()` decoding: undecodable bytes become
+    // U+FFFD instead of rejecting a page that used to load.
+    let html = String::from_utf8_lossy(&bytes).into_owned();
 
     if looks_like_paywall(&html) {
         return Err("疑似付费墙，已跳过".into());

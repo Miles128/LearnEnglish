@@ -44,7 +44,7 @@ pub async fn backup_database(
 
     {
         let conn = state.lock_read()?;
-        conn.execute("VACUUM INTO ?1", [tmp.to_string_lossy().as_ref()])?;
+        db::vacuum_into_file(&conn, &tmp)?;
     }
     std::fs::copy(&tmp, &dest)?;
     let _ = std::fs::remove_file(&tmp);

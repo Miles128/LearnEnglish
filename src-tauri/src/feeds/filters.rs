@@ -18,8 +18,10 @@ static RE_KEYWORD_TAIL: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(r"(?is)(?:Keywords for this article|Filed under:|^\s*Tags:).*$").unwrap()
 });
 /// Titles that mark a link roundup / daily digest rather than an article.
+/// Only fires on multi-word roundup patterns (never a bare "daily"/"links"),
+/// so articles *about* those words are never falsely blocked.
 static RE_ROUNDUP_TITLE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(r"(?i)\b(links?|roundup|weekly review|daily|digest|briefing)\b").unwrap()
+    regex::Regex::new(r"(?i)\b(roundup|weekly review|weekly links|daily digest|daily briefing|link roundup|link dump)\b").unwrap()
 });
 /// Titles that mark a podcast / interview transcript.
 static RE_TRANSCRIPT_TITLE: LazyLock<regex::Regex> =
@@ -60,7 +62,7 @@ pub(crate) fn looks_truncated(text: &str) -> bool {
 pub(crate) fn rss_trust_chars(fulltext_ratio: f64) -> usize {
     if fulltext_ratio >= 0.7 {
         1200
-    } else if fulltext_ratio >= 0.0 && fulltext_ratio <= 0.2 {
+    } else if (0.0..=0.2).contains(&fulltext_ratio) {
         3200
     } else {
         TRUST_RSS_FULLTEXT_CHARS

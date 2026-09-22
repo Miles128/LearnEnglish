@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    learnenglish_lib::run()
+    shiyan_lib::run()
 }

@@ -2,17 +2,80 @@
 
 use crate::error::AppError;
 use reqwest::blocking::Client;
+use reqwest::redirect;
 use std::net::ToSocketAddrs;
 use std::sync::LazyLock;
 
 pub(crate) const HTTP_USER_AGENT: &str = "Shiyan/0.1 (+local; educational)";
 
+/// Upper bound for a single HTTP response body (feed XML, article HTML, or
+/// LLM JSON). A malicious server must not be able to OOM the app with an
+/// unbounded body.
+pub const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
+/// Read a response body with a hard cap. An oversized advertised
+/// Content-Length is rejected up front, and the streamed body is counted so a
+/// lying server (small header, huge body) cannot exceed the limit either.
+pub fn read_limited_bytes(
+    mut resp: reqwest::blocking::Response,
+) -> Result<Vec<u8>, AppError> {
+    if let Some(len) = resp.content_length() {
+        if len > MAX_RESPONSE_BYTES as u64 {
+            return Err(AppError::msg("响应过大，已跳过"));
+        }
+    }
+    let mut capped = CappedBody {
+        out: Vec::new(),
+        left: MAX_RESPONSE_BYTES,
+        hit_cap: false,
+    };
+    match resp.copy_to(&mut capped) {
+        Ok(_) => Ok(capped.out),
+        Err(_) if capped.hit_cap => Err(AppError::msg("响应过大，已跳过")),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// A `Write` sink that refuses bytes past the cap, so `copy_to` aborts the
+/// transfer instead of buffering an unbounded body into memory.
+struct CappedBody {
+    out: Vec<u8>,
+    left: usize,
+    hit_cap: bool,
+}
+
+impl std::io::Write for CappedBody {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = buf.len().min(self.left);
+        self.out.extend_from_slice(&buf[..n]);
+        self.left -= n;
+        if n < buf.len() {
+            self.hit_cap = true;
+            return Err(std::io::Error::other("response body exceeds limit"));
+        }
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Shared blocking client so connections pool across feeds/pages instead of
-/// being rebuilt per request.
+/// being rebuilt per request. Every redirect hop is re-checked by the same
+/// SSRF guard, so a malicious feed cannot bounce the client to localhost,
+/// the LAN, or a cloud metadata endpoint via 30x.
 pub(crate) static HTTP: LazyLock<Client> = LazyLock::new(|| {
     Client::builder()
         .user_agent(HTTP_USER_AGENT)
         .timeout(std::time::Duration::from_secs(30))
+        .redirect(redirect::Policy::custom(|attempt| {
+            if ensure_public_http_url(attempt.url().as_str()).is_ok() {
+                attempt.follow()
+            } else {
+                attempt.error("重定向目标不安全，已拦截")
+            }
+        }))
         .build()
         .expect("build reqwest client")
 });
@@ -58,6 +121,12 @@ pub fn ensure_public_http_url(url: &str) -> Result<url::Url, AppError> {
         .ok_or_else(|| AppError::msg("链接缺少主机名"))?;
     let bare = host.trim_start_matches('[').trim_end_matches(']');
     let lower = bare.to_ascii_lowercase();
+    // Integration tests run a fake feed server on loopback. `cfg!(test)` is
+    // compile-time false in production builds, so this branch cannot weaken
+    // the shipped guard.
+    if cfg!(test) && (lower == "localhost" || bare == "127.0.0.1" || bare == "::1") {
+        return Ok(parsed);
+    }
     if lower == "localhost" || lower.ends_with(".localhost") || lower.ends_with(".local") {
         return Err(AppError::msg("不支持访问本机或内网地址"));
     }
@@ -89,7 +158,7 @@ pub fn validate_feed_url(url: &str) -> FeedValidation {
         }
     };
     match HTTP.get(url).send().and_then(|r| r.error_for_status()) {
-        Ok(resp) => match resp.bytes() {
+        Ok(resp) => match read_limited_bytes(resp) {
             Ok(bytes) => match feed_rs::parser::parse(&bytes[..]) {
                 Ok(parsed) => FeedValidation {
                     ok: true,

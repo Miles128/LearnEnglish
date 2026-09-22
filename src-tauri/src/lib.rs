@@ -5,7 +5,7 @@ mod error;
 mod feeds;
 mod import_file;
 mod rank;
-mod reflow;
+pub(crate) mod reflow;
 mod srs;
 mod translate;
 mod vocab;
@@ -22,6 +22,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let dir = app.path().app_data_dir()?;
+            // First launch after the bundle-id rename: adopt the old data
+            // dir (best-effort; old data is never deleted). Runs before the
+            // restore swap so a staged restore moves over too.
+            let _ = db::migrate_legacy_app_dir(&dir);
             // Swap in a staged restore file (if any) before connections open.
             db::apply_pending_restore(&dir)?;
             let state = db::DbState::open(db::db_path(dir))?;
@@ -42,6 +46,7 @@ pub fn run() {
                 let _ = db::backfill_word_counts(&conn);
                 let _ = feeds::purge_blocked_articles(&conn);
                 let _ = feeds::clear_stale_paragraph_translations_once(&conn);
+                let _ = db::normalize_known_words_once(&conn);
             }
             app.manage(state);
             Ok(())

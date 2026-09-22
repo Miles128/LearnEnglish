@@ -40,17 +40,23 @@ pub(crate) fn audit_rss_bodies_once(conn: &Connection) -> Result<usize, AppError
 /// One-time cleanup after a re-paragraphing (reflow) change: paragraph
 /// translations are keyed by index, which only matches one exact split, so any
 /// rows written before the change would render against the wrong paragraph.
-/// Cleared once; the reader re-creates them on demand.
-const REFLOW_TRANSLATIONS_KEY: &str = "reflow_translations_cleared_v1";
+/// Cleared once per `reflow::REFLOW_VERSION`; the reader re-creates them on
+/// demand. When reflow rules change, bump `REFLOW_VERSION` and the cleanup
+/// runs again automatically.
+const REFLOW_TRANSLATIONS_KEY_PREFIX: &str = "reflow_translations_cleared_v";
 
 pub(crate) fn clear_stale_paragraph_translations_once(
     conn: &Connection,
 ) -> Result<usize, AppError> {
-    if db::get_meta(conn, REFLOW_TRANSLATIONS_KEY)?.is_some() {
+    let key = format!(
+        "{REFLOW_TRANSLATIONS_KEY_PREFIX}{}",
+        crate::reflow::REFLOW_VERSION
+    );
+    if db::get_meta(conn, &key)?.is_some() {
         return Ok(0);
     }
     let removed = db::clear_paragraph_translations(conn)?;
-    db::set_meta(conn, REFLOW_TRANSLATIONS_KEY, "done")?;
+    db::set_meta(conn, &key, "done")?;
     Ok(removed)
 }
 
@@ -92,10 +98,14 @@ pub(crate) fn assess_unassessed_articles(conn: &Connection) -> Result<(usize, us
 
 /// Enforce [`MIN_ARTICLE_WORDS`] on stored RSS bodies (idempotent, cheap).
 /// Runs every refresh so a raised threshold backfills against stamped rows.
+/// Articles the learner liked or is still reading are never deleted.
 pub(crate) fn purge_rss_below_word_threshold(conn: &Connection) -> Result<usize, AppError> {
     let changed = conn
         .execute(
-            "DELETE FROM articles WHERE origin='rss' AND word_count > 0 AND word_count < ?1",
+            "DELETE FROM articles
+             WHERE origin='rss' AND word_count > 0 AND word_count < ?1
+               AND liked = 0
+               AND NOT (last_opened_at IS NOT NULL AND read_completed = 0)",
             params![MIN_ARTICLE_WORDS as i64],
         )
         ?;
@@ -162,10 +172,14 @@ pub fn repair_missing_paragraphs(db: &DbState, limit: usize) -> Result<usize, Ap
 }
 
 /// One-time cleanup: delete already-stored RSS articles that match the
-/// roundup / transcript filters. User imports (url/file) are never touched.
+/// roundup / transcript filters. User imports (url/file) and articles the
+/// learner liked or is still reading are never touched.
 pub fn purge_blocked_articles(conn: &Connection) -> Result<usize, AppError> {
     let mut removed = 0usize;
     for article in db::list_all_rss_articles(conn)? {
+        if article.liked || (!article.read_completed && article.last_opened_at.is_some()) {
+            continue;
+        }
         if is_blocked_content(&article.title, &article.content_text) {
             db::delete_article(conn, &article.id)?;
             removed += 1;

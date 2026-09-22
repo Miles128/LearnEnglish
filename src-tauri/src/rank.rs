@@ -7,7 +7,6 @@
 use crate::db::ArticleListItem;
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 
 /// Aggregated open counts by source / category, plus the tag interest profile.
 #[derive(Debug, Default, Clone)]
@@ -101,12 +100,10 @@ pub fn word_fit(word_count: i64) -> f64 {
 
 /// Deterministic pseudo-random jitter in [-0.3, 0.3], re-seeded daily, so
 /// unseen articles get exploration slots without shuffling on every render.
+/// FNV-1a (shared with `translate::stable_scope_key`): unlike DefaultHasher,
+/// the same day really yields the same order in every process and build.
 pub fn exploration_jitter(article_id: &str, day_key: i64) -> f64 {
-    use std::collections::hash_map::DefaultHasher;
-    let mut hasher = DefaultHasher::new();
-    article_id.hash(&mut hasher);
-    day_key.hash(&mut hasher);
-    let hash = hasher.finish();
+    let hash = crate::translate::fnv1a_64(&format!("{article_id}:{day_key}"));
     (hash % 1000) as f64 / 999.0 * 0.6 - 0.3
 }
 
@@ -180,8 +177,9 @@ pub fn article_rank_score(
     score
 }
 
-/// Score + sort a window of list items in place (descending score),
-/// stamping `rank_score` for the frontend to pass through.
+/// Score + sort a window of list items in place (descending score, id as a
+/// stable tie-break so cursor pagination has a total order), stamping
+/// `rank_score` for the frontend to pass through.
 pub fn rank_articles(
     mut items: Vec<ArticleListItem>,
     affinity: &Affinity,
@@ -195,8 +193,29 @@ pub fn rank_articles(
         b.rank_score
             .partial_cmp(&a.rank_score)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.id.cmp(&b.id))
     });
     items
+}
+
+/// Slice one page out of a ranked list. A cursor (score + id of the last
+/// shown item) returns everything strictly after it, so inserts above the
+/// cursor no longer shift later pages; without a cursor the legacy offset
+/// window applies.
+pub fn page_ranked(
+    items: Vec<ArticleListItem>,
+    cursor: Option<(f64, String)>,
+    offset: usize,
+    limit: usize,
+) -> Vec<ArticleListItem> {
+    let start = match cursor {
+        Some((score, id)) => items
+            .iter()
+            .position(|a| a.rank_score < score || (a.rank_score == score && a.id > id))
+            .unwrap_or(items.len()),
+        None => offset.min(items.len()),
+    };
+    items.into_iter().skip(start).take(limit).collect()
 }
 
 #[cfg(test)]
@@ -341,8 +360,14 @@ mod tests {
         matching.tags = vec!["semiconductors".into()];
         let plain = item("b");
 
+        // open_count > 0 disables the exploration jitter so the assertion
+        // measures the tag bonus deterministically, not hash luck.
+        matching.open_count = 1;
+        let mut plain_opened = plain;
+        plain_opened.open_count = 1;
+
         let score_match = article_rank_score(&matching, &affinity, now, 1);
-        let score_plain = article_rank_score(&plain, &affinity, now, 1);
+        let score_plain = article_rank_score(&plain_opened, &affinity, now, 1);
         assert!(score_match > score_plain);
         assert!((score_match - score_plain) > 0.5);
     }
@@ -378,6 +403,60 @@ mod tests {
         assert_eq!(ranked[0].id, "fresh");
         assert!(ranked[0].rank_score > ranked[1].rank_score);
         assert!(ranked[0].rank_score != 0.0, "score is stamped for the UI");
+    }
+
+    fn scored(id: &str, score: f64) -> ArticleListItem {
+        let mut i = item(id);
+        i.rank_score = score;
+        i
+    }
+
+    #[test]
+    fn ties_break_by_id_for_cursor_stability() {
+        let now = Utc::now();
+        let affinity = Affinity::default();
+        // open_count > 0 disables the per-id jitter; everything else equal
+        // → identical scores, so the id tie-break decides the order.
+        let mut items = vec![item("b"), item("a"), item("c")];
+        for i in items.iter_mut() {
+            i.open_count = 1;
+        }
+        let ranked = rank_articles(items, &affinity, now, 1);
+        assert_eq!(
+            ranked.iter().map(|i| i.id.clone()).collect::<Vec<_>>(),
+            vec!["a", "b", "c"],
+            "equal scores must order by id so a cursor is unambiguous"
+        );
+    }
+
+    #[test]
+    fn cursor_page_skips_inserts_above() {
+        let ranked = vec![
+            scored("fresh", 3.0),
+            scored("b", 2.0),
+            scored("c", 2.0),
+            scored("d", 1.0),
+        ];
+        // Page 1 took ("fresh", "b"); page 2 resumes after b.
+        let page2 = page_ranked(ranked.clone(), Some((2.0, "b".into())), 0, 10);
+        assert_eq!(
+            page2.iter().map(|i| i.id.clone()).collect::<Vec<_>>(),
+            vec!["c", "d"]
+        );
+        // A newly inserted article above the cursor does not shift page 2.
+        let mut with_insert = vec![scored("new", 9.0)];
+        with_insert.extend(ranked.clone());
+        let page2_again = page_ranked(with_insert, Some((2.0, "b".into())), 0, 10);
+        assert_eq!(
+            page2_again.iter().map(|i| i.id.clone()).collect::<Vec<_>>(),
+            vec!["c", "d"]
+        );
+        // No cursor → legacy offset window.
+        let offset_page = page_ranked(ranked, None, 1, 2);
+        assert_eq!(
+            offset_page.iter().map(|i| i.id.clone()).collect::<Vec<_>>(),
+            vec!["b", "c"]
+        );
     }
 
     #[test]

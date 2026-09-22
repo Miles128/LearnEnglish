@@ -117,6 +117,8 @@ a {
   position: sticky;
   top: 0;
   z-index: 40;
+  /* 锁死高度：下方各吸顶首行栏 top 取 39px（藏 1px 在顶栏下），接缝恒成立。 */
+  height: 40px;
 }
 
 .topbar-nav {
@@ -244,6 +246,7 @@ a {
   width: 100%;
   max-width: none;
   margin-inline: 0;
+  padding-top: 0;
   padding-inline: clamp(1.25rem, 4vw, 2.5rem);
   box-sizing: border-box;
   --reader-font: "Iowan Old Style", "Palatino Linotype", Palatino, "LXGW WenKai",
@@ -283,17 +286,28 @@ a {
   margin-bottom: 22px;
 }
 
-/* 标题行吸顶：随文章滚动始终停在视口顶部（DOM 上是 .article-body 直接子元素，
-   sticky 才能覆盖全文滚动范围；-reader-heading 已收窄为摘要+meta）。 */
+/* 标题栏即顶栏：全宽贴死视口顶部（紧贴全局 .topbar）与两侧，
+   不再是内容区里的悬浮圆角条。负边距抵消 .page.reader 的两侧内边距，
+   内边距补回相同宽度，文字仍与正文对齐。
+   top 取 39px 而非 40px：藏 1px 在顶栏之下，吞掉亚像素接缝。 */
 .reader-title-row {
   position: sticky;
-  top: 0;
+  top: 39px;
   z-index: 30;
-  background: var(--bg);
-  padding: 8px 0 6px;
+  background: var(--bar-bg);
+  backdrop-filter: blur(8px);
+  margin-inline: calc(clamp(1.25rem, 4vw, 2.5rem) * -1);
+  padding: 8px clamp(1.25rem, 4vw, 2.5rem) 6px;
+  border-bottom: 1px solid var(--line);
   display: flex;
   align-items: flex-start;
   gap: 10px;
+}
+
+/* 标题栏是 article-body 的首个子元素：父元素 margin-top 会在静止态
+   顶出一道缝，归零让标题栏在未滚动时也贴死顶栏。 */
+.page.reader .article-body {
+  margin-top: 0;
 }
 
 .page.reader .reader-title-row h1 {
@@ -368,15 +382,23 @@ a {
   flex-wrap: wrap;
 }
 
-/* Locked first row: category tabs + refresh + insight + toggles stay put. */
+/* 主界面：去掉顶部内边距，分类栏在静止态也贴死顶栏。 */
+.page.home-page {
+  padding-top: 0;
+}
+
+/* Locked first row: category tabs + refresh + insight + toggles stay put.
+   与阅读页标题栏同一配方：全宽贴死顶栏与两侧，不悬浮。 */
 .home-tabs {
   align-items: center;
   position: sticky;
-  top: 40px;
+  top: 39px;
   z-index: 30;
   background: var(--bar-bg);
   backdrop-filter: blur(8px);
-  padding: 8px 0;
+  margin-inline: calc(clamp(16px, 3.5vw, 64px) * -1);
+  padding: 8px clamp(16px, 3.5vw, 64px);
+  border-bottom: 1px solid var(--line);
   margin-bottom: 12px;
 }
 
@@ -1696,12 +1718,23 @@ button.flashcard {
   .topbar {
     flex-wrap: wrap;
     padding: 4px 10px;
+    height: auto;
+    min-height: 40px;
   }
   .page {
     padding: 10px 16px 32px;
   }
   .page.reader {
     padding-inline: clamp(1rem, 5vw, 1.5rem);
+  }
+  /* 贴边栏跟随窄屏内边距，否则左右又会对不齐。 */
+  .reader-title-row {
+    margin-inline: calc(clamp(1rem, 5vw, 1.5rem) * -1);
+    padding-inline: clamp(1rem, 5vw, 1.5rem);
+  }
+  .home-tabs {
+    margin-inline: -16px;
+    padding-inline: 16px;
   }
   .settings-type-grid {
     grid-template-columns: 1fr;

@@ -419,7 +419,7 @@ export default function Home() {
   const resumePath = lastArticlePath();
 
   return (
-    <div className="page" onMouseUp={(e) => void onPageMouseUp(e)}>
+    <div className="page home-page" onMouseUp={(e) => void onPageMouseUp(e)}>
       <div className="tabs home-tabs">
         {tabCategories.map((c) => (
           <button

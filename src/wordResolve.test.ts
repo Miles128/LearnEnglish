@@ -1,12 +1,16 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { ensureLexiconLoaded } from "./wordLevels";
 import {
+  cachedTranslation,
   decodeDetail,
   detailsLoaded,
   isAllCaps,
   isPhraseSelection,
   lookupDetail,
   prepareLookup,
+  rememberTranslation,
+  TRANSLATION_CACHE_CAP,
+  translationCacheSize,
 } from "./wordResolve";
 
 beforeAll(async () => {
@@ -136,5 +140,23 @@ describe("lookupDetail", () => {
   it("returns null before the details chunk is loaded", () => {
     expect(detailsLoaded()).toBe(false);
     expect(lookupDetail("run")).toBeNull();
+  });
+});
+
+describe("translation session cache", () => {
+  it("hits across key spellings", () => {
+    rememberTranslation(" Serendipity ", "意外之喜");
+    expect(cachedTranslation("serendipity")).toBe("意外之喜");
+  });
+
+  it("evicts the oldest entry past the cap", () => {
+    const before = translationCacheSize();
+    const total = TRANSLATION_CACHE_CAP + 5;
+    for (let i = 0; i < total; i++) {
+      rememberTranslation(`cache-fill-${before}-${i}`, "译");
+    }
+    expect(translationCacheSize()).toBe(TRANSLATION_CACHE_CAP);
+    expect(cachedTranslation(`cache-fill-${before}-0`)).toBeUndefined();
+    expect(cachedTranslation(`cache-fill-${before}-${total - 1}`)).toBe("译");
   });
 });

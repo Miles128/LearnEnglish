@@ -2,13 +2,21 @@ import type { LearningStats } from "./api/types";
 
 export type { LearningStats };
 
-/** Compact Home insight: today's opens over the all-time total. */
+/** Compact Home insight: today's opens, 7-day opens, and this week's new vocab. */
 export function formatLearningInsight(stats: LearningStats): string {
-  return `今日 ${stats.opened_today} / 总 ${stats.opened_total}`;
+  const parts = [`今日 ${stats.opened_today}`, `本周 ${stats.opened_7d}`, `总 ${stats.opened_total}`];
+  if (stats.vocab_created_7d > 0) parts.push(`本周新词 ${stats.vocab_created_7d}`);
+  return parts.join(" · ");
 }
 
-/** "Read" = finished (bottom + dwell threshold), not merely opened. */
-export function articleIsRead(article: { read_completed?: boolean }): boolean {
+/** Compact top source/category for the Home insight line. */
+export function formatTopSource(stats: LearningStats): string | null {
+  if (stats.top_source) return `常读 ${stats.top_source}`;
+  return null;
+}
+
+/** Whether an article counts as read for learning stats. */
+export function articleIsRead(article: { read_completed?: number | boolean }): boolean {
   return Boolean(article.read_completed);
 }
 

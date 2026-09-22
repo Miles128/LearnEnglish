@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { ensureLexiconLoaded } from "./wordLevels";
-import { lemmaCandidates, toLemma } from "./lemma";
+import { ensureLexiconLoaded, lemmaCandidates } from "./wordLevels";
+import { toLemma } from "./lemma";
 
 beforeAll(async () => {
   await ensureLexiconLoaded();

@@ -100,7 +100,6 @@ function renderSpan(
     key: `t-${key}`,
     "aria-label": accessibleName,
     role: "button" as const,
-    tabIndex: 0,
     onClick,
     onKeyDown,
   };

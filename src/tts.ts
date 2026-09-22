@@ -174,3 +174,30 @@ export function getTts(): TtsController {
   if (!shared) shared = createTtsController();
   return shared;
 }
+
+let currentOwner: object | null = null;
+
+/**
+ * Speech ownership: whoever starts speaking claims it; a component's unmount
+ * cleanup stops playback only while it still owns the speech. A newer claim
+ * steals ownership, so navigating away from a page that already lost the
+ * speech to another component never cuts that speech off.
+ */
+export function claimTtsOwner(owner: object): void {
+  currentOwner = owner;
+}
+
+/** True when `owner` started the currently-playing speech. */
+export function isTtsOwner(owner: object): boolean {
+  return currentOwner === owner;
+}
+
+/**
+ * Release ownership; returns true when `owner` held it. Use the return value
+ * to decide whether an unmount cleanup should stop playback.
+ */
+export function releaseTtsOwner(owner: object): boolean {
+  if (currentOwner !== owner) return false;
+  currentOwner = null;
+  return true;
+}

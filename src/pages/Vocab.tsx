@@ -84,7 +84,7 @@ export default function Vocab() {
         <MemoryLibrary
           kind="word"
           searchPlaceholder="搜索词条 / 释义 / 类型"
-          emptyText="暂无词条"
+          emptyText="还没有生词。阅读时划词，点「加入生词库」即可收藏。"
           onChanged={() => void refreshLearningTerms()}
         />
       )}

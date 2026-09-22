@@ -151,7 +151,17 @@ export default function MemoryLibrary({
     const activeCard = practiceDeck ? practiceDeck[0] ?? null : current;
     const onKey = (e: KeyboardEvent) => {
       const el = document.activeElement;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) return;
+      // Let buttons, links, and form controls handle their own Enter/Space.
+      if (
+        el &&
+        (el.tagName === "INPUT" ||
+          el.tagName === "TEXTAREA" ||
+          el.tagName === "BUTTON" ||
+          el.tagName === "A" ||
+          el.tagName === "SELECT" ||
+          el.getAttribute("role") === "button")
+      )
+        return;
       if (e.key === " " || e.key === "Enter") {
         e.preventDefault();
         setFlipped((f) => !f);

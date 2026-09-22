@@ -10,12 +10,6 @@ import type {
 } from "./types";
 
 export const apiArticles = {
-  listArticles: (category?: string, limit?: number, offset?: number) =>
-    invoke<ArticleListItem[]>("list_articles", {
-      category: category ?? null,
-      limit: limit ?? null,
-      offset: offset ?? null,
-    }),
   listArticlesRanked: (
     category?: string,
     tags?: string[],
@@ -23,6 +17,7 @@ export const apiArticles = {
     unreadOnly?: boolean,
     limit?: number,
     offset?: number,
+    cursor?: { score: number; id: string } | null,
   ) =>
     invoke<ArticleListItem[]>("list_articles_ranked", {
       category: category ?? null,
@@ -31,6 +26,8 @@ export const apiArticles = {
       unreadOnly: unreadOnly ?? null,
       limit: limit ?? null,
       offset: offset ?? null,
+      cursorScore: cursor?.score ?? null,
+      cursorId: cursor?.id ?? null,
     }),
   listLibrary: (filters: {
     category?: string;

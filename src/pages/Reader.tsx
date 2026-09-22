@@ -16,8 +16,9 @@ import {
   type ResolvedReading,
 } from "../readingPrefs";
 import { AnnotatedPara } from "../annotateText";
-import { bundledGloss, isPhraseSelection } from "../wordResolve";
-import SelectionPopover from "../components/SelectionPopover";
+import { bundledGloss, rememberTranslation } from "../wordResolve";
+import WordPopoverShell from "../components/WordPopoverShell";
+import { createKnownToggle } from "../knownWords";
 import ReaderTypePanel from "../components/ReaderTypePanel";
 import ReaderParagraph from "../components/ReaderParagraph";
 import { useEscapeKey } from "../useEscapeKey";
@@ -172,6 +173,9 @@ export default function Reader() {
     translate: async (term) => {
       if (!id) throw new Error("文章未加载");
       const row = await api.translateSelection(id, term);
+      // Feed the shared session cache so the Home list (and re-selects)
+      // reuse this translation without another LLM call.
+      rememberTranslation(term, row.translated_text);
       return row.translated_text;
     },
     contextFor: (source, term) => findContext(paragraphs, source ?? term),
@@ -189,6 +193,7 @@ export default function Reader() {
 
   useEffect(() => {
     if (!id) return;
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     void listen<TranslateProgress>("translate-progress", (event) => {
       const next = event.payload;
@@ -201,9 +206,13 @@ export default function Reader() {
       setFullProgress(next);
       setShowFullZh(true);
     }).then((fn) => {
-      unlisten = fn;
+      if (cancelled) fn();
+      else unlisten = fn;
     });
-    return () => unlisten?.();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, [id, setTranslations]);
 
   useEffect(() => {
@@ -303,6 +312,11 @@ export default function Reader() {
     readCompletedRef.current = false;
     atBottomRef.current = false;
     setLikedOverride(null);
+    // Reset translation-visibility state when navigating to a different article.
+    setShowFullZh(false);
+    setVisibleParas({});
+    setBusyPara(null);
+    setFullProgress(null);
     let lastSaved = 0;
     const onScroll = () => {
       const now = Date.now();
@@ -408,11 +422,13 @@ export default function Reader() {
     setError(null);
     try {
       const result = await api.translateFullArticle(id);
-      const map: Record<string, string> = { ...translations };
-      result.rows.forEach((r) => {
-        map[r.scope_key] = r.translated_text;
+      setTranslations((prev) => {
+        const map: Record<string, string> = { ...prev };
+        result.rows.forEach((r) => {
+          map[r.scope_key] = r.translated_text;
+        });
+        return map;
       });
-      setTranslations(map);
       if (result.errors.length > 0) {
         setError(`部分段落翻译失败（${result.errors.length} 段），其余译文已就绪。`);
       }
@@ -466,15 +482,16 @@ export default function Reader() {
     await showMeaning({ text, x: e.clientX, y: e.clientY });
   }
 
-  async function toggleKnown(term: string) {
-    const key = term.trim().toLowerCase();
-    try {
-      if (knownTerms.includes(key)) await unmarkKnown(key);
-      else await markKnown(key);
-    } catch (e) {
-      setError(String(e));
-    }
-  }
+  const toggleKnown = useMemo(
+    () =>
+      createKnownToggle({
+        knownTerms,
+        markKnown,
+        unmarkKnown,
+        onError: (m) => setError(m),
+      }),
+    [knownTerms, markKnown, unmarkKnown, setError],
+  );
 
   if (view !== "ready" || !article) {
     return (
@@ -620,23 +637,15 @@ export default function Reader() {
       </p>
 
       {popover && (
-        <SelectionPopover
+        <WordPopoverShell
           popover={popover}
           speaking={speaking}
           speakTarget={speakTarget}
+          knownTerms={knownTerms}
           onSpeakWord={speakWord}
           onAddVocab={() => void addToVocab()}
-          onAddPhrase={
-            popover.source && isPhraseSelection(popover.source)
-              ? () => void addToPhrase()
-              : undefined
-          }
-          onToggleKnown={
-            popover.source && isPhraseSelection(popover.source)
-              ? undefined
-              : () => void toggleKnown(popover.text)
-          }
-          known={knownTerms.includes(popover.text.trim().toLowerCase())}
+          onAddPhrase={() => void addToPhrase()}
+          onToggleKnown={(term) => void toggleKnown(term)}
           onClose={closePopover}
         />
       )}

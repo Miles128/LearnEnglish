@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, ArticleListItem, FeedCategory, LearningStats } from "../api";
 import {
@@ -19,20 +19,30 @@ import {
 import { useAppConfig, useVocab } from "../store";
 import { useToast } from "../components/Toaster";
 import { emitEvent, onEvent } from "../events";
-import { ensureLexiconLoaded, isFreqBand, type FreqBand } from "../wordLevels";
+import {
+  ensureLexiconLoaded,
+  isCefrLevel,
+  isFreqBand,
+  type CefrLevel,
+  type FreqBand,
+} from "../wordLevels";
 import SourceBoard from "../components/SourceBoard";
 import ArticleRow from "../components/ArticleRow";
 import {
-  loadCollapsedSources,
-  saveCollapsedSources,
+  COLLAPSE_ALL,
+  COLLAPSE_NONE,
+  isSourceCollapsed,
+  loadCollapseState,
+  saveCollapseState,
   toggleSourceCollapsed,
+  type CollapseState,
 } from "../sourceCollapse";
 import { lastArticlePath } from "../useArticle";
-import SelectionPopover from "../components/SelectionPopover";
+import WordPopoverShell from "../components/WordPopoverShell";
+import { createKnownToggle } from "../knownWords";
 import {
   bundledGloss,
   cachedTranslation,
-  isPhraseSelection,
   rememberTranslation,
 } from "../wordResolve";
 import { useTts } from "../useTts";
@@ -95,9 +105,9 @@ export default function Home() {
   const [sources, setSources] = useState<[string, number][]>([]);
   const toast = useToast();
   const [learningStats, setLearningStats] = useState<LearningStats | null>(null);
-  /** Collapsed source boards (incl. 今日推荐 via "home-top-picks"), persisted. */
-  const [collapsedSources, setCollapsedSources] = useState<Set<string>>(
-    () => loadCollapsedSources(),
+  /** Source-board collapse mode (incl. 今日推荐 via "home-top-picks"), persisted. */
+  const [collapseState, setCollapseState] = useState<CollapseState>(() =>
+    loadCollapseState(),
   );
 
   const navigate = useNavigate();
@@ -112,6 +122,9 @@ export default function Home() {
   const tts = useTts();
   const { speaking, speakTarget } = tts;
   const freqBand: FreqBand = isFreqBand(cfg.freq_band) ? cfg.freq_band : 3000;
+  const cefrLevel: CefrLevel = isCefrLevel(cfg.cefr_level)
+    ? cfg.cefr_level
+    : "B1";
   const hasLlm = Boolean(cfg.api_key?.trim());
 
   /** Presenting rule, stated once: home = category tabs + 今日推荐 pinned +
@@ -126,7 +139,7 @@ export default function Home() {
   const archiveMode = hasFilter;
 
   const fetchPage = useCallback(
-    (offset: number) =>
+    (offset: number, cursor?: { score: number; id: string } | null) =>
       archiveMode
         ? api.listLibrary({
             category: category === "all" ? undefined : category,
@@ -144,6 +157,7 @@ export default function Home() {
             true,
             PAGE_SIZE,
             offset,
+            cursor ?? null,
           ),
     [archiveMode, category, filters],
   );
@@ -183,23 +197,31 @@ export default function Home() {
     load,
   });
 
+  const loadMoreRef = useRef(false);
   async function loadMore() {
-    if (loadingMore) return;
+    if (loadMoreRef.current) return;
+    loadMoreRef.current = true;
     setLoadingMore(true);
     try {
-      const next = await fetchPage(articles.length);
-      const seen = new Set(articles.map((a) => a.id));
-      const merged = articles.concat(next.filter((a) => !seen.has(a.id)));
-      setArticles(merged);
+      // Cursor pagination for the ranked feed: immune to inserts above the
+      // cursor, unlike a raw offset. Archive mode keeps offset paging.
+      const last = articles.length > 0 ? articles[articles.length - 1] : null;
+      const next = await fetchPage(
+        articles.length,
+        !archiveMode && last ? { score: last.rank_score, id: last.id } : null,
+      );
+      setArticles((prev) => {
+        const seen = new Set(prev.map((a) => a.id));
+        return prev.concat(next.filter((a) => !seen.has(a.id)));
+      });
       setHasMore(next.length >= PAGE_SIZE);
     } catch (e) {
       toast.err(String(e));
     } finally {
+      loadMoreRef.current = false;
       setLoadingMore(false);
     }
   }
-
-  const sentinelRef = useInfiniteScroll(hasMore, loadMore);
 
   // Refresh lives on the list it refreshes: signal Home via the shared event.
   async function onRefresh() {
@@ -232,6 +254,7 @@ export default function Home() {
     articles,
     learningTerms,
     knownTerms,
+    cefrLevel,
     freqBand,
   });
 
@@ -263,26 +286,24 @@ export default function Home() {
     [orderedArticles, picksIds],
   );
 
-  // Collapse state lives here so 全部折叠/全部展开 can flip every board.
-  const boardKeys = useMemo(
-    () => ["home-top-picks", ...sections.map((s) => s.source)],
-    [sections],
-  );
+  // Collapse mode lives here so 全部折叠/全部展开 sticks to boards that only
+  // show up later (next page, re-rank); a name list only covered click-time.
+  const hasBoards = topPicks.length > 0 || sections.length > 0;
   const allBoardsCollapsed =
-    boardKeys.length > 0 && boardKeys.every((k) => collapsedSources.has(k));
+    collapseState.all && collapseState.keys.length === 0;
 
   function toggleSourceBoard(key: string) {
-    setCollapsedSources((prev) => {
+    setCollapseState((prev) => {
       const next = toggleSourceCollapsed(prev, key);
-      saveCollapsedSources(next);
+      saveCollapseState(next);
       return next;
     });
   }
 
   function toggleAllBoards() {
-    const next = allBoardsCollapsed ? new Set<string>() : new Set(boardKeys);
-    saveCollapsedSources(next);
-    setCollapsedSources(next);
+    const next = allBoardsCollapsed ? COLLAPSE_NONE : COLLAPSE_ALL;
+    saveCollapseState(next);
+    setCollapseState(next);
   }
 
   // The top bar drives refresh + feed management; Home only reacts.
@@ -300,9 +321,16 @@ export default function Home() {
           (result.purged_teasers ? ` · 清理残篇 ${result.purged_teasers}` : "") +
           (result.purged_old ? ` · 过期清理 ${result.purged_old}` : "") +
           (result.feeds_unchanged ? ` · ${result.feeds_unchanged} 源无更新` : "") +
-          (result.titles_translated ? ` · 译题/简介 ${result.titles_translated}` : "") +
+          (result.titles_translated ? ` · 补简介 ${result.titles_translated}` : "") +
           (result.errors.length ? ` · ${result.errors.length} 个问题` : ""),
       );
+      if (result.errors.length) {
+        toast.err(
+          "刷新问题：" +
+            result.errors.slice(0, 3).join("；") +
+            (result.errors.length > 3 ? ` 等 ${result.errors.length} 条` : ""),
+        );
+      }
       void load();
     });
   }, [load, toast]);
@@ -336,14 +364,27 @@ export default function Home() {
   const navList = useMemo(() => {
     if (archiveMode) return visible;
     const list: ArticleListItem[] = [];
-    if (topPicks.length > 0 && !collapsedSources.has("home-top-picks")) {
+    if (
+      topPicks.length > 0 &&
+      !isSourceCollapsed(collapseState, "home-top-picks")
+    ) {
       list.push(...topPicks);
     }
     for (const sec of sections) {
-      if (!collapsedSources.has(sec.source)) list.push(...sec.articles);
+      if (!isSourceCollapsed(collapseState, sec.source)) {
+        list.push(...sec.articles);
+      }
     }
     return list;
-  }, [archiveMode, visible, topPicks, sections, collapsedSources]);
+  }, [archiveMode, visible, topPicks, sections, collapseState]);
+
+  // Infinite scroll only makes sense while there is something on screen to
+  // read; with everything collapsed it would just stream in new (collapsed)
+  // boards. Re-arms as soon as one board is expanded again.
+  const sentinelRef = useInfiniteScroll(
+    hasMore && navList.length > 0,
+    loadMore,
+  );
 
   useEffect(() => {
     function onNavKey(e: KeyboardEvent) {
@@ -406,15 +447,16 @@ export default function Home() {
     await showMeaning({ text, x: e.clientX, y: e.clientY });
   }
 
-  async function toggleKnown(term: string) {
-    const key = term.trim().toLowerCase();
-    try {
-      if (knownTerms.includes(key)) await unmarkKnown(key);
-      else await markKnown(key);
-    } catch (e) {
-      toast.err(String(e));
-    }
-  }
+  const toggleKnown = useMemo(
+    () =>
+      createKnownToggle({
+        knownTerms,
+        markKnown,
+        unmarkKnown,
+        onError: (m) => toast.err(m),
+      }),
+    [knownTerms, markKnown, unmarkKnown, toast],
+  );
 
   const resumePath = lastArticlePath();
 
@@ -647,7 +689,7 @@ export default function Home() {
               type="button"
               className="linklike"
               onClick={toggleAllBoards}
-              disabled={boardKeys.length === 0}
+              disabled={!hasBoards}
             >
               {allBoardsCollapsed ? "全部展开" : "全部折叠"}
             </button>
@@ -662,7 +704,7 @@ export default function Home() {
                   articles: topPicks,
                 }}
                 difficultyById={difficultyById}
-                collapsed={collapsedSources.has("home-top-picks")}
+                collapsed={isSourceCollapsed(collapseState, "home-top-picks")}
                 onToggleCollapsed={() => toggleSourceBoard("home-top-picks")}
                 showTags={filtersOpen}
                 highlightedId={selectedId}
@@ -676,7 +718,7 @@ export default function Home() {
                 key={sec.source}
                 section={sec}
                 difficultyById={difficultyById}
-                collapsed={collapsedSources.has(sec.source)}
+                collapsed={isSourceCollapsed(collapseState, sec.source)}
                 onToggleCollapsed={() => toggleSourceBoard(sec.source)}
                 showTags={filtersOpen}
                 highlightedId={selectedId}
@@ -687,23 +729,15 @@ export default function Home() {
       )}
 
       {popover && (
-        <SelectionPopover
+        <WordPopoverShell
           popover={popover}
           speaking={speaking}
           speakTarget={speakTarget}
+          knownTerms={knownTerms}
           onSpeakWord={speakWord}
           onAddVocab={() => void addToVocab()}
-          onAddPhrase={
-            popover.source && isPhraseSelection(popover.source)
-              ? () => void addToPhrase()
-              : undefined
-          }
-          onToggleKnown={
-            popover.source && isPhraseSelection(popover.source)
-              ? undefined
-              : () => void toggleKnown(popover.text)
-          }
-          known={knownTerms.includes(popover.text.trim().toLowerCase())}
+          onAddPhrase={() => void addToPhrase()}
+          onToggleKnown={(term) => void toggleKnown(term)}
           onClose={closePopover}
         />
       )}

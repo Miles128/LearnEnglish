@@ -65,6 +65,7 @@ export default function App() {
   const { cfg, ready, loadError, refresh } = useAppConfig();
 
   useEffect(() => {
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     let hideTimer: number | undefined;
 
@@ -76,10 +77,12 @@ export default function App() {
         hideTimer = window.setTimeout(() => setProgress(null), 1200);
       }
     }).then((fn) => {
-      unlisten = fn;
+      if (cancelled) fn();
+      else unlisten = fn;
     });
 
     return () => {
+      cancelled = true;
       unlisten?.();
       if (hideTimer) window.clearTimeout(hideTimer);
     };
@@ -98,8 +101,11 @@ export default function App() {
   }, [cfg, ready, loadError, location.pathname, navigate]);
 
   // Top-bar page buttons act as toggles: clicking the active page goes home.
-  function toggleNav(to: string) {
-    if (location.pathname === to) navigate("/");
+  function toggleNav(e: React.MouseEvent, to: string) {
+    if (location.pathname === to) {
+      e.preventDefault();
+      navigate("/");
+    }
   }
 
   async function onImportFile() {
@@ -181,7 +187,7 @@ export default function App() {
                 className="topbar-btn"
                 title="生词库"
                 aria-label="生词库"
-                onClick={() => toggleNav("/vocab")}
+                onClick={(e) => toggleNav(e, "/vocab")}
               >
                 <IconVocab />
               </NavLink>
@@ -190,7 +196,7 @@ export default function App() {
                 className="topbar-btn"
                 title="设置"
                 aria-label="设置"
-                onClick={() => toggleNav("/settings")}
+                onClick={(e) => toggleNav(e, "/settings")}
               >
                 <IconSettings />
               </NavLink>

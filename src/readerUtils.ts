@@ -38,11 +38,12 @@ export function findContext(paragraphs: string[], term: string): string {
   const start = Math.max(0, at - 60);
   const end = Math.min(hit.length, at + term.length + 60);
   const window = hit.slice(start, end);
-  return (
-    (start > 0 ? "…" : "") +
-    clipContext(window, 140) +
-    (end < hit.length ? "" : "")
-  );
+  const clipped = clipContext(window, 140);
+  // Trailing ellipsis when the window stops mid-paragraph, unless clipping
+  // already added one.
+  const tail =
+    end < hit.length && !clipped.endsWith("…") ? "…" : "";
+  return (start > 0 ? "…" : "") + clipped + tail;
 }
 
 /** Merge one streamed paragraph; ignore the terminal `done` event. */

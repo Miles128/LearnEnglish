@@ -48,6 +48,18 @@ describe("findContext", () => {
     expect(ctx.length).toBeLessThan(160);
     expect(ctx).toContain("serendipity");
   });
+
+  it("marks both cut ends with an ellipsis", () => {
+    const long = `${"filler ".repeat(40)}serendipity${" trailer".repeat(40)}`;
+    const ctx = findContext([long], "serendipity");
+    expect(ctx.startsWith("…")).toBe(true);
+    expect(ctx.endsWith("…")).toBe(true);
+    expect(ctx).toContain("serendipity");
+  });
+
+  it("adds no ellipsis when the whole paragraph fits", () => {
+    expect(findContext(["Hello world."], "world")).toBe("Hello world.");
+  });
 });
 
 describe("clipContext", () => {

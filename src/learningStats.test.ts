@@ -17,7 +17,7 @@ describe("formatLearningInsight", () => {
         vocab_created_7d: 5,
         vocab_learning: 20,
       }),
-    ).toBe("今日 3 / 总 12");
+    ).toBe("今日 3 · 本周 3 · 总 12 · 本周新词 5");
   });
 
   it("handles the empty state", () => {
@@ -31,7 +31,7 @@ describe("formatLearningInsight", () => {
         vocab_created_7d: 0,
         vocab_learning: 0,
       }),
-    ).toBe("今日 0 / 总 0");
+    ).toBe("今日 0 · 本周 0 · 总 0");
   });
 });
 

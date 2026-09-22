@@ -13,7 +13,7 @@ import {
   wordDifficultyWeight,
 } from "./difficulty";
 
-const PREFS: DifficultyPrefs = { freqBand: 3000 };
+const PREFS: DifficultyPrefs = { cefrLevel: "B1", freqBand: 3000 };
 
 const EASY_WORDS = [
   "the", "and", "for", "you", "that", "with", "have", "this", "from",
@@ -57,6 +57,19 @@ describe("wordDifficultyWeight", () => {
     expect(learning).toBe(1.5);
     // OOV words are weak evidence, not difficulty.
     expect(wordDifficultyWeight("zzzqqq", PREFS, false)).toBe(0.5);
+  });
+
+  it("charges CEFR-above words the same rule as the underline", () => {
+    // A word inside the freq band but above the CEFR level is underlined
+    // hard, so it must also weigh into the difficulty index.
+    const above = wordDifficultyWeight("ubiquitous", PREFS, false);
+    const atLevel = wordDifficultyWeight(
+      "ubiquitous",
+      { cefrLevel: "C2", freqBand: 3000 },
+      false,
+    );
+    expect(above).toBeGreaterThan(0);
+    expect(atLevel).toBeLessThanOrEqual(above);
   });
 });
 
@@ -102,9 +115,16 @@ describe("articleDifficulty", () => {
 
   it("never gets easier when the freq band narrows", () => {
     const body = repeatTo(EASY_WORDS, 150);
-    const wide = articleDifficulty(body, [], { freqBand: 20000 });
-    const narrow = articleDifficulty(body, [], { freqBand: 1000 });
+    const wide = articleDifficulty(body, [], { cefrLevel: "B1", freqBand: 20000 });
+    const narrow = articleDifficulty(body, [], { cefrLevel: "B1", freqBand: 1000 });
     expect(wide!.score).toBeLessThanOrEqual(narrow!.score);
+  });
+
+  it("never gets easier when the CEFR bar lowers", () => {
+    const body = repeatTo(EASY_WORDS, 150);
+    const high = articleDifficulty(body, [], { cefrLevel: "C2", freqBand: 3000 });
+    const low = articleDifficulty(body, [], { cefrLevel: "A1", freqBand: 3000 });
+    expect(high!.score).toBeLessThanOrEqual(low!.score);
   });
 
   it("calibrates edges to the library distribution and stays stable", () => {

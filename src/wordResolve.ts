@@ -1,5 +1,5 @@
 import { toLemma } from "./lemma";
-import { lookupWord } from "./wordLevels";
+import { lookupWord, normalizeKey } from "./wordLevels";
 
 // 划词解析域：选区归一（lookup）+ 内置词典详情（details）。
 // 由 useWordPopover / SelectionPopover / Home / Reader 消费。
@@ -42,15 +42,41 @@ export function bundledGloss(term: string): string | undefined {
   return lookupWord(term)?.zh;
 }
 
-/** Session cache for list-page translations (re-selecting a word is free). */
+/**
+ * Session cache for list-page translations (re-selecting a word is free).
+ * Bounded LRU: re-selecting refreshes recency, the oldest entry is evicted
+ * past the cap so a long session cannot grow it without bound.
+ */
 const translationCache = new Map<string, string>();
+export const TRANSLATION_CACHE_CAP = 200;
 
 export function cachedTranslation(term: string): string | undefined {
-  return translationCache.get(term.toLowerCase());
+  const key = normalizeKey(term);
+  const hit = translationCache.get(key);
+  if (hit !== undefined) {
+    // Refresh recency: Map iterates in insertion order.
+    translationCache.delete(key);
+    translationCache.set(key, hit);
+  }
+  return hit;
 }
 
 export function rememberTranslation(term: string, translation: string) {
-  if (term && translation) translationCache.set(term.toLowerCase(), translation);
+  if (!term || !translation) return;
+  const key = normalizeKey(term);
+  if (!key) return;
+  if (translationCache.has(key)) translationCache.delete(key);
+  translationCache.set(key, translation);
+  while (translationCache.size > TRANSLATION_CACHE_CAP) {
+    const oldest = translationCache.keys().next();
+    if (oldest.done) break;
+    translationCache.delete(oldest.value);
+  }
+}
+
+/** Visible for tests. */
+export function translationCacheSize(): number {
+  return translationCache.size;
 }
 
 /**
@@ -159,7 +185,7 @@ export function ensureDetailsLoaded(): Promise<void> {
     .then((mod) => {
       for (const row of mod.default as unknown[]) {
         const detail = decodeDetail(row);
-        if (detail) details.set(detail.word.toLowerCase(), detail);
+        if (detail) details.set(normalizeKey(detail.word), detail);
       }
     })
     .catch((err) => {
@@ -171,12 +197,7 @@ export function ensureDetailsLoaded(): Promise<void> {
 
 /** Best detail for a term; accepts inflected forms via the raw key. */
 export function lookupDetail(term: string): WordDetail | null {
-  const key = term.trim().toLowerCase();
+  const key = normalizeKey(term);
   if (!key) return null;
   return details.get(key) ?? null;
-}
-
-/** Base form from the dictionary if present (falls back to the term). */
-export function detailLemma(term: string): string | null {
-  return lookupDetail(term)?.lemma || null;
 }

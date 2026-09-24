@@ -24,6 +24,8 @@ export type HardWordClick = (info: {
  * Memoized per-paragraph annotation so only paragraphs whose text, prefs or
  * vocab changed re-run the (expensive) word-level annotation pass.
  * Every English word is clickable. `onHardClick` must be referentially stable.
+ * `showGloss` reveals a small Chinese annotation under super-hard words; the
+ * click-through behaviour is unchanged (still opens the LLM-context popover).
  */
 export const AnnotatedPara = memo(function AnnotatedPara({
   text,
@@ -31,18 +33,20 @@ export const AnnotatedPara = memo(function AnnotatedPara({
   learningTerms,
   knownTerms,
   onHardClick,
+  showGloss = false,
 }: {
   text: string;
   prefs: DifficultyPrefs;
   learningTerms: string[];
   knownTerms?: string[];
   onHardClick?: HardWordClick;
+  showGloss?: boolean;
 }): ReactNode {
   return createElement(
     Fragment,
     null,
     ...annotateText(text, prefs, learningTerms, knownTerms).map((s, i) =>
-      renderSpan(s, i, onHardClick),
+      renderSpan(s, i, onHardClick, showGloss),
     ),
   );
 });
@@ -51,6 +55,7 @@ function renderSpan(
   span: AnnotatedSpan,
   key: number,
   onHardClick?: HardWordClick,
+  showGloss = false,
 ): ReactNode {
   if (span.type === "text") return span.text;
 
@@ -104,12 +109,32 @@ function renderSpan(
     onKeyDown,
   };
 
-  if (span.learning && !span.hard) {
+  const wordEl =
+    span.learning && !span.hard
+      ? createElement(
+          "mark",
+          { ...interactive, className: classNames },
+          span.text,
+        )
+      : createElement(
+          "span",
+          { ...interactive, className: classNames },
+          span.text,
+        );
+
+  // 仅对「超级难词 + 词典里有中文首义 + 用户开了开关」挂淡色小字；hover 时 CSS 提升可读性。
+  // 点词/键盘 Enter 仍走原 LLM 上下文翻译路径，不受这里影响。
+  if (showGloss && span.superHard && span.hard && span.zh) {
     return createElement(
-      "mark",
-      { ...interactive, className: classNames },
-      span.text,
+      "span",
+      { key: `g-${key}`, className: "gloss-wrap" },
+      wordEl,
+      createElement(
+        "span",
+        { className: "word-gloss", "aria-hidden": true },
+        span.zh,
+      ),
     );
   }
-  return createElement("span", { ...interactive, className: classNames }, span.text);
+  return wordEl;
 }

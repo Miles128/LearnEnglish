@@ -53,6 +53,11 @@ pub struct AppConfig {
     /// 0 = keep forever. Liked articles and user imports are always kept.
     #[serde(default = "default_article_retention_days")]
     pub article_retention_days: u32,
+    /// Show a small Chinese gloss beneath "super-hard" words while reading
+    /// (≥2 CEFR steps above the user's level, or frequency rank past 2× the
+    /// band). Off = the reader stays as clean as before; underline still works.
+    #[serde(default = "default_show_hard_word_gloss")]
+    pub show_hard_word_gloss: bool,
 }
 
 fn default_cefr_level() -> String {
@@ -83,6 +88,10 @@ fn default_article_retention_days() -> u32 {
     14
 }
 
+fn default_show_hard_word_gloss() -> bool {
+    true
+}
+
 fn default_theme() -> String {
     "system".into()
 }
@@ -106,6 +115,7 @@ impl Default for AppConfig {
             reader_line_width: default_reader_line_width(),
             article_retention_days: default_article_retention_days(),
             theme: default_theme(),
+            show_hard_word_gloss: default_show_hard_word_gloss(),
         }
     }
 }
@@ -219,6 +229,20 @@ mod tests {
         assert_eq!(cfg.cefr_level, "B1");
         assert_eq!(cfg.freq_band, 3000);
         assert!(cfg.disabled_feeds.is_empty());
+        // Gloss-under-hard-word is a "helpful by default" reading aid.
+        assert!(cfg.show_hard_word_gloss);
+    }
+
+    #[test]
+    fn show_hard_word_gloss_respects_explicit_false() {
+        let raw = r#"{
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "x",
+            "model": "gpt-4o-mini",
+            "show_hard_word_gloss": false
+        }"#;
+        let cfg: AppConfig = serde_json::from_str(raw).unwrap();
+        assert!(!cfg.show_hard_word_gloss);
     }
 
     #[test]

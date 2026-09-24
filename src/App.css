@@ -1119,6 +1119,67 @@ mark.vocab-hit:hover {
   background: rgba(15, 92, 76, 0.14);
 }
 
+/* 超级难词下方挂淡色中文：绝对定位，不挤行高；hover 时加深 + 微微放大，
+   让「一眼看不出、想知道再聚焦」的层级差可读性对齐。 */
+.gloss-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.word-gloss {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: -2px;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif;
+  font-size: 0.58em;
+  line-height: 1;
+  letter-spacing: 0;
+  color: var(--muted);
+  opacity: 0.72;
+  white-space: nowrap;
+  pointer-events: none;
+  font-variant-numeric: normal;
+  transition: opacity 120ms ease, transform 120ms ease, color 120ms ease;
+}
+
+.gloss-wrap:hover .word-gloss,
+.gloss-wrap:focus-within .word-gloss {
+  opacity: 1;
+  color: var(--ink);
+  transform: translateX(-50%) scale(1.08);
+}
+
+/* Settings 开关行 */
+.toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 10px;
+  cursor: pointer;
+}
+
+.toggle-row input[type="checkbox"] {
+  margin-top: 3px;
+  width: 16px;
+  height: 16px;
+  accent-color: rgb(15, 92, 76);
+  flex-shrink: 0;
+}
+
+.toggle-row strong {
+  display: block;
+  font-weight: 600;
+}
+
+.toggle-hint {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.88em;
+  line-height: 1.55;
+}
+
 .settings-section select {
   display: block;
   width: 100%;

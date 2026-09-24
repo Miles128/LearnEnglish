@@ -36,6 +36,7 @@ export function defaultAppConfig(): RustAppConfig {
     vocab_placement_skipped: false,
     article_retention_days: 14,
     theme: "system",
+    show_hard_word_gloss: true,
     ...defaultReadingPrefs(),
   };
 }

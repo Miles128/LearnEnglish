@@ -399,6 +399,7 @@ export default function Reader() {
           learningTerms={vocabTerms}
           knownTerms={knownTerms}
           onHardClick={onHardWordClick}
+          showGloss={cfg.show_hard_word_gloss}
         />
       );
       if (typeof children === "string") return annotate(children);
@@ -409,7 +410,7 @@ export default function Reader() {
       }
       return children;
     },
-    [lexReady, prefs, vocabTerms, knownTerms, onHardWordClick],
+    [lexReady, prefs, vocabTerms, knownTerms, onHardWordClick, cfg.show_hard_word_gloss],
   );
 
   async function toggleFullTranslation() {
@@ -528,6 +529,7 @@ export default function Reader() {
                 learningTerms={vocabTerms}
                 knownTerms={knownTerms}
                 onHardClick={onHardWordClick}
+                showGloss={cfg.show_hard_word_gloss}
               />
             ) : (
               title

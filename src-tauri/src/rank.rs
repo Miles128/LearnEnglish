@@ -19,6 +19,14 @@ pub struct Affinity {
     pub tag_doc_counts: HashMap<String, i64>,
     /// number of tagged articles.
     pub tagged_docs: i64,
+    /// feed display name → user-assigned sidebar priority within its own
+    /// category (higher = dragged nearer the top of that category). Absent or 0
+    /// means the learner never ordered this source.
+    pub source_priority: HashMap<String, i64>,
+    /// category → highest priority among that category's feeds, used to
+    /// normalise the per-category bonus to [0, 1] so ordering one category does
+    /// not outrank the top of another.
+    pub category_priority_max: HashMap<String, i64>,
 }
 
 impl Affinity {
@@ -35,7 +43,21 @@ impl Affinity {
             tag_weights,
             tag_doc_counts,
             tagged_docs,
+            source_priority: HashMap::new(),
+            category_priority_max: HashMap::new(),
         }
+    }
+
+    /// Attach the sidebar priority map (by source name) plus the per-category
+    /// ceiling (by category), so the bonus is normalised within a category.
+    pub fn with_source_priority(
+        mut self,
+        source_priority: HashMap<String, i64>,
+        category_priority_max: HashMap<String, i64>,
+    ) -> Self {
+        self.source_priority = source_priority;
+        self.category_priority_max = category_priority_max;
+        self
     }
 
     /// IDF: rare tags carry more signal than tags on almost every article.
@@ -78,6 +100,17 @@ pub fn affinity_score(opens: i64) -> f64 {
         0.0
     } else {
         ((opens + 1) as f64).ln() / 10f64.ln()
+    }
+}
+
+/// Sidebar-priority bonus in [0, 1]: the learner ranked this source within its
+/// category. `max` is that category's highest priority. 0 when the source was
+/// never ordered (priority absent/0) or the category ceiling is 0.
+pub fn priority_score(priority: i64, max: i64) -> f64 {
+    if priority <= 0 || max <= 0 {
+        0.0
+    } else {
+        (priority as f64 / max as f64).clamp(0.0, 1.0)
     }
 }
 
@@ -151,6 +184,17 @@ pub fn article_rank_score(
         * affinity_score(
             *affinity
                 .category_opens
+                .get(&article.category)
+                .unwrap_or(&0),
+        )
+        * fresh;
+    // Sidebar priority is an explicit within-category ordering, so it gets a
+    // strong, freshness-modulated boost normalised by that category's ceiling.
+    score += 1.5
+        * priority_score(
+            *affinity.source_priority.get(&article.source).unwrap_or(&0),
+            *affinity
+                .category_priority_max
                 .get(&article.category)
                 .unwrap_or(&0),
         )
@@ -456,6 +500,66 @@ mod tests {
         assert_eq!(
             offset_page.iter().map(|i| i.id.clone()).collect::<Vec<_>>(),
             vec!["b", "c"]
+        );
+    }
+
+    #[test]
+    fn priority_score_is_normalised_and_bounded() {
+        assert_eq!(priority_score(0, 10), 0.0, "unordered source gets no bonus");
+        assert_eq!(priority_score(10, 0), 0.0, "zero ceiling never divides");
+        assert!((priority_score(10, 10) - 1.0).abs() < f64::EPSILON);
+        assert!((priority_score(5, 10) - 0.5).abs() < f64::EPSILON);
+        assert_eq!(priority_score(20, 10), 1.0, "clamped to 1");
+    }
+
+    #[test]
+    fn higher_priority_source_ranks_above_same_freshness_rival() {
+        let now = Utc::now();
+        // Both sources live in category "tech", ceiling 30 → normalise there.
+        let affinity = Affinity::default().with_source_priority(
+            HashMap::from([("Favorite".to_string(), 30i64), ("Rival".to_string(), 20i64)]),
+            HashMap::from([("tech".to_string(), 30i64)]),
+        );
+        // open_count > 0 disables exploration jitter → deterministic compare.
+        let mut fav = item("fav");
+        fav.source = "Favorite".into();
+        fav.fetched_at = now.to_rfc3339();
+        fav.open_count = 1;
+        let mut riv = item("riv");
+        riv.source = "Rival".into();
+        riv.fetched_at = now.to_rfc3339();
+        riv.open_count = 1;
+
+        let s_fav = article_rank_score(&fav, &affinity, now, 1);
+        let s_riv = article_rank_score(&riv, &affinity, now, 1);
+        assert!(s_fav > s_riv, "dragged-to-top source outranks lower one");
+    }
+
+    #[test]
+    fn priority_is_normalised_within_category() {
+        let now = Utc::now();
+        // A #1 in a small "world" category should match a #1 in a large "tech"
+        // category (both normalise to 1.0), not lose because tech's max is bigger.
+        let affinity = Affinity::default().with_source_priority(
+            HashMap::from([("TechTop".to_string(), 10i64), ("WorldTop".to_string(), 2i64)]),
+            HashMap::from([("tech".to_string(), 10i64), ("world".to_string(), 2i64)]),
+        );
+        let mut tech = item("t");
+        tech.source = "TechTop".into();
+        tech.category = "tech".into();
+        tech.open_count = 1;
+        tech.fetched_at = now.to_rfc3339();
+        let mut world = item("w");
+        world.source = "WorldTop".into();
+        world.category = "world".into();
+        world.open_count = 1;
+        world.fetched_at = now.to_rfc3339();
+
+        let s_tech = article_rank_score(&tech, &affinity, now, 1);
+        let s_world = article_rank_score(&world, &affinity, now, 1);
+        assert!(
+            (s_tech - s_world).abs() < 1e-9,
+            "both are #1 in their category → equal priority bonus: {s_tech} vs {s_world}"
         );
     }
 

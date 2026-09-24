@@ -314,6 +314,88 @@ fn select_enabled_uses_db_flag_only() {
     assert_eq!(enabled[0].id, "on");
 }
 
+/// Progress events must carry a live article count, not just source counts.
+#[test]
+fn refresh_progress_reports_article_count() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let prose: String = (0..50)
+        .map(|_| "The quick brown fox jumps over the lazy dog near the quiet river bank. ")
+        .collect();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("port").port();
+    let now = chrono::Utc::now().to_rfc2822();
+    let feed_xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <rss version=\"2.0\" xmlns:content=\"http://purl.org/rss/1.0/modules/content/\">\n\
+         <channel><title>Count Feed</title><link>http://127.0.0.1:{port}/</link>\
+         <description>test</description>\n\
+         <item><title>Counted Story</title><link>http://127.0.0.1:{port}/p1</link>\
+         <guid isPermaLink=\"false\">count-p1</guid><pubDate>{now}</pubDate>\
+         <description>A long story.</description>\
+         <content:encoded><![CDATA[<p>{prose}</p>]]></content:encoded></item>\n\
+         </channel></rss>"
+    );
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let mut buf = [0u8; 8192];
+        let _ = stream.read(&mut buf);
+        let _ = stream.write_all(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/rss+xml\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                feed_xml.len(),
+                feed_xml
+            )
+            .as_bytes(),
+        );
+    });
+
+    let dir = std::env::temp_dir().join(format!("shiyan-progress-it-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let db = crate::db::DbState::open(crate::db::db_path(dir.clone())).unwrap();
+    {
+        let conn = db.lock_write().unwrap();
+        let test_feed = crate::db::subscribe_feed(
+            &conn,
+            "Count Feed",
+            "tech",
+            &format!("http://127.0.0.1:{port}/feed.xml"),
+            "progress fixture",
+        )
+        .unwrap();
+        for feed in crate::db::list_feeds(&conn).unwrap() {
+            if feed.id != test_feed.id {
+                crate::db::set_feed_enabled(&conn, &feed.id, false).unwrap();
+            }
+        }
+    }
+    let cfg = crate::config::AppConfig::default();
+
+    let (tx, rx) = std::sync::mpsc::channel::<RefreshProgress>();
+    refresh_feeds(&db, &cfg, move |p| {
+        let _ = tx.send(p);
+    })
+    .expect("refresh");
+    let events: Vec<RefreshProgress> = rx.try_iter().collect();
+    assert!(!events.is_empty(), "progress events emitted");
+    let done = events
+        .iter()
+        .find(|p| p.phase == "done")
+        .expect("done event");
+    assert_eq!(done.articles, 1, "done event carries inserted article count");
+    assert!(
+        events
+            .iter()
+            .filter(|p| p.phase == "download")
+            .any(|p| p.articles >= 1),
+        "download phase reports the running article count"
+    );
+
+    server.join().expect("server thread");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn trust_bar_adapts_to_feed_fulltext_ratio() {
     assert_eq!(rss_trust_chars(0.9), 1200, "full-text feeds lower the bar");

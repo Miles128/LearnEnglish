@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, ArticleListItem, FeedCategory, LearningStats } from "../api";
+import { api, ArticleListItem, LearningStats } from "../api";
 import {
   applyDifficultyOrder,
   articleNeedsCardZh,
-  groupBySource,
   pickTopArticles,
-  topPickIds,
   topTags,
 } from "../homeDerived";
 import { useArticleBackfill, useHomeDifficulty, useInfiniteScroll } from "../homeHooks";
@@ -16,7 +14,7 @@ import {
   difficultyLabel,
   type DifficultyLevel,
 } from "../difficulty";
-import { useAppConfig, useVocab } from "../store";
+import { useAppConfig, useShell, useVocab } from "../store";
 import { useToast } from "../components/Toaster";
 import { emitEvent, onEvent } from "../events";
 import {
@@ -26,17 +24,7 @@ import {
   type CefrLevel,
   type FreqBand,
 } from "../wordLevels";
-import SourceBoard from "../components/SourceBoard";
 import ArticleRow from "../components/ArticleRow";
-import {
-  COLLAPSE_ALL,
-  COLLAPSE_NONE,
-  isSourceCollapsed,
-  loadCollapseState,
-  saveCollapseState,
-  toggleSourceCollapsed,
-  type CollapseState,
-} from "../sourceCollapse";
 import { lastArticlePath } from "../useArticle";
 import WordPopoverShell from "../components/WordPopoverShell";
 import { createKnownToggle } from "../knownWords";
@@ -57,61 +45,72 @@ function IconRefresh() {
   );
 }
 
+function IconSearch() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m21 21-4.3-4.3" />
+    </svg>
+  );
+}
+
 const PAGE_SIZE = 60;
-/** Tags shown in the filter row before folding into a +N expander. */
-const TAG_PREVIEW = 5;
 /** 今日推荐: the first N ranked unread articles, shown expanded. */
 const TOP_PICKS = 10;
 
 /** 未完成 (default) / 未读 / 在读 / 已读 / 全部. */
 type ReadFilter = "unfinished" | "unread" | "reading" | "read" | "all";
 
-/** Filter-panel state as one object: reset = one assignment, no setter juggling. */
+/** Filter-panel state as one object: reset = one assignment, no setter juggling.
+ *  Tags and source live in the shell (sidebar owns them); the panel keeps the
+ *  reading-state / favourite / difficulty refinement. */
 type Filters = {
   read: ReadFilter;
   likedOnly: boolean;
-  source: string;
   level: DifficultyLevel | "all";
-  tags: string[];
 };
 
 const DEFAULT_FILTERS: Filters = {
   read: "unfinished",
   likedOnly: false,
-  source: "",
   level: "all",
-  tags: [],
 };
 
 export default function Home() {
-  const [category, setCategory] = useState("all");
-  /** Tags + filters stay hidden until the 筛选 toggle is opened. */
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  /** Tag chips fold into a +N expander; reset when the panel closes. */
-  const [tagsExpanded, setTagsExpanded] = useState(false);
-  const [categories, setCategories] = useState<FeedCategory[]>([]);
   const [articles, setArticles] = useState<ArticleListItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  /** Top-bar search input is collapsed until the button is pressed or text is present. */
+  const [searchOpen, setSearchOpen] = useState(false);
+  const navigate = useNavigate();
+  const { cfg } = useAppConfig();
+  const {
+    selectedTags,
+    publishAvailableTags,
+    query,
+    setQuery,
+    rerankNonce,
+    filtersOpen,
+    focusSource,
+    setFocusSource,
+    publishTopPickSources,
+  } = useShell();
   /** Archive filters (merged in from the old Library page). */
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const patchFilters = useCallback(
     (patch: Partial<Filters>) => setFilters((f) => ({ ...f, ...patch })),
     [],
   );
-  const clearFilters = useCallback(() => setFilters(DEFAULT_FILTERS), []);
-  const [sources, setSources] = useState<[string, number][]>([]);
+  const clearFilters = useCallback(() => {
+    // Panel collapse resets the archive filters only; tag selection lives in the
+    // sidebar and is cleared by its own 清除 control.
+    setFilters(DEFAULT_FILTERS);
+  }, []);
   const toast = useToast();
   const [learningStats, setLearningStats] = useState<LearningStats | null>(null);
-  /** Source-board collapse mode (incl. 今日推荐 via "home-top-picks"), persisted. */
-  const [collapseState, setCollapseState] = useState<CollapseState>(() =>
-    loadCollapseState(),
-  );
 
-  const navigate = useNavigate();
-  const { cfg } = useAppConfig();
   const {
     learningTerms,
     knownTerms,
@@ -127,53 +126,52 @@ export default function Home() {
     : "B1";
   const hasLlm = Boolean(cfg.api_key?.trim());
 
-  /** Presenting rule, stated once: home = category tabs + 今日推荐 pinned +
-   *  per-source boards; the flat archive list appears whenever ANY filter is
-   *  active (status/收藏/来源/难度/标签) — a filtered digest is an archive. */
-  const hasFilter =
+  /** Main-list model (single focused list, never a multi-source page):
+   *  - 今日推荐 (default): no source focused and no other filter active.
+   *  - source view: a sidebar source is focused → that source's articles.
+   *  - archive view: some refinement (status/收藏/难度/标签) active with no
+   *    focused source → a flat filtered list. */
+  const hasOtherFilter =
     filters.read !== "unfinished" ||
     filters.likedOnly ||
     filters.level !== "all" ||
-    filters.tags.length > 0 ||
-    filters.source !== "";
-  const archiveMode = hasFilter;
+    selectedTags.length > 0;
+  const showPicks = focusSource === null && !hasOtherFilter;
 
   const fetchPage = useCallback(
     (offset: number, cursor?: { score: number; id: string } | null) =>
-      archiveMode
-        ? api.listLibrary({
-            category: category === "all" ? undefined : category,
-            tags: filters.tags,
-            source: filters.source || undefined,
-            readState: filters.read,
-            likedOnly: filters.likedOnly,
-            limit: PAGE_SIZE,
-            offset,
-          })
-        : api.listArticlesRanked(
-            category === "all" ? undefined : category,
-            filters.tags,
+      showPicks
+        ? api.listArticlesRanked(
+            undefined,
+            [],
             undefined,
             true,
             PAGE_SIZE,
             offset,
             cursor ?? null,
-          ),
-    [archiveMode, category, filters],
+          )
+        : api.listLibrary({
+            category: undefined,
+            tags: selectedTags,
+            source: focusSource ?? undefined,
+            readState: filters.read,
+            likedOnly: filters.likedOnly,
+            limit: PAGE_SIZE,
+            offset,
+          }),
+    [showPicks, selectedTags, focusSource, filters],
   );
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [list, cats, stats] = await Promise.all([
+      const [list, stats] = await Promise.all([
         fetchPage(0),
-        api.listFeedCategories().catch(() => [] as FeedCategory[]),
         api.getLearningStats().catch(() => null),
         ensureLexiconLoaded().catch(() => undefined),
       ]);
       setArticles(list);
       setHasMore(list.length >= PAGE_SIZE);
-      setCategories(cats);
       setLearningStats(stats);
     } catch (e) {
       toast.err(String(e));
@@ -186,9 +184,18 @@ export default function Home() {
     void load();
   }, [load]);
 
+  // A sidebar priority reorder bumps rerankNonce → re-fetch the ranked list.
+  // Skip the initial mount (already covered by the load effect above).
+  const rerankMounted = useRef(false);
   useEffect(() => {
-    void api.listArticleSources().then(setSources).catch(() => undefined);
-  }, []);
+    if (!rerankMounted.current) {
+      rerankMounted.current = true;
+      return;
+    }
+    void load();
+    // Only rerankNonce should retrigger this; `load` is read fresh each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rerankNonce]);
 
   const { cardFilling, cardFillError, retryFillCards } = useArticleBackfill({
     articles,
@@ -203,12 +210,12 @@ export default function Home() {
     loadMoreRef.current = true;
     setLoadingMore(true);
     try {
-      // Cursor pagination for the ranked feed: immune to inserts above the
-      // cursor, unlike a raw offset. Archive mode keeps offset paging.
+      // Cursor pagination for the ranked 今日推荐 feed: immune to inserts above
+      // the cursor. Source/archive views keep offset paging.
       const last = articles.length > 0 ? articles[articles.length - 1] : null;
       const next = await fetchPage(
         articles.length,
-        !archiveMode && last ? { score: last.rank_score, id: last.id } : null,
+        showPicks && last ? { score: last.rank_score, id: last.id } : null,
       );
       setArticles((prev) => {
         const seen = new Set(prev.map((a) => a.id));
@@ -241,13 +248,27 @@ export default function Home() {
   // while filtered results are shown requires remembering them.
   const availableTags = useMemo(() => topTags(articles), [articles]);
 
-  const tabCategories = useMemo(() => {
-    const tabs = [{ id: "all", label: "全部" }];
-    for (const c of categories) {
-      tabs.push({ id: c.id, label: c.label });
-    }
-    return tabs;
-  }, [categories]);
+  // The always-visible tag filter now lives in the sidebar: publish the tags
+  // available in this window so its chips match what Home could filter on.
+  useEffect(() => {
+    publishAvailableTags(availableTags);
+  }, [availableTags, publishAvailableTags]);
+
+  // Top-bar search: a lightweight client-side filter over the loaded window
+  // (title / blurb / source / tags). No backend full-text command exists yet.
+  const matchesQuery = useCallback(
+    (a: ArticleListItem) => {
+      const q = query.trim().toLowerCase();
+      if (!q) return true;
+      return (
+        a.title.toLowerCase().includes(q) ||
+        a.summary_zh.toLowerCase().includes(q) ||
+        a.source.toLowerCase().includes(q) ||
+        (a.tags ?? []).some((t) => t.toLowerCase().includes(q))
+      );
+    },
+    [query],
+  );
 
   // Local difficulty index per article — see useHomeDifficulty.
   const { difficultyById, levelCounts } = useHomeDifficulty({
@@ -264,47 +285,52 @@ export default function Home() {
     [filters.level, difficultyById],
   );
 
-  /** Flat archive list (read/收藏/来源 filters active). */
-  const visible = useMemo(() => articles.filter(matchesLevel), [articles, matchesLevel]);
+  /** Flat list for the source / archive views (difficulty + search refined). */
+  const visible = useMemo(
+    () => articles.filter((a) => matchesLevel(a) && matchesQuery(a)),
+    [articles, matchesLevel, matchesQuery],
+  );
 
-  // Difficulty fit nudges the backend rank: the sweet spot (a few new words
+  // Difficulty fit nudges the 今日推荐 ranking: the sweet spot (a few new words
   // per paragraph) floats up, word walls and trivially-easy pieces sink.
   const orderedArticles = useMemo(
-    () => applyDifficultyOrder(articles, difficultyById).filter(matchesLevel),
-    [articles, difficultyById, matchesLevel],
+    () =>
+      applyDifficultyOrder(articles, difficultyById).filter(
+        (a) => matchesLevel(a) && matchesQuery(a),
+      ),
+    [articles, difficultyById, matchesLevel, matchesQuery],
   );
   const topPicks = useMemo(
     () => pickTopArticles(orderedArticles, TOP_PICKS),
     [orderedArticles],
   );
-  const picksIds = useMemo(() => topPickIds(topPicks), [topPicks]);
-  // Difficulty-adjusted rank order: section order = first appearance, and
-  // articles within a board keep their adjusted rank.
-  const sections = useMemo(
-    () =>
-      groupBySource(orderedArticles.filter((a) => !picksIds.has(a.id))),
-    [orderedArticles, picksIds],
-  );
 
-  // Collapse mode lives here so 全部折叠/全部展开 sticks to boards that only
-  // show up later (next page, re-rank); a name list only covered click-time.
-  const hasBoards = topPicks.length > 0 || sections.length > 0;
-  const allBoardsCollapsed =
-    collapseState.all && collapseState.keys.length === 0;
+  // Publish the distinct sources behind today's picks so the sidebar's
+  // 今日推荐 node can expand to show them (glance only, not draggable).
+  useEffect(() => {
+    const seen = new Set<string>();
+    const srcs: string[] = [];
+    for (const a of topPicks) {
+      if (!seen.has(a.source)) {
+        seen.add(a.source);
+        srcs.push(a.source);
+      }
+    }
+    publishTopPickSources(srcs);
+  }, [topPicks, publishTopPickSources]);
 
-  function toggleSourceBoard(key: string) {
-    setCollapseState((prev) => {
-      const next = toggleSourceCollapsed(prev, key);
-      saveCollapseState(next);
-      return next;
-    });
-  }
+  // Collapsing the filter panel (from the sidebar icon) resets archive filters.
+  const filtersOpenPrev = useRef(filtersOpen);
+  useEffect(() => {
+    if (filtersOpenPrev.current && !filtersOpen) clearFilters();
+    filtersOpenPrev.current = filtersOpen;
+  }, [filtersOpen, clearFilters]);
 
-  function toggleAllBoards() {
-    const next = allBoardsCollapsed ? COLLAPSE_NONE : COLLAPSE_ALL;
-    saveCollapseState(next);
-    setCollapseState(next);
-  }
+  /** The one list the main area shows: 今日推荐, or the focused/filtered set. */
+  const displayList = showPicks ? topPicks : visible;
+  const listHeading = showPicks
+    ? "今日推荐"
+    : focusSource ?? "筛选结果";
 
   // The top bar drives refresh + feed management; Home only reacts.
   useEffect(() => {
@@ -358,25 +384,9 @@ export default function Home() {
     onVocabAdded: () => void refreshLearningTerms(),
   });
 
-  // Keyboard flow (j/k/Enter/o): the navigation list mirrors what is actually
-  // on screen — collapsed boards are skipped, archive mode uses the flat list.
+  // Keyboard flow (j/k/Enter/o): navigate exactly what is on screen.
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const navList = useMemo(() => {
-    if (archiveMode) return visible;
-    const list: ArticleListItem[] = [];
-    if (
-      topPicks.length > 0 &&
-      !isSourceCollapsed(collapseState, "home-top-picks")
-    ) {
-      list.push(...topPicks);
-    }
-    for (const sec of sections) {
-      if (!isSourceCollapsed(collapseState, sec.source)) {
-        list.push(...sec.articles);
-      }
-    }
-    return list;
-  }, [archiveMode, visible, topPicks, sections, collapseState]);
+  const navList = useMemo(() => displayList, [displayList]);
 
   // Infinite scroll only makes sense while there is something on screen to
   // read; with everything collapsed it would just stream in new (collapsed)
@@ -462,16 +472,7 @@ export default function Home() {
 
   return (
     <div className="page home-page" onMouseUp={(e) => void onPageMouseUp(e)}>
-      <div className="tabs home-tabs">
-        {tabCategories.map((c) => (
-          <button
-            key={c.id}
-            className={category === c.id ? "tab active" : "tab"}
-            onClick={() => setCategory(c.id)}
-          >
-            {c.label}
-          </button>
-        ))}
+      <div className="home-toolbar">
         <button
           type="button"
           className={`iconlike${refreshing ? " spin" : ""}`}
@@ -482,6 +483,41 @@ export default function Home() {
         >
           <IconRefresh />
         </button>
+        <div className={`home-search${searchOpen || query ? " open" : ""}`}>
+          <button
+            type="button"
+            className="iconlike"
+            onClick={() => {
+              if (query) {
+                setQuery("");
+              }
+              setSearchOpen((v) => !v);
+            }}
+            title="搜索文章"
+            aria-label="搜索文章"
+          >
+            <IconSearch />
+          </button>
+          {searchOpen && (
+            <input
+              className="search-input"
+              type="search"
+              autoFocus
+              placeholder="搜索标题 / 简介 / 来源 / 标签"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setQuery("");
+                  setSearchOpen(false);
+                }
+              }}
+              onBlur={() => {
+                if (!query) setSearchOpen(false);
+              }}
+            />
+          )}
+        </div>
         <div className="tabs-right">
           {learningStats && (
             <span className="learning-insight-inline">
@@ -489,21 +525,6 @@ export default function Home() {
               <Link to="/stats">统计</Link>
             </span>
           )}
-          <button
-            type="button"
-            className={hasFilter ? "linklike active" : "linklike"}
-            onClick={() => {
-              if (filtersOpen) {
-                // 收起筛选面板 = 回到原始主页：清空全部筛选条件。
-                setTagsExpanded(false);
-                clearFilters();
-              }
-              setFiltersOpen(!filtersOpen);
-            }}
-            aria-expanded={filtersOpen}
-          >
-            筛选
-          </button>
           {resumePath && (
             <button
               type="button"
@@ -548,7 +569,7 @@ export default function Home() {
                   ★ 收藏
                 </button>
               </div>
-              {hasFilter && (
+              {hasOtherFilter && (
                 <button
                   type="button"
                   className="tag-chip clear filter-clear"
@@ -560,18 +581,6 @@ export default function Home() {
             </div>
 
             <div className="filter-row">
-              <select
-                className="filter-select"
-                value={filters.source}
-                onChange={(e) => patchFilters({ source: e.target.value })}
-              >
-                <option value="">全部来源</option>
-                {sources.map(([name, count]) => (
-                  <option key={name} value={name}>
-                    {name}（{count}）
-                  </option>
-                ))}
-              </select>
               <select
                 className="filter-select"
                 value={filters.level}
@@ -587,45 +596,6 @@ export default function Home() {
                   </option>
                 ))}
               </select>
-              {availableTags.length > 0 && (
-                <>
-                  <span className="filter-label">标签</span>
-                  {(tagsExpanded
-                    ? availableTags
-                    : availableTags.slice(0, TAG_PREVIEW)
-                  ).map((tag) => {
-                    const on = filters.tags.includes(tag);
-                    return (
-                      <button
-                        key={tag}
-                        type="button"
-                        className={on ? "tag-chip active" : "tag-chip"}
-                        onClick={() =>
-                          setFilters((f) => ({
-                            ...f,
-                            tags: f.tags.includes(tag)
-                              ? f.tags.filter((x) => x !== tag)
-                              : [...f.tags, tag],
-                          }))
-                        }
-                      >
-                        {tag}
-                      </button>
-                    );
-                  })}
-                  {availableTags.length > TAG_PREVIEW && (
-                    <button
-                      type="button"
-                      className="tag-chip tag-more"
-                      onClick={() => setTagsExpanded((v) => !v)}
-                    >
-                      {tagsExpanded
-                        ? "收起"
-                        : `+${availableTags.length - TAG_PREVIEW}`}
-                    </button>
-                  )}
-                </>
-              )}
             </div>
           </div>
         </>
@@ -657,74 +627,38 @@ export default function Home() {
           </p>
         </div>
       )}
-      {!loading && articles.length > 0 && visible.length === 0 && (
+      {!loading && articles.length > 0 && displayList.length === 0 && (
         <div className="empty">
           <p>没有符合条件的文章。</p>
         </div>
       )}
 
-      {archiveMode ? (
-        visible.length > 0 && (
+      {displayList.length > 0 && (
+        <>
+          <div className="list-heading-row">
+            <h2 className="list-heading">{listHeading}</h2>
+            {focusSource && (
+              <button
+                type="button"
+                className="linklike"
+                onClick={() => setFocusSource(null)}
+              >
+                回到今日推荐
+              </button>
+            )}
+          </div>
           <ul className="article-list library-list">
-            {visible.map((a) => (
+            {displayList.map((a) => (
               <ArticleRow
                 key={a.id}
                 article={a}
                 difficulty={difficultyById.get(a.id) ?? null}
-                showSource
+                showSource={!focusSource}
                 showTags={filtersOpen}
                 highlighted={a.id === selectedId}
               />
             ))}
           </ul>
-        )
-      ) : (
-        <>
-          <div className="boards-toolbar">
-            <span className="muted">
-              {sections.length} 个来源
-              {allBoardsCollapsed ? " · 已全部折叠" : ""}
-            </span>
-            <button
-              type="button"
-              className="linklike"
-              onClick={toggleAllBoards}
-              disabled={!hasBoards}
-            >
-              {allBoardsCollapsed ? "全部展开" : "全部折叠"}
-            </button>
-          </div>
-
-          {topPicks.length > 0 && (
-            <div className="source-boards top-picks">
-              <SourceBoard
-                section={{
-                  source: "今日推荐",
-                  category: topPicks[0].category,
-                  articles: topPicks,
-                }}
-                difficultyById={difficultyById}
-                collapsed={isSourceCollapsed(collapseState, "home-top-picks")}
-                onToggleCollapsed={() => toggleSourceBoard("home-top-picks")}
-                showTags={filtersOpen}
-                highlightedId={selectedId}
-              />
-            </div>
-          )}
-
-          <div className="source-boards">
-            {sections.map((sec) => (
-              <SourceBoard
-                key={sec.source}
-                section={sec}
-                difficultyById={difficultyById}
-                collapsed={isSourceCollapsed(collapseState, sec.source)}
-                onToggleCollapsed={() => toggleSourceBoard(sec.source)}
-                showTags={filtersOpen}
-                highlightedId={selectedId}
-              />
-            ))}
-          </div>
         </>
       )}
 

@@ -6,6 +6,7 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::LazyLock;
+use tauri::{AppHandle, Emitter, Manager};
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -87,6 +88,77 @@ fn chat_json<T: for<'de> Deserialize<'de>>(
     }
 }
 
+/// Parse an array-shaped answer. The provider's JSON-object output mode makes
+/// models wrap the requested array in an object (`{"items":[...]}`) even when
+/// the prompt asks for "ONLY a JSON array"; accept both shapes so a whole
+/// batch is never thrown away over the wrapper.
+pub fn parse_json_array<T: for<'de> Deserialize<'de>>(raw: &str) -> Result<Vec<T>, AppError> {
+    let value: serde_json::Value = serde_json::from_str(strip_fences(raw))?;
+    let items = match value {
+        serde_json::Value::Array(items) => items,
+        serde_json::Value::Object(map) => {
+            const WRAPPER_KEYS: [&str; 6] =
+                ["items", "results", "data", "cards", "list", "array"];
+            let wrapped = WRAPPER_KEYS
+                .iter()
+                .find_map(|key| map.get(*key).filter(|v| v.is_array()))
+                .or_else(|| {
+                    // Fall back to the only array value in the object.
+                    let mut arrays = map.values().filter(|v| v.is_array());
+                    match (arrays.next(), arrays.next()) {
+                        (Some(only), None) => Some(only),
+                        _ => None,
+                    }
+                });
+            match wrapped {
+                Some(serde_json::Value::Array(items)) => items.clone(),
+                _ => {
+                    return Err(AppError::msg(
+                        "expected a JSON array (or an object wrapping one)",
+                    ))
+                }
+            }
+        }
+        other => {
+            let kind = match other {
+                serde_json::Value::Null => "null",
+                serde_json::Value::Bool(_) => "a boolean",
+                serde_json::Value::Number(_) => "a number",
+                serde_json::Value::String(_) => "a string",
+                _ => "another value",
+            };
+            return Err(AppError::msg(format!("expected a JSON array, got {kind}")));
+        }
+    };
+    serde_json::from_value(serde_json::Value::Array(items)).map_err(AppError::from)
+}
+
+/// [`chat_json`] for array-shaped answers — same retry, tolerant of the
+/// object wrapper described in [`parse_json_array`].
+fn chat_json_array<T: for<'de> Deserialize<'de>>(
+    cfg: &AppConfig,
+    system: &str,
+    user: &str,
+    label: &str,
+) -> Result<Vec<T>, AppError> {
+    let raw = chat_json_mode(cfg, system, user)?;
+    match parse_json_array(&raw) {
+        Ok(v) => Ok(v),
+        Err(first_err) => {
+            let raw2 = chat_json_mode(cfg, system, &format!("{user}{JSON_REMINDER}")).map_err(
+                |e| {
+                    AppError::msg(format!(
+                        "{label}: first attempt failed to parse ({first_err}); retry request failed: {e}"
+                    ))
+                },
+            )?;
+            parse_json_array(&raw2).map_err(|e| {
+                AppError::msg(format!("parse {label}: {first_err}; retry also failed: {e}"))
+            })
+        }
+    }
+}
+
 /// Translate article paragraphs in batch. Input order must match output order.
 pub fn translate_texts(cfg: &AppConfig, texts: &[String]) -> Result<Vec<String>, AppError> {
     if texts.is_empty() {
@@ -97,7 +169,7 @@ pub fn translate_texts(cfg: &AppConfig, texts: &[String]) -> Result<Vec<String>,
 Given a JSON array of English passages, return ONLY a JSON array of Chinese translations in the same order and length.
 Translate faithfully. No markdown fences, no commentary."#;
     let payload = serde_json::to_string(texts)?;
-    let out: Vec<String> = chat_json(cfg, system, &payload, "paragraph translations")?;
+    let out: Vec<String> = chat_json_array(cfg, system, &payload, "paragraph translations")?;
     if out.len() != texts.len() {
         return Err(AppError::msg(format!(
             "paragraph translation count mismatch: got {} expected {}",
@@ -155,7 +227,7 @@ Each item must be {"summary_zh":"<Chinese synopsis>","tags":["<tag1>","<tag2>"]}
 summary_zh is ONE complete Simplified Chinese sentence (about 30–60 characters) that says what the article is about. No ellipsis padding, no quotes, no English.
 tags is 2–3 short lowercase English topic tags (e.g. ["economy","central-bank"]). No markdown fences, no commentary."#;
     let payload = serde_json::to_string(cards)?;
-    let out: Vec<ArticleCardOut> = chat_json(cfg, system, &payload, "article cards")?;
+    let out: Vec<ArticleCardOut> = chat_json_array(cfg, system, &payload, "article cards")?;
     if out.len() != cards.len() {
         return Err(AppError::msg(format!(
             "article card count mismatch: got {} expected {}",
@@ -201,7 +273,7 @@ Each item must be {"tags":["<tag1>","<tag2>"]}.
 tags is 2-3 short lowercase English topic tags describing the subject (e.g. ["economy","central-bank"]). Prefer specific topics over generic ones (avoid "news").
 No markdown fences, no commentary."#;
     let payload = serde_json::to_string(cards)?;
-    let out: Vec<ArticleTagsOut> = chat_json(cfg, system, &payload, "article tags")?;
+    let out: Vec<ArticleTagsOut> = chat_json_array(cfg, system, &payload, "article tags")?;
     if out.len() != cards.len() {
         return Err(AppError::msg(format!(
             "article tag count mismatch: got {} expected {}",
@@ -253,11 +325,77 @@ pub struct AddMemoryInput {
 
 /// Enrich (optional) and insert-or-merge a memory row (word or phrase).
 /// LLM failure degrades to whatever fields the caller supplied.
-pub fn add_or_merge_memory(
-    db: &DbState,
-    cfg: &AppConfig,
-    input: AddMemoryInput,
-) -> Result<MemoryItem, AppError> {
+/// Does this saved item still lack LLM-only fields (word_type / collocations,
+/// or a definition when the popover had none)? Used to decide whether a
+/// background enrichment round is worth an API call.
+pub fn needs_enrichment(item: &MemoryItem) -> bool {
+    if item.kind == "phrase" {
+        item.definition_zh.is_empty() || item.word_type.is_empty() || item.word_type == "phrase"
+    } else {
+        item.definition_zh.is_empty() || item.word_type.is_empty()
+    }
+}
+
+/// Enrich a just-saved memory item in the background: call the LLM, fill only
+/// the still-empty fields of the stored row, then emit `memory-updated` so any
+/// open library view can refresh. Fire-and-forget — failures (e.g. no API key
+/// configured) are silently dropped and the row keeps what was saved
+/// synchronously.
+pub fn enrich_memory_background(app: AppHandle, item: MemoryItem) {
+    std::thread::spawn(move || {
+        let Ok(cfg) = crate::config::load_config() else {
+            return;
+        };
+        let enrichment = match item.kind.as_str() {
+            "phrase" => enrich_phrase(&cfg, &item.term, &item.context_sentence).map(|e| {
+                VocabEnrichment {
+                    definition_zh: e.meaning_zh,
+                    word_type: if e.usage.is_empty() {
+                        "phrase".to_string()
+                    } else {
+                        e.usage
+                    },
+                    collocations: Vec::new(),
+                }
+            }),
+            _ => enrich_vocab(&cfg, &item.term, &item.context_sentence),
+        };
+        let Ok(enrichment) = enrichment else {
+            return;
+        };
+        let Some(state) = app.try_state::<DbState>() else {
+            return;
+        };
+        let Ok(conn) = state.lock_write() else {
+            return;
+        };
+        // The row may have been deleted or re-merged meanwhile; only touch it
+        // if it is still there, and only fill what is still empty.
+        if let Ok(Some(mut updated)) = db::get_memory_by_term(&conn, &item.kind, &item.term) {
+            if updated.definition_zh.is_empty() {
+                updated.definition_zh = enrichment.definition_zh;
+            }
+            if updated.word_type.is_empty() {
+                updated.word_type = enrichment.word_type;
+            }
+            for c in enrichment.collocations {
+                let c = c.trim();
+                if !c.is_empty() && !updated.collocations.contains(&c.to_string()) {
+                    updated.collocations.push(c.to_string());
+                }
+            }
+            if db::update_memory_meta(&conn, &updated).is_ok() {
+                let _ = app.emit("memory-updated", &updated);
+            }
+        }
+    });
+}
+
+/// Save a word/phrase with whatever fields the popover already has — the
+/// synchronous path never talks to the LLM, so the click returns in
+/// milliseconds. Missing fields are filled in later by
+/// `enrich_memory_background` (see `needs_enrichment`).
+pub fn add_or_merge_memory(db: &DbState, input: AddMemoryInput) -> Result<MemoryItem, AppError> {
     // Whitespace-collapse works for both a single word and a phrase.
     let term = input.term.split_whitespace().collect::<Vec<_>>().join(" ");
     if term.is_empty() {
@@ -268,80 +406,19 @@ pub fn add_or_merge_memory(
     } else {
         "word"
     };
-    let fallback_word_type = || "phrase".to_string();
     let given_definition = input.definition_zh.clone().unwrap_or_default();
     let given_word_type = input.word_type.clone().unwrap_or_default();
-
-    let (definition_zh, word_type, collocations) = if kind == "phrase" {
-        let mut definition_zh = given_definition;
-        let mut word_type = given_word_type;
-        if definition_zh.is_empty() || word_type.is_empty() {
-            if let Ok(e) = enrich_phrase(cfg, &term, &input.context_sentence) {
-                if definition_zh.is_empty() {
-                    definition_zh = e.meaning_zh;
-                }
-                if word_type.is_empty() {
-                    word_type = e.usage;
-                }
-            }
-        }
-        let word_type = if word_type.is_empty() {
-            fallback_word_type()
-        } else {
-            word_type
-        };
-        (definition_zh, word_type, Vec::new())
-    } else {
-        let collocations = input.collocations.clone().unwrap_or_default();
-        let explicit = input.definition_zh.is_some()
-            && input.word_type.is_some()
-            && input.collocations.is_some();
-        let mut enrichment = if explicit {
-            VocabEnrichment {
-                definition_zh: given_definition.clone(),
-                word_type: if given_word_type.is_empty() {
-                    fallback_word_type()
-                } else {
-                    given_word_type.clone()
-                },
-                collocations: collocations.clone(),
-            }
-        } else {
-            match enrich_vocab(cfg, &term, &input.context_sentence) {
-                Ok(e) => e,
-                Err(_) => VocabEnrichment {
-                    definition_zh: given_definition.clone(),
-                    word_type: if given_word_type.is_empty() {
-                        fallback_word_type()
-                    } else {
-                        given_word_type.clone()
-                    },
-                    collocations: collocations.clone(),
-                },
-            }
-        };
-        if enrichment.definition_zh.is_empty() {
-            enrichment.definition_zh = given_definition.clone();
-        }
-        if enrichment.word_type.is_empty() {
-            enrichment.word_type = fallback_word_type();
-        }
-        (
-            enrichment.definition_zh,
-            enrichment.word_type,
-            enrichment.collocations,
-        )
-    };
+    let collocations = input.collocations.clone().unwrap_or_default();
 
     let now = Utc::now().to_rfc3339();
     let conn = db.lock_write()?;
 
     if let Some(mut existing) = db::get_memory_by_term(&conn, kind, &term)? {
         if existing.definition_zh.is_empty() {
-            existing.definition_zh = definition_zh;
+            existing.definition_zh = given_definition;
         }
         if existing.word_type.is_empty() || (kind == "phrase" && existing.word_type == "phrase") {
-            existing.word_type = word_type;
+            existing.word_type = given_word_type;
         }
         for c in &collocations {
             let c = c.trim();
@@ -363,8 +440,8 @@ pub fn add_or_merge_memory(
         id: Uuid::new_v4().to_string(),
         kind: kind.to_string(),
         term,
-        definition_zh,
-        word_type,
+        definition_zh: given_definition,
+        word_type: given_word_type,
         collocations,
         context_sentence: input.context_sentence,
         article_id: input.article_id,
@@ -563,7 +640,8 @@ where
 #[cfg(test)]
 mod clip_tests {
     use super::{
-        backoff_ms, chat_completions_url, clip_zh, is_retryable, translate_text, with_retry,
+        backoff_ms, chat_completions_url, clip_zh, is_retryable, parse_json_array,
+        translate_text, with_retry, ArticleCardOut,
     };
     use crate::error::AppError;
 
@@ -672,5 +750,42 @@ mod clip_tests {
                 .count(),
             super::CARD_SUMMARY_MAX_CHARS
         );
+    }
+
+    #[test]
+    fn parse_json_array_accepts_a_bare_array() {
+        let raw = r#"[{"summary_zh":"甲","tags":["a"]},{"summary_zh":"乙","tags":[]}]"#;
+        let rows: Vec<ArticleCardOut> = parse_json_array(raw).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].summary_zh, "甲");
+        assert_eq!(rows[1].tags.len(), 0);
+    }
+
+    #[test]
+    fn parse_json_array_unwraps_an_object_wrapper() {
+        // JSON output mode pushes models to wrap the array; that must not cost
+        // us the whole batch.
+        for raw in [
+            r#"{"items":[{"summary_zh":"甲"},{"summary_zh":"乙"}]}"#,
+            r#"{"cards":[{"summary_zh":"甲"},{"summary_zh":"乙"}]}"#,
+            r#"{"whatever":[{"summary_zh":"甲"},{"summary_zh":"乙"}]}"#,
+        ] {
+            let rows: Vec<ArticleCardOut> = parse_json_array(raw).unwrap();
+            assert_eq!(rows.len(), 2, "raw: {raw}");
+            assert_eq!(rows[1].summary_zh, "乙");
+        }
+    }
+
+    #[test]
+    fn parse_json_array_tolerates_fences_and_errors_clearly() {
+        let fenced = "```json\n[\"一\",\"二\"]\n```";
+        let rows: Vec<String> = parse_json_array(fenced).unwrap();
+        assert_eq!(rows, vec!["一".to_string(), "二".to_string()]);
+
+        // Two arrays in one object is ambiguous → error, never a wrong pairing.
+        let ambiguous = r#"{"a":[1],"b":[2]}"#;
+        assert!(parse_json_array::<u8>(ambiguous).is_err());
+        assert!(parse_json_array::<u8>("{\"note\":\"no array here\"}").is_err());
+        assert!(parse_json_array::<u8>("\"just a string\"").is_err());
     }
 }

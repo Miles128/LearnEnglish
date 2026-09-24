@@ -9,6 +9,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "pretest": "node scripts/stop-desktop.mjs",
     "test": "tsc --noEmit && eslint . && vitest run",
     "lint": "eslint .",
     "clean:rust": "cargo clean --manifest-path src-tauri/Cargo.toml"

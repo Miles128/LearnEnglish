@@ -8,11 +8,16 @@ use tauri_plugin_dialog::DialogExt;
 
 #[tauri::command]
 pub async fn add_memory(app: AppHandle, input: AddMemoryInput) -> Result<MemoryItem, AppError> {
-    let cfg = config::load_config()?;
-    crate::commands::spawn_db(app, move |state| {
-        vocab::add_or_merge_memory(state, &cfg, input)
+    let item = crate::commands::spawn_db(app.clone(), move |state| {
+        vocab::add_or_merge_memory(state, input)
     })
-    .await
+    .await?;
+    // LLM enrichment (word_type / collocations / missing definition) runs in
+    // the background — the UI must not wait seconds on an API round-trip.
+    if vocab::needs_enrichment(&item) {
+        vocab::enrich_memory_background(app, item.clone());
+    }
+    Ok(item)
 }
 
 #[tauri::command]

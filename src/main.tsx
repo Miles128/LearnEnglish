@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import App from "./App";
 import ErrorBoundary from "./ErrorBoundary";
-import { AppConfigProvider, VocabProvider } from "./store";
+import { AppConfigProvider, ShellProvider, VocabProvider } from "./store";
 import { ToastProvider } from "./components/Toaster";
 import Home from "./pages/Home";
 import Reader from "./pages/Reader";
@@ -18,6 +18,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <ToastProvider>
         <AppConfigProvider>
         <VocabProvider>
+          <ShellProvider>
           <HashRouter>
             <Routes>
               <Route path="/" element={<App />}>
@@ -31,6 +32,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
               </Route>
             </Routes>
           </HashRouter>
+          </ShellProvider>
         </VocabProvider>
         </AppConfigProvider>
       </ToastProvider>

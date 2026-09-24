@@ -248,6 +248,12 @@ pub struct FeedSource {
     #[serde(default)]
     #[ts(type = "number")]
     pub fulltext_ratio: f64,
+    /// User-assigned display priority for the sidebar source list. Higher =
+    /// surfaced earlier; 0 = never ordered (new feeds default here). Drives the
+    /// home ranking via a source-priority bonus (see `rank::Affinity`).
+    #[serde(default)]
+    #[ts(type = "number")]
+    pub priority: i64,
 }
 
 fn default_feed_origin() -> String {
@@ -577,7 +583,7 @@ const LEGACY_COLUMN_ADDITIONS: &[&str] = &[
 /// Version-gated migrations. To add one: raise `LATEST_VERSION` and apply its
 /// DDL inside `migrate` when `stored < N`. Stamp each version with its own
 /// number (never `LATEST_VERSION`) so later steps are not skipped.
-const LATEST_VERSION: i64 = 12;
+const LATEST_VERSION: i64 = 14;
 
 pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
     let mut stored: i64 = conn
@@ -832,6 +838,40 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
         conn.pragma_update(None, "user_version", 12)
             ?;
         stored = 12;
+    }
+
+    if stored < 13 {
+        // Sidebar source priority: user-assignable ordering that both sorts the
+        // feed list and biases the home ranking (higher = surfaced earlier).
+        conn.execute(
+            "ALTER TABLE feed_sources ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+        conn.pragma_update(None, "user_version", 13)?;
+        stored = 13;
+    }
+
+    if stored < 14 {
+        // One-shot dead-feed cleanup support: unused fail counter column
+        // (kept for schema stability) + tombstones so curated sources removed
+        // by that pass are not resurrected by the next startup seed.
+        if let Err(e) = conn.execute(
+            "ALTER TABLE feed_sources ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0",
+            [],
+        ) {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                return Err(AppError::msg(msg));
+            }
+        }
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS removed_feeds (
+                 id TEXT PRIMARY KEY,
+                 removed_at TEXT NOT NULL
+             );",
+        )?;
+        conn.pragma_update(None, "user_version", 14)?;
+        stored = 14;
     }
 
     if stored < LATEST_VERSION {

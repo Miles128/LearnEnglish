@@ -6,7 +6,7 @@ use super::cleanup::{
     purge_rss_below_word_threshold,
 };
 use super::dedup::{canonical_article_url, TitleIndex};
-use super::enrich::{fill_missing_card_zh, fill_missing_tags};
+use super::enrich::{fill_missing_card_zh, fill_missing_tags, CARDS_PER_REFRESH, TAGS_PER_REFRESH};
 use super::extract::{fetch_article_page, html_to_text};
 use super::filters::{
     choose_article_body, is_blocked_content, is_english_article, is_readable_article_body,
@@ -89,6 +89,8 @@ pub struct RefreshProgress {
     pub label: String,
     /// 0–100 overall progress across download + translate
     pub percent: u8,
+    /// Articles newly inserted into the library so far this refresh.
+    pub articles: usize,
 }
 
 pub(crate) fn select_enabled_feeds(feeds: Vec<FeedSource>) -> Vec<FeedSource> {
@@ -121,6 +123,7 @@ pub fn refresh_feeds(
             total: 0,
             label: "没有启用的订阅源".into(),
             percent: 100,
+            articles: 0,
         });
         return Ok(result);
     }
@@ -133,14 +136,18 @@ pub fn refresh_feeds(
             on_progress(event);
         }
     });
-    let report = |phase: &str, current: usize, total: usize, label: String, percent: u8| {
-        let _ = progress_tx.send(RefreshProgress {
-            phase: phase.into(),
-            current,
-            total,
-            label,
-            percent,
-        });
+    let report = {
+        let progress_tx = &progress_tx;
+        move |phase: &str, current: usize, total: usize, label: String, percent: u8, articles: usize| {
+            let _ = progress_tx.send(RefreshProgress {
+                phase: phase.into(),
+                current,
+                total,
+                label,
+                percent,
+                articles,
+            });
+        }
     };
 
     // One-time assessment of rows that never got a quality stamp.
@@ -190,12 +197,20 @@ pub fn refresh_feeds(
                 }
                 let feed = &enabled[index];
                 let done = done_feeds.load(std::sync::atomic::Ordering::SeqCst);
+                let started_articles = shared.lock().expect("refresh lock").added_or_updated;
                 report(
                     "download",
                     done + 1,
                     download_total,
-                    format!("增量下载 {}/{}：{}", done + 1, download_total, feed.name),
+                    format!(
+                        "增量下载 {}/{} 源 · 新增 {} 篇：{}",
+                        done + 1,
+                        download_total,
+                        started_articles,
+                        feed.name
+                    ),
                     ((done as u16 * download_weight as u16) / download_total.max(1) as u16) as u8,
+                    started_articles,
                 );
 
                 let trust_chars = rss_trust_chars(feed.fulltext_ratio);
@@ -343,28 +358,36 @@ pub fn refresh_feeds(
                     (shared.lock().expect("refresh lock")).fetched_feeds += 1;
                 }
                 let done = done_feeds.load(std::sync::atomic::Ordering::SeqCst);
+                let articles_so_far = shared.lock().expect("refresh lock").added_or_updated;
                 report(
                     "download",
                     done,
                     download_total,
-                    format!("已完成 {done}/{download_total}：{}", feed.name),
+                    format!(
+                        "已完成 {done}/{download_total} 源 · 新增 {articles_so_far} 篇：{}",
+                        feed.name
+                    ),
                     ((done as u16 * download_weight as u16) / download_total.max(1) as u16) as u8,
+                    articles_so_far,
                 );
             });
         }
     });
+    drop(shared);
 
+    let articles_downloaded = result.added_or_updated;
     report(
         "translate",
         0,
         0,
         "正在补简介…".into(),
         download_weight,
+        articles_downloaded,
     );
 
     // Tags drive filtering + the interest profile; backfill a bounded batch
     // per refresh so the whole library catches up over a few runs.
-    match fill_missing_tags(db, cfg, 200, |done, total| {
+    match fill_missing_tags(db, cfg, TAGS_PER_REFRESH, |done, total| {
         if total > 0 {
             report(
                 "translate",
@@ -372,6 +395,7 @@ pub fn refresh_feeds(
                 total,
                 format!("正在生成主题标签 {done}/{total}"),
                 download_weight,
+                articles_downloaded,
             );
         }
     }) {
@@ -379,7 +403,7 @@ pub fn refresh_feeds(
         Err(e) => result.errors.push(format!("主题标签: {e}")),
     }
 
-    match fill_missing_card_zh(db, cfg, 80, |done, total| {
+    match fill_missing_card_zh(db, cfg, CARDS_PER_REFRESH, |done, total| {
         let translate_pct = if total == 0 {
             translate_weight
         } else {
@@ -395,6 +419,7 @@ pub fn refresh_feeds(
                 format!("正在补简介 {done}/{total}")
             },
             download_weight.saturating_add(translate_pct).min(99),
+            articles_downloaded,
         );
     }) {
         Ok(n) => result.titles_translated = n,
@@ -405,8 +430,9 @@ pub fn refresh_feeds(
         "done",
         download_total,
         download_total,
-        "刷新完成".into(),
+        format!("刷新完成 · 新增 {} 篇", result.added_or_updated),
         100,
+        result.added_or_updated,
     );
     drop(progress_tx);
     let _ = pump.join();

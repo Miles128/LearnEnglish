@@ -39,7 +39,11 @@ pub(crate) use cleanup::{
 pub(crate) use dedup::{canonical_article_url, is_near_duplicate_title, title_tokens, TitleIndex};
 #[cfg(test)]
 pub(crate) use dedup::partition_new_urls;
-pub(crate) use enrich::{fill_article_card_zh, fill_missing_card_zh, fill_missing_tags};
+#[allow(unused_imports)]
+pub(crate) use enrich::{
+    fill_article_card_zh, fill_missing_card_zh, fill_missing_tags, CARDS_PER_REFRESH,
+    TAGS_PER_REFRESH,
+};
 #[allow(unused_imports)]
 pub(crate) use extract::{extract_article_page, fetch_article_page, html_to_text, title_from_html};
 #[allow(unused_imports)]

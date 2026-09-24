@@ -58,15 +58,18 @@ src-tauri/src/        Rust 后端
 
 开发时少编 Rust：只改 `src/`（排版、划词、样式）用 `pnpm dev`，浏览器看 Vite；`invoke` 不可用，不要在这里测刷新/翻译/入库。改 `src-tauri` 或要真实数据时才 `pnpm dev:desktop`（或 `pnpm tauri dev`）。桌面会话结束执行 `pnpm clean:rust`。
 
-Verify before claiming done:
+**跑测试前关掉桌面会话**：`tauri dev` 监听 `src-tauri`，重编译会重启 macOS 窗口并抢焦点。`pnpm test` 的 `pretest` 会自动杀 `tauri dev` / `target/debug/shiyan`（不杀浏览器模式 `pnpm dev`）。手动跑 `cargo test` 前也要先关，或先执行 `node scripts/stop-desktop.mjs`。
+
+Verify before claiming done (desktop must be closed — pretest handles `pnpm test`):
 
 ```bash
+node scripts/stop-desktop.mjs   # if cargo test runs while tauri dev is up
 pnpm test
 pnpm build
 cd src-tauri && cargo test
 ```
 
-Desktop smoke (macOS + Rust):
+Desktop smoke (macOS + Rust) — only when you need the real window, not during tests:
 
 ```bash
 pnpm dev:desktop

@@ -11,6 +11,9 @@ export const apiFeeds = {
   listFeeds: () => invoke<FeedSource[]>("list_feeds"),
   setFeedEnabled: (id: string, enabled: boolean) =>
     invoke<void>("set_feed_enabled", { id, enabled }),
+  /** Persist the sidebar drag order (top-to-bottom feed ids). Drives home ranking. */
+  reorderFeeds: (orderedIds: string[]) =>
+    invoke<void>("reorder_feeds", { orderedIds }),
   /** Delete a user-subscribed feed; curated feeds are disable-only. */
   deleteFeedSource: (id: string) => invoke<void>("delete_feed_source", { id }),
   listFeedCategories: () => invoke<FeedCategory[]>("list_feed_categories"),

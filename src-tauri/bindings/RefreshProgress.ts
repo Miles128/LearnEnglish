@@ -8,4 +8,8 @@ phase: string, current: number, total: number, label: string,
 /**
  * 0–100 overall progress across download + translate
  */
-percent: number, };
+percent: number, 
+/**
+ * Articles newly inserted into the library so far this refresh.
+ */
+articles: number, };

@@ -92,13 +92,18 @@ pub async fn list_articles_ranked(
             let conn = state.lock_read()?;
             db::tag_profile(&conn)?
         };
+        let (source_priority, category_priority_max) = {
+            let conn = state.lock_read()?;
+            (db::source_priority_map(&conn)?, db::category_priority_max(&conn)?)
+        };
         let affinity = crate::rank::Affinity::from_maps(
             source_opens,
             category_opens,
             tag_weights,
             tag_doc_counts,
             tagged_docs,
-        );
+        )
+        .with_source_priority(source_priority, category_priority_max);
         let now = chrono::Utc::now();
         let day_key = i64::from(now.num_days_from_ce());
         let ranked = crate::rank::rank_articles(items, &affinity, now, day_key);
@@ -312,7 +317,7 @@ pub async fn fill_missing_card_zh(app: AppHandle) -> Result<usize, AppError> {
         return Ok(0);
     }
     crate::commands::spawn_db(app, move |state| {
-        feeds::fill_missing_card_zh(state, &cfg, 80, |_, _| {})
+        feeds::fill_missing_card_zh(state, &cfg, feeds::CARDS_PER_REFRESH, |_, _| {})
     })
     .await
 }

@@ -130,6 +130,7 @@ export default function Reader() {
   const [categories, setCategories] = useState<FeedCategory[]>([]);
   const [likedOverride, setLikedOverride] = useState<boolean | null>(null);
   const [typeOpen, setTypeOpen] = useState(false);
+  const [showDone, setShowDone] = useState(false);
   const typePanelRef = useRef<HTMLDivElement | null>(null);
   const typeBtnRef = useRef<HTMLButtonElement | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -244,8 +245,16 @@ export default function Reader() {
     if (!id || readCompletedRef.current) return;
     if (!atBottomRef.current) return;
     readCompletedRef.current = true;
+    setShowDone(true);
     void api.markArticleProgress(id, 0, true).catch(() => undefined);
   }, [id]);
+
+  // 读完提示播完即撤；切文章时清掉，避免把上一篇的残影带过来。
+  useEffect(() => {
+    if (!showDone) return;
+    const t = window.setTimeout(() => setShowDone(false), 2800);
+    return () => window.clearTimeout(t);
+  }, [showDone]);
 
   // Reading-time tracking: flush while the window is visible AND focused,
   // on losing focus/hiding, and on unmount. Capped per flush so sleep/resume
@@ -312,6 +321,7 @@ export default function Reader() {
     readCompletedRef.current = false;
     atBottomRef.current = false;
     setLikedOverride(null);
+    setShowDone(false);
     // Reset translation-visibility state when navigating to a different article.
     setShowFullZh(false);
     setVisibleParas({});
@@ -637,6 +647,12 @@ export default function Reader() {
           </a>
         )}
       </p>
+
+      {showDone && (
+        <div className="read-done" role="status" aria-live="polite">
+          已看完
+        </div>
+      )}
 
       {popover && (
         <WordPopoverShell

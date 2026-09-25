@@ -13,18 +13,121 @@
 //! 6. Quotes and apostrophes are unified to ASCII, inner spacing trimmed.
 //! 7. `--` / `...` are unified to `—` / `…`.
 //! 8. Invisible control characters are dropped.
+//! 9. Structural junk from HTML→text is removed first (see [`clean_body`]):
+//!    the trailing link-reference definition block, inline `[text][n]` markers
+//!    (rewritten into normal links), and short page-chrome paragraphs.
 //!
 //! Word forms, casing and spelling are never altered — the text stays faithful
 //! for lookup and vocabulary review.
 
 use regex::Regex;
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 /// Paragraph-split generation. Bump this whenever a reflow rule changes how
 /// text splits into paragraphs: the startup cleanup keys its one-time marker
 /// off this version, so stale index-keyed paragraph translations are cleared
 /// again instead of rendering against the wrong paragraphs.
-pub const REFLOW_VERSION: u32 = 2;
+pub const REFLOW_VERSION: u32 = 3;
+
+/// A paragraph this short or shorter is a candidate for chrome removal. Longer
+/// prose is always kept, even when it mentions subscribing.
+const CHROME_MAX_WORDS: usize = 25;
+
+/// Fragments that mark a short block as page furniture rather than the story.
+/// Matched case-insensitively against the whole block.
+const CHROME_MARKERS: &[&str] = &[
+    "subscribe",
+    "sign up",
+    "sign in",
+    "log in",
+    "cookie",
+    "newsletter",
+    "related stories",
+    "most popular",
+    "read next",
+    "up next",
+    "share this",
+    "follow us",
+    "terms of use",
+    "privacy",
+    "all comments",
+    "skip to",
+    "skip past",
+    "copyright",
+    "©",
+    "advertise",
+    "careers",
+    "join now",
+    "already a subscriber",
+    "create a free account",
+    "get unlimited access",
+    "continue reading",
+    "read more",
+    "read the full",
+    "view the full",
+    "full story at",
+];
+
+static RE_LINK_DEF: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^[ \t]*\[(\d{1,4})\]:[ \t]*(\S+)[ \t]*$").unwrap());
+static RE_REF_LINK: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\[(\d{1,4})\]").unwrap());
+static RE_IMAGE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"!\[[^\]]*\]\([^)]*\)").unwrap());
+static RE_LINK_ONLY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*(!?\[[^\]]*\]\([^)]*\)\s*\[?\d*\]?\s*)+$").unwrap());
+
+/// Strip the structural junk HTML→text conversion drags in: the link-reference
+/// definition block appended to nearly every article, the inline `[text][12]`
+/// markers that depend on it, and short chrome paragraphs (subscription
+/// prompts, cookie notices, related-story labels).
+///
+/// Inline references are rewritten into normal links *before* the definition
+/// block is dropped — deleting the definitions alone would leave `[name][1]`
+/// unresolved, and the reader would show the raw bracket text.
+///
+/// Idempotent, so it is safe both at ingest and again inside [`reflow`], which
+/// is what lets already-stored articles be cleaned on display.
+pub fn clean_body(text: &str) -> String {
+    let mut urls: HashMap<String, String> = HashMap::new();
+    for caps in RE_LINK_DEF.captures_iter(text) {
+        urls.entry(caps[1].to_string()).or_insert_with(|| caps[2].to_string());
+    }
+
+    // Drop definition lines, then rewrite [text][n] into [text](url).
+    let without_defs = RE_LINK_DEF.replace_all(text, "").into_owned();
+    let resolved = RE_REF_LINK.replace_all(&without_defs, |c: &regex::Captures| match c.get(2) {
+        Some(idx) => match urls.get(idx.as_str()) {
+            Some(url) => format!("[{}]({})", &c[1], url),
+            None => c[0].to_string(),
+        },
+        None => c[0].to_string(),
+    });
+
+    let mut blocks = Vec::new();
+    for block in RE_BLANK_RUN.split(&resolved) {
+        let trimmed = block.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if RE_LINK_ONLY.is_match(trimmed) {
+            continue; // a block that is nothing but image/link markup
+        }
+        let words = trimmed.split_whitespace().count();
+        if words <= CHROME_MAX_WORDS {
+            let lower = trimmed.to_lowercase();
+            // Images are stripped before counting so a caption plus a link does
+            // not look like prose.
+            let bare = RE_IMAGE.replace_all(&lower, "");
+            if CHROME_MARKERS.iter().any(|m| bare.contains(m)) {
+                continue;
+            }
+        }
+        blocks.push(trimmed.to_string());
+    }
+    blocks.join("\n\n")
+}
 
 static RE_HYPHEN_BREAK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"([A-Za-z])-[ \t]*\n[ \t]*([a-z])").unwrap());
@@ -72,6 +175,7 @@ const TOKEN_SUFFIX: &[&str] = &[
 
 pub fn reflow(text: &str) -> Vec<String> {
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized = clean_body(&normalized);
     let joined = rejoin_hyphen_breaks(&normalized);
 
     let mut paragraphs: Vec<String> = Vec::new();
@@ -511,5 +615,46 @@ mod tests {
         let parts = reflow(&body);
         assert!(parts.len() > 1, "expected the block to be re-paragraphed");
         assert!(parts.iter().all(|p| !p.is_empty()));
+    }
+
+    #[test]
+    fn inlines_reference_links_then_drops_the_definition_block() {
+        let body = "By [Ethan Kessler][1] on Sunday.\n\n\
+                    [1]: https://example.com/ethan\n[2]: https://example.com/other";
+        let clean = clean_body(body);
+        assert!(
+            clean.contains("[Ethan Kessler](https://example.com/ethan)"),
+            "reference must survive as a normal link: {clean}"
+        );
+        assert!(!clean.contains("[1]:"), "definitions must go: {clean}");
+    }
+
+    #[test]
+    fn drops_chrome_but_keeps_prose_that_mentions_the_same_words() {
+        let newsletter_line = "Sign up for our newsletter to get every story.".to_string();
+        let long_prose = format!(
+            "I have written a newsletter for eleven years, and the part that surprises \
+             every new subscriber is how much of the work is simply reading. {}",
+            "Sentences about the craft keep coming. ".repeat(4)
+        );
+        let clean = clean_body(&format!("{newsletter_line}\n\n{long_prose}"));
+        assert!(!clean.contains("Sign up for our newsletter"), "{clean}");
+        assert!(clean.contains("eleven years"), "long prose must survive: {clean}");
+    }
+
+    #[test]
+    fn cleaning_is_idempotent() {
+        let body = "Real paragraph about policy and practice.\n\nSubscribe now[1]\n\n\
+                    [1]: https://example.com/join";
+        let once = clean_body(body);
+        assert_eq!(once, clean_body(&once), "second pass must change nothing");
+    }
+
+    #[test]
+    fn reflow_drops_the_reference_wall_it_is_given() {
+        let parts = reflow(
+            "The court ruled on Friday.\n\n[1]: https://example.com/ruling\n[2]: https://example.com/x",
+        );
+        assert_eq!(parts, vec!["The court ruled on Friday."]);
     }
 }

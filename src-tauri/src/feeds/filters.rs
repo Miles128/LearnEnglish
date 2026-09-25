@@ -69,6 +69,39 @@ pub(crate) fn rss_trust_chars(fulltext_ratio: f64) -> usize {
     }
 }
 
+/// Why a candidate body failed [`is_readable_article_body`]. The boolean gate
+/// lumps these together; the coverage audit needs them apart, because an empty
+/// client-rendered shell and a genuinely short story call for different fixes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BodyReject {
+    /// Almost no visible text came out — a page that only fills in under JS.
+    Shell,
+    /// Real prose, but under the minimum length.
+    TooShort,
+    /// Navigation, tag walls, or a link list.
+    NavOrLinks,
+    /// Ends on a "read more" style marker.
+    Truncated,
+}
+
+/// Visible text below this many characters is a shell, not a short article.
+const SHELL_MAX_CHARS: usize = 200;
+
+/// Classify a rejected body. Uses the same predicates as the gate, so the two
+/// can never disagree about whether a body is acceptable.
+pub(crate) fn body_reject_reason(text: &str) -> BodyReject {
+    if prose_char_count(text) < SHELL_MAX_CHARS {
+        return BodyReject::Shell;
+    }
+    if looks_like_page_chrome(text) || is_link_or_nav_dump(text) {
+        return BodyReject::NavOrLinks;
+    }
+    if looks_truncated(text) {
+        return BodyReject::Truncated;
+    }
+    BodyReject::TooShort
+}
+
 /// Nav chrome, keyword teasers, or link lists — not a readable article.
 pub(crate) fn is_readable_article_body(text: &str) -> bool {
     if looks_like_page_chrome(text) || is_link_or_nav_dump(text) {

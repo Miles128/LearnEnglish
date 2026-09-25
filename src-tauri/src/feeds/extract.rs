@@ -1,6 +1,6 @@
 //! Fetching a public article page and extracting title + main text.
 
-use super::filters::{is_readable_article_body, looks_like_paywall};
+use super::filters::{self, is_readable_article_body, looks_like_paywall, BodyReject};
 use super::net::{ensure_public_http_url, read_limited_bytes};
 use crate::error::AppError;
 use reqwest::blocking::Client;
@@ -49,25 +49,99 @@ pub(crate) struct ExtractedPage {
     pub text: String,
 }
 
-/// Fetch a public article URL and extract title + main text (no paywall bypass).
-pub(crate) fn extract_article_page(client: &Client, url: &str) -> Result<ExtractedPage, AppError> {
-    let parsed = ensure_public_http_url(url)?;
-    let bytes = read_limited_bytes(
-        client
-            .get(url)
-            .header(
-                "Accept",
-                "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
-            )
-            .send()?
-            .error_for_status()?,
-    )?;
+/// Why a candidate article page never became a library entry. The refresh
+/// pipeline folds all of these into one "too short" counter, which makes a
+/// source that needs a real browser look identical to one that is simply
+/// thin — so the coverage audit needs them apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PageFailure {
+    /// Request failed or the server refused us (non-2xx, timeout, oversized body).
+    FetchFailed,
+    /// Blocked behind a subscription prompt — deliberately never ingested.
+    Paywall,
+    /// Answered fine but yielded almost no text: a client-side-rendered shell.
+    Shell,
+    /// Real prose, under the minimum length.
+    TooShort,
+    /// Navigation, tag walls, or a link list.
+    NavOrLinks,
+    /// Ends on a "read more" style marker.
+    Truncated,
+}
+
+impl PageFailure {
+    /// Label used in the coverage report.
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            PageFailure::FetchFailed => "抓取失败或被拒",
+            PageFailure::Paywall => "疑似付费墙",
+            PageFailure::Shell => "空壳页（正文靠脚本渲染）",
+            PageFailure::TooShort => "正文过短",
+            PageFailure::NavOrLinks => "导航或链接堆",
+            PageFailure::Truncated => "正文被截断",
+        }
+    }
+}
+
+impl From<BodyReject> for PageFailure {
+    fn from(reject: BodyReject) -> Self {
+        match reject {
+            BodyReject::Shell => PageFailure::Shell,
+            BodyReject::TooShort => PageFailure::TooShort,
+            BodyReject::NavOrLinks => PageFailure::NavOrLinks,
+            BodyReject::Truncated => PageFailure::Truncated,
+        }
+    }
+}
+
+/// A page that never became an entry: the classified failure, plus the
+/// user-facing message this path has always produced.
+pub(crate) struct PageExtractError {
+    pub failure: PageFailure,
+    pub detail: String,
+}
+
+impl From<PageExtractError> for AppError {
+    fn from(e: PageExtractError) -> AppError {
+        AppError::msg(e.detail)
+    }
+}
+
+/// Build a classified page failure, keeping the message this path has always
+/// produced for the UI.
+fn fail(failure: PageFailure, detail: impl Into<String>) -> PageExtractError {
+    PageExtractError {
+        failure,
+        detail: detail.into(),
+    }
+}
+
+/// Fetch a public article URL and extract title + main text (no paywall bypass),
+/// reporting *why* a page was unusable.
+pub(crate) fn extract_page(
+    client: &Client,
+    url: &str,
+) -> Result<ExtractedPage, PageExtractError> {
+    let parsed = ensure_public_http_url(url)
+        .map_err(|e| fail(PageFailure::FetchFailed, e.to_string()))?;
+    let response = client
+        .get(url)
+        .header(
+            "Accept",
+            "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        )
+        .send()
+        .map_err(|e| fail(PageFailure::FetchFailed, format!("网络请求失败：{e}")))?
+        .error_for_status()
+        .map_err(|e| fail(PageFailure::FetchFailed, format!("网络请求失败：{e}")))?;
+    let bytes = read_limited_bytes(response)
+        .map_err(|e| fail(PageFailure::FetchFailed, e.to_string()))?;
     // Lossy like reqwest's old `.text()` decoding: undecodable bytes become
     // U+FFFD instead of rejecting a page that used to load.
     let html = String::from_utf8_lossy(&bytes).into_owned();
 
     if looks_like_paywall(&html) {
-        return Err("疑似付费墙，已跳过".into());
+        return Err(fail(PageFailure::Paywall, "疑似付费墙，已跳过"));
     }
 
     let mut title = title_from_html(&html).unwrap_or_default();
@@ -91,21 +165,22 @@ pub(crate) fn extract_article_page(client: &Client, url: &str) -> Result<Extract
     .ok()
     .flatten();
 
-    let text = if let Some((page_title, text)) = from_readability {
-        if title.is_empty() && !page_title.is_empty() {
-            title = page_title;
+    let full_page = crate::reflow::clean_body(&html_to_text(&html));
+    let text = match from_readability {
+        Some((page_title, extracted)) => {
+            if title.is_empty() && !page_title.is_empty() {
+                title = page_title;
+            }
+            pick_body(crate::reflow::clean_body(&extracted), full_page)
         }
-        if is_readable_article_body(&text) {
-            text
-        } else {
-            html_to_text(&html)
-        }
-    } else {
-        html_to_text(&html)
+        None => full_page,
     };
 
     if !is_readable_article_body(&text) {
-        return Err("正文太短，未能抽到可读全文".into());
+        return Err(fail(
+            filters::body_reject_reason(&text).into(),
+            "正文太短，未能抽到可读全文",
+        ));
     }
 
     if title.is_empty() {
@@ -113,6 +188,28 @@ pub(crate) fn extract_article_page(client: &Client, url: &str) -> Result<Extract
     }
 
     Ok(ExtractedPage { title, text })
+}
+
+/// readability's output is the article proper, so it is the body we want — but
+/// only when it actually brought the article home. Below the length a reading
+/// session needs, the extraction has almost always grabbed an opening fragment,
+/// and the page-wide text (chrome already stripped) reads better than a
+/// truncated story that looks complete.
+///
+/// The bar is deliberately the same unit the ingest gate uses: measuring
+/// acceptance in characters while keeping articles in words is what let a
+/// 240-word fragment pass extraction and then get the whole article dropped.
+pub(crate) fn pick_body(extracted: String, full_page: String) -> String {
+    if extracted.split_whitespace().count() >= super::MIN_ARTICLE_WORDS {
+        extracted
+    } else {
+        full_page
+    }
+}
+
+/// Fetch a public article URL and extract title + main text (no paywall bypass).
+pub(crate) fn extract_article_page(client: &Client, url: &str) -> Result<ExtractedPage, AppError> {
+    extract_page(client, url).map_err(Into::into)
 }
 
 /// Fetch a public article URL and extract main text (no paywall bypass).

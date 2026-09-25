@@ -27,4 +27,16 @@ describe("applyConfigLoadResult", () => {
     expect(next.cfg).toEqual(normalizeConfig(loaded));
     expect(next.cfg.cefr_level).toBe("C1");
   });
+
+  it("defaults show_hard_word_gloss on so reading aids appear out-of-the-box", () => {
+    expect(defaultAppConfig().show_hard_word_gloss).toBe(true);
+  });
+
+  it("normalizeConfig preserves an explicit false for show_hard_word_gloss", () => {
+    const next = normalizeConfig({
+      ...defaultAppConfig(),
+      show_hard_word_gloss: false,
+    });
+    expect(next.show_hard_word_gloss).toBe(false);
+  });
 });

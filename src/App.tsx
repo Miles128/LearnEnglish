@@ -10,6 +10,7 @@ import {
 } from "./placement/engine";
 import { useAppConfig } from "./store";
 import { useToast } from "./components/Toaster";
+import Sidebar from "./components/Sidebar";
 import { applyTheme, isThemePref } from "./theme";
 import { api } from "./api";
 import { type RefreshProgress } from "./api";
@@ -52,6 +53,15 @@ function IconSettings() {
     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.06l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .06-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.06-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.06H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.06l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.06 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  );
+}
+
+function IconSidebar() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M9 4v16" />
     </svg>
   );
 }
@@ -148,8 +158,28 @@ export default function App() {
   const showBar = progress != null && progress.phase !== "done";
   const showDoneBriefly = progress?.phase === "done";
 
+  // Sidebar lives in the browse shell only. Home shows the full panel; the
+  // Reader collapses it to a glanceable priority rail; utility pages (Vocab /
+  // Stats / Settings / Placement) hide it for full width.
+  const isHome = location.pathname === "/";
+  const isReader = location.pathname.startsWith("/article/");
+  const showSidebar = !hideNav && (isHome || isReader);
+  // Manual expand/collapse within the Reader; reset when leaving the route.
+  const [railExpanded, setRailExpanded] = useState(false);
+  useEffect(() => {
+    if (!isReader) setRailExpanded(false);
+  }, [isReader]);
+  const sidebarCollapsed = isReader && !railExpanded;
+
   return (
-    <div className={`app-shell${progress ? " refreshing" : ""}`}>
+    <div className={`app-shell${showSidebar ? " with-sidebar" : ""}${progress ? " refreshing" : ""}`}>
+      {showSidebar && (
+        <Sidebar
+          collapsed={sidebarCollapsed}
+          onExpand={() => setRailExpanded(true)}
+        />
+      )}
+      <div className="app-col">
       {hideNav ? (
         <header className="topbar" onMouseDown={beginWindowDrag}>
           <nav className="topbar-nav" data-tauri-drag-region>
@@ -167,6 +197,17 @@ export default function App() {
         <>
           <header className="topbar" onMouseDown={beginWindowDrag}>
             <nav className="topbar-nav" data-tauri-drag-region>
+              {isReader && (
+                <button
+                  type="button"
+                  className="topbar-btn"
+                  onClick={() => setRailExpanded((v) => !v)}
+                  title={railExpanded ? "收起侧边栏" : "展开侧边栏"}
+                  aria-label="切换侧边栏"
+                >
+                  <IconSidebar />
+                </button>
+              )}
               <span className="brand-mini" data-tauri-drag-region>
                 拾言
               </span>
@@ -215,6 +256,7 @@ export default function App() {
         )}
         <Outlet />
       </main>
+      </div>
       {(showBar || showDoneBriefly) && progress && (
         <div
           className={`refresh-progress ${progress.phase === "done" ? "done" : ""}`}
@@ -223,7 +265,12 @@ export default function App() {
         >
           <div className="refresh-progress-meta">
             <span className="refresh-progress-label">{progress.label}</span>
-            <span className="refresh-progress-pct">{Math.min(100, progress.percent)}%</span>
+            <span className="refresh-progress-side">
+              <span className="refresh-progress-articles">
+                新增 {progress.articles} 篇
+              </span>
+              <span className="refresh-progress-pct">{Math.min(100, progress.percent)}%</span>
+            </span>
           </div>
           <div className="refresh-progress-track">
             <div

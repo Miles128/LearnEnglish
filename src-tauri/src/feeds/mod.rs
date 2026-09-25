@@ -6,6 +6,7 @@
 //! - [`extract`] — article-page fetch + HTML→text extraction
 //! - [`dedup`] — URL canonicalization + cross-source title dedup
 //! - [`pipeline`] — the parallel refresh flow (`refresh_feeds`)
+//! - [`coverage`] — read-only audit of which sources lose articles, and why
 //! - [`cleanup`] — one-time audits, retention purges, body repair
 //! - [`enrich`] — LLM backfill of summaries and topic tags
 //! - [`import`] — import-a-single-article-by-URL path
@@ -14,6 +15,10 @@
 //! `crate::feeds::…` unchanged.
 
 pub mod cleanup;
+/// Read-only coverage audit. Driven from tests rather than the UI, so nothing
+/// in the shipped binary calls it yet.
+#[allow(dead_code)]
+pub mod coverage;
 pub mod dedup;
 pub mod enrich;
 pub mod extract;
@@ -39,7 +44,11 @@ pub(crate) use cleanup::{
 pub(crate) use dedup::{canonical_article_url, is_near_duplicate_title, title_tokens, TitleIndex};
 #[cfg(test)]
 pub(crate) use dedup::partition_new_urls;
-pub(crate) use enrich::{fill_article_card_zh, fill_missing_card_zh, fill_missing_tags};
+#[allow(unused_imports)]
+pub(crate) use enrich::{
+    fill_article_card_zh, fill_missing_card_zh, fill_missing_tags, CARDS_PER_REFRESH,
+    TAGS_PER_REFRESH,
+};
 #[allow(unused_imports)]
 pub(crate) use extract::{extract_article_page, fetch_article_page, html_to_text, title_from_html};
 #[allow(unused_imports)]

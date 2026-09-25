@@ -26,7 +26,10 @@ type BackfillOptions = {
 
 /**
  * Auto-backfill for LLM enrichment: topic tags + one-line Chinese blurbs.
- * Both share a once-per-mount guard so the page doesn't loop backfills.
+ * Each has its own once-per-mount guard, so a pending tag backfill can never
+ * starve the summary backfill (they used to share one flag, and since the tag
+ * effect runs first it always won — summaries then never auto-filled while any
+ * article lacked tags).
  */
 export function useArticleBackfill({
   articles,
@@ -34,13 +37,15 @@ export function useArticleBackfill({
   loading,
   load,
 }: BackfillOptions) {
-  const didBackfill = useRef(false);
+  const didTags = useRef(false);
+  const didCards = useRef(false);
   const [cardFilling, setCardFilling] = useState(false);
   const [cardFillError, setCardFillError] = useState<string | null>(null);
 
-  // New fetch context (filter/category change) re-arms the guard.
+  // New fetch context (filter/category change) re-arms the guards.
   useEffect(() => {
-    didBackfill.current = false;
+    didTags.current = false;
+    didCards.current = false;
   }, [load]);
 
   const fillCards = useCallback(async () => {
@@ -50,40 +55,41 @@ export function useArticleBackfill({
       const n = await api.fillMissingCardZh();
       if (n > 0) await load();
     } catch (e) {
-      didBackfill.current = false;
+      didCards.current = false;
       setCardFillError(String(e));
     } finally {
       setCardFilling(false);
     }
   }, [load]);
 
-  // Tag backfill shares the once-per-mount guard with the card backfill.
+  // Tags backfill: independent of the card backfill, both may run.
   useEffect(() => {
-    if (didBackfill.current) return;
+    if (didTags.current) return;
     if (!hasLlm || loading || articles.length === 0) return;
     if (!articles.some((a) => a.tags.length === 0)) return;
-    didBackfill.current = true;
+    didTags.current = true;
     void (async () => {
       try {
         const n = await api.fillMissingTags(100);
         if (n > 0) await load();
       } catch {
-        didBackfill.current = false;
+        didTags.current = false;
       }
     })();
   }, [articles, hasLlm, loading, load]);
 
+  // Summary backfill — the user-visible one, so it gets its own shot.
   useEffect(() => {
-    if (didBackfill.current) return;
+    if (didCards.current) return;
     if (!hasLlm || loading || articles.length === 0) return;
     if (!articles.some(articleNeedsCardZh)) return;
-    didBackfill.current = true;
+    didCards.current = true;
     void fillCards();
   }, [articles, hasLlm, loading, fillCards]);
 
   /** Manual retry from the error banner; skips the once-guard. */
   const retryFillCards = useCallback(() => {
-    didBackfill.current = true;
+    didCards.current = true;
     void fillCards();
   }, [fillCards]);
 

@@ -7,7 +7,8 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api, defaultAppConfig, type AppConfig } from "./api";
+import { api, defaultAppConfig, type AppConfig, type FeedSource } from "./api";
+import { onEvent } from "./events";
 import { normalizeReadingPrefs } from "./readingPrefs";
 import { isCefrLevel, isFreqBand, normalizeKey } from "./wordLevels";
 
@@ -181,5 +182,181 @@ export function VocabProvider({ children }: { children: ReactNode }) {
 export function useVocab(): VocabState {
   const ctx = useContext(VocabContext);
   if (!ctx) throw new Error("useVocab must be used within VocabProvider");
+  return ctx;
+}
+
+/**
+ * Shell state shared between the global Sidebar + top-bar search and the Home
+ * list: the draggable source-priority list, the tag filter (owned by the
+ * sidebar so it stays visible while reading), the search query, and a rerank
+ * nonce bumped after a priority change so Home reloads.
+ */
+type ShellState = {
+  /** Feeds in priority order (highest first) — the sidebar source list. */
+  feeds: FeedSource[];
+  reloadFeeds: () => Promise<void>;
+  /** Persist a new top-to-bottom order, then signal Home to re-rank. */
+  commitFeedOrder: (orderedIds: string[]) => Promise<void>;
+  /** bump after reorder → Home reloads its ranked list. */
+  rerankNonce: number;
+
+  /** Tags currently active as a list filter (owned here, edited from the sidebar). */
+  selectedTags: string[];
+  toggleTag: (tag: string) => void;
+  clearTags: () => void;
+  /** Home publishes the tags available in its loaded window for the sidebar chips. */
+  availableTags: string[];
+  publishAvailableTags: (tags: string[]) => void;
+
+  /** Top-bar search text, applied by Home as a client-side filter. */
+  query: string;
+  setQuery: (q: string) => void;
+
+  /** Archive filter panel (source/level/read/liked) — toggled from the sidebar. */
+  filtersOpen: boolean;
+  setFiltersOpen: (open: boolean) => void;
+
+  /** Source currently focused in the main list; null = the 今日推荐 default. */
+  focusSource: string | null;
+  setFocusSource: (source: string | null) => void;
+
+  /** Distinct sources behind today's picks; the 今日推荐 tree node lists them. */
+  topPickSources: string[];
+  publishTopPickSources: (sources: string[]) => void;
+};
+
+const ShellContext = createContext<ShellState | null>(null);
+
+export function ShellProvider({ children }: { children: ReactNode }) {
+  const [feeds, setFeeds] = useState<FeedSource[]>([]);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [availableTags, setAvailableTags] = useState<string[]>([]);
+  const [query, setQuery] = useState("");
+  const [rerankNonce, setRerankNonce] = useState(0);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [focusSource, setFocusSource] = useState<string | null>(null);
+  const [topPickSources, setTopPickSources] = useState<string[]>([]);
+
+  const reloadFeeds = useCallback(async () => {
+    try {
+      const list = await api.listFeeds();
+      // list_feeds already sorts by priority DESC; keep enabled + disabled so the
+      // sidebar can grey out muted sources without a second fetch.
+      setFeeds(list);
+    } catch {
+      // feed list is optional; Home still renders.
+    }
+  }, []);
+
+  useEffect(() => {
+    void reloadFeeds();
+  }, [reloadFeeds]);
+
+  // Refresh can change the feed list (enable/disable, one-shot cleanups);
+  // re-read it so the sidebar stays in sync without a full app reload.
+  useEffect(() => {
+    return onEvent("shiyan:refreshed", () => {
+      void reloadFeeds();
+    });
+  }, [reloadFeeds]);
+
+  const commitFeedOrder = useCallback(
+    async (orderedIds: string[]) => {
+      // Optimistically reflect the new order immediately.
+      setFeeds((prev) => {
+        const byId = new Map(prev.map((f) => [f.id, f]));
+        const next: FeedSource[] = [];
+        for (const id of orderedIds) {
+          const f = byId.get(id);
+          if (f) {
+            next.push(f);
+            byId.delete(id);
+          }
+        }
+        // Any feed not in the payload keeps relative order at the bottom.
+        return [...next, ...prev.filter((f) => byId.has(f.id))];
+      });
+      try {
+        await api.reorderFeeds(orderedIds);
+        await reloadFeeds();
+        setRerankNonce((n) => n + 1);
+      } catch (e) {
+        // Reload the persisted truth so the UI never drifts from the DB, then
+        // surface the failure so the caller can explain it to the user.
+        await reloadFeeds();
+        throw e;
+      }
+    },
+    [reloadFeeds],
+  );
+
+  const toggleTag = useCallback((tag: string) => {
+    setSelectedTags((prev) =>
+      prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag],
+    );
+  }, []);
+
+  const clearTags = useCallback(() => setSelectedTags([]), []);
+
+  const publishAvailableTags = useCallback((tags: string[]) => {
+    setAvailableTags((prev) =>
+      prev.length === tags.length && prev.every((t, i) => t === tags[i])
+        ? prev
+        : tags,
+    );
+  }, []);
+
+  const publishTopPickSources = useCallback((sources: string[]) => {
+    setTopPickSources((prev) =>
+      prev.length === sources.length && prev.every((s, i) => s === sources[i])
+        ? prev
+        : sources,
+    );
+  }, []);
+
+  const value = useMemo(
+    () => ({
+      feeds,
+      reloadFeeds,
+      commitFeedOrder,
+      rerankNonce,
+      selectedTags,
+      toggleTag,
+      clearTags,
+      availableTags,
+      publishAvailableTags,
+      query,
+      setQuery,
+      filtersOpen,
+      setFiltersOpen,
+      focusSource,
+      setFocusSource,
+      topPickSources,
+      publishTopPickSources,
+    }),
+    [
+      feeds,
+      reloadFeeds,
+      commitFeedOrder,
+      rerankNonce,
+      selectedTags,
+      toggleTag,
+      clearTags,
+      availableTags,
+      publishAvailableTags,
+      query,
+      filtersOpen,
+      focusSource,
+      topPickSources,
+      publishTopPickSources,
+    ],
+  );
+
+  return <ShellContext.Provider value={value}>{children}</ShellContext.Provider>;
+}
+
+export function useShell(): ShellState {
+  const ctx = useContext(ShellContext);
+  if (!ctx) throw new Error("useShell must be used within ShellProvider");
   return ctx;
 }

@@ -3,6 +3,7 @@ import {
   annotateText,
   ensureLexiconLoaded,
   isHardWord,
+  isSuperHardWord,
   type AnnotatedSpan,
   type DifficultyPrefs,
 } from "./wordLevels";
@@ -29,6 +30,42 @@ describe("isHardWord", () => {
 
   it("keeps easy words unflagged", () => {
     expect(isHardWord({ cefr: "A2", rank: 800 }, prefsB1)).toBe(false);
+  });
+});
+
+describe("isSuperHardWord", () => {
+  // B1 user (rank 3 on CEFR ladder): 2 steps up = C1 (rank 5).
+  it("fires when the word is ≥2 CEFR steps above the learner", () => {
+    expect(isSuperHardWord({ cefr: "C1", rank: 500 }, prefsB1)).toBe(true);
+    expect(isSuperHardWord({ cefr: "C2", rank: 500 }, prefsB1)).toBe(true);
+  });
+
+  it("stays silent at only 1 CEFR step above", () => {
+    // B2 for a B1 user is hard but not super-hard.
+    expect(isSuperHardWord({ cefr: "B2", rank: 100 }, prefsB1)).toBe(false);
+  });
+
+  it("fires when rank exceeds 2× the freq band", () => {
+    expect(isSuperHardWord({ cefr: "A2", rank: 6500 }, prefsB1)).toBe(true);
+    expect(isSuperHardWord({ cefr: "A2", rank: 5000 }, prefsB1)).toBe(false);
+  });
+
+  it("is a strict subset of isHardWord", () => {
+    // Any word superHard must also be hard.
+    const samples = [
+      { cefr: "C1" as const, rank: 500 },
+      { cefr: "A2" as const, rank: 6500 },
+      { cefr: "B2" as const, rank: 100 },
+      { cefr: "A1" as const, rank: 100 },
+    ];
+    for (const s of samples) {
+      if (isSuperHardWord(s, prefsB1)) expect(isHardWord(s, prefsB1)).toBe(true);
+    }
+  });
+
+  it("keeps the ceiling prefs (C2 / 20000) essentially superHard-free", () => {
+    // Realistic news word: C1 rank 4500 → still within reach of C2/20k user.
+    expect(isSuperHardWord({ cefr: "C1", rank: 4500 }, prefsC2)).toBe(false);
   });
 });
 

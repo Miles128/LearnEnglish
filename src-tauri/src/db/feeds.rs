@@ -27,8 +27,13 @@ pub(crate) fn seed_feed_categories(conn: &Connection) -> Result<(), AppError> {
 
 pub(crate) fn seed_feeds(conn: &Connection) -> Result<(), AppError> {
     let seeds = curated_feeds();
+    let removed = removed_feed_ids(conn)?;
     // Insert newly curated feeds; IGNORE keeps existing enable/disable.
+    // Tombstoned ids (removed by the one-shot dead-feed cleanup) stay gone.
     for f in &seeds {
+        if removed.contains(f.id.as_str()) {
+            continue;
+        }
         conn.execute(
             "INSERT OR IGNORE INTO feed_sources (id, name, category, url, enabled, origin, description) VALUES (?1,?2,?3,?4,1,'curated','')",
             params![f.id, f.name, f.category, f.url],
@@ -55,7 +60,7 @@ pub(crate) fn seed_feeds(conn: &Connection) -> Result<(), AppError> {
 pub fn list_feeds(conn: &Connection) -> Result<Vec<FeedSource>, AppError> {
     let mut stmt = conn
         .prepare(
-            "SELECT id,name,category,url,enabled,origin,description,etag,last_fetched_at,fulltext_ratio FROM feed_sources ORDER BY category,name",
+            "SELECT id,name,category,url,enabled,origin,description,etag,last_fetched_at,fulltext_ratio,priority FROM feed_sources ORDER BY category, priority DESC, name",
         )
         ?;
     let rows = stmt
@@ -66,6 +71,49 @@ pub fn list_feeds(conn: &Connection) -> Result<Vec<FeedSource>, AppError> {
     Ok(rows)
 }
 
+/// Persist the sidebar drag order. `ordered_ids` is a flat top-to-bottom list of
+/// feed ids as currently grouped in the tree; sources are ranked **within their
+/// own category**, so dragging never couples unrelated categories. For each
+/// category we assign priority descending by position (top = category size).
+pub fn reorder_feeds(conn: &Connection, ordered_ids: &[String]) -> Result<(), AppError> {
+    // Resolve each feed's category, preserving the caller's order.
+    let mut resolved: Vec<(String, String)> = Vec::with_capacity(ordered_ids.len());
+    for id in ordered_ids {
+        let id = id.trim();
+        if id.is_empty() {
+            continue;
+        }
+        let category: Option<String> = conn
+            .query_row(
+                "SELECT category FROM feed_sources WHERE id=?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(category) = category {
+            resolved.push((id.to_string(), category));
+        }
+    }
+
+    // Count per category to size each block's priority range.
+    let mut cat_count: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    for (_, cat) in &resolved {
+        *cat_count.entry(cat.clone()).or_insert(0) += 1;
+    }
+    let mut cat_seen: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    for (id, cat) in &resolved {
+        let total = cat_count[cat];
+        let index = cat_seen.entry(cat.clone()).or_insert(0);
+        let priority = total - *index;
+        *index += 1;
+        conn.execute(
+            "UPDATE feed_sources SET priority=?1 WHERE id=?2",
+            params![priority, id],
+        )?;
+    }
+    Ok(())
+}
+
 pub fn set_feed_enabled(conn: &Connection, id: &str, enabled: bool) -> Result<(), AppError> {
     conn.execute(
         "UPDATE feed_sources SET enabled=?1 WHERE id=?2",
@@ -73,6 +121,33 @@ pub fn set_feed_enabled(conn: &Connection, id: &str, enabled: bool) -> Result<()
     )
     ?;
     Ok(())
+}
+
+/// Feed display name → user-assigned priority, for the home ranking bonus.
+/// Articles carry a `source` name (not the feed id), so the map is keyed by name.
+/// Only sources with priority > 0 are returned.
+pub fn source_priority_map(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<String, i64>, AppError> {
+    let mut stmt = conn.prepare("SELECT name, priority FROM feed_sources WHERE priority > 0")?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?
+        .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
+    Ok(rows)
+}
+
+/// Category → highest source priority in that category, the denominator that
+/// normalises the per-category ranking bonus to [0, 1].
+pub fn category_priority_max(
+    conn: &Connection,
+) -> Result<std::collections::HashMap<String, i64>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT category, MAX(priority) FROM feed_sources WHERE priority > 0 GROUP BY category",
+    )?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?
+        .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
+    Ok(rows)
 }
 
 /// One-shot import of the legacy `config.disabled_feeds` list onto DB `enabled`.
@@ -219,8 +294,17 @@ pub fn delete_user_feed(conn: &Connection, id: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Feed ids a one-time cleanup removed; the startup seed must not re-insert them.
+pub(crate) fn removed_feed_ids(conn: &Connection) -> Result<std::collections::HashSet<String>, AppError> {
+    let mut stmt = conn.prepare("SELECT id FROM removed_feeds")?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<std::collections::HashSet<_>, _>>()?;
+    Ok(rows)
+}
+
 fn find_feed_by_url(conn: &Connection, url: &str) -> Result<Option<FeedSource>, AppError> {    conn.query_row(
-        "SELECT id,name,category,url,enabled,origin,description,etag,last_fetched_at,fulltext_ratio FROM feed_sources WHERE url=?1",
+        "SELECT id,name,category,url,enabled,origin,description,etag,last_fetched_at,fulltext_ratio,priority FROM feed_sources WHERE url=?1",
         params![url],
         map_feed,
     )
@@ -252,6 +336,7 @@ fn map_feed(row: &rusqlite::Row<'_>) -> rusqlite::Result<FeedSource> {
         etag: row.get(7)?,
         last_fetched_at: row.get(8)?,
         fulltext_ratio: row.get(9)?,
+        priority: row.get(10)?,
     })
 }
 
@@ -272,8 +357,7 @@ pub fn set_feed_refresh_meta(
              fulltext_ratio = COALESCE(?4, fulltext_ratio)
          WHERE id=?1",
         params![id, etag, last_fetched_at, fulltext_ratio],
-    )
-    ?;
+    )?;
     Ok(())
 }
 

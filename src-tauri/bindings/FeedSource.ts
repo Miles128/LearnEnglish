@@ -13,4 +13,10 @@ etag: string, last_fetched_at: string | null,
  * Fraction of entries in the last refresh whose RSS body was trusted
  * full-text. -1 = unknown (no data yet). Drives the per-feed trust bar.
  */
-fulltext_ratio: number, };
+fulltext_ratio: number, 
+/**
+ * User-assigned display priority for the sidebar source list. Higher =
+ * surfaced earlier; 0 = never ordered (new feeds default here). Drives the
+ * home ranking via a source-priority bonus (see `rank::Affinity`).
+ */
+priority: number, };

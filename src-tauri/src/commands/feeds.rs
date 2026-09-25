@@ -20,6 +20,16 @@ pub fn set_feed_enabled(
     db::set_feed_enabled(&conn, &id, enabled)
 }
 
+/// Persist the sidebar drag order of feeds. `ordered_ids` is top-to-bottom.
+#[tauri::command]
+pub fn reorder_feeds(
+    state: tauri::State<'_, DbState>,
+    ordered_ids: Vec<String>,
+) -> Result<(), AppError> {
+    let conn = state.lock_write()?;
+    db::reorder_feeds(&conn, &ordered_ids)
+}
+
 /// Delete a user-subscribed feed (curated feeds are disable-only).
 #[tauri::command]
 pub fn delete_feed_source(state: tauri::State<'_, DbState>, id: String) -> Result<(), AppError> {
@@ -99,6 +109,7 @@ pub async fn refresh_feeds(app: AppHandle) -> Result<RefreshResult, AppError> {
             total: 0,
             label: "开始刷新…".into(),
             percent: 0,
+            articles: 0,
         },
     );
 

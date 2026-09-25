@@ -207,6 +207,24 @@ export function isHardWord(
   return cefrHard || freqHard;
 }
 
+/**
+ * Super-hard = a tier above `isHardWord`, used to gate the automatic Chinese
+ * gloss so only words genuinely out of reach get the extra annotation. A word
+ * qualifies when either:
+ *   • it is ≥2 CEFR steps above the learner's level (B1 user → C1 or higher), or
+ *   • its frequency rank is past 2× the learner's known band (3000 → >6000).
+ * Every super-hard word is also a hard word; the reverse does not hold.
+ */
+export function isSuperHardWord(
+  entry: WordLevelEntry,
+  prefs: DifficultyPrefs,
+): boolean {
+  return (
+    cefrStepsAbove(entry, prefs.cefrLevel) >= 2 ||
+    entry.rank > prefs.freqBand * 2
+  );
+}
+
 export type AnnotatedSpan =
   | { type: "text"; text: string }
   | {
@@ -214,6 +232,8 @@ export type AnnotatedSpan =
       text: string;
       term: string;
       hard: boolean;
+      /** A tier above `hard`; drives the automatic Chinese gloss. */
+      superHard: boolean;
       learning: boolean;
       zh?: string;
     };
@@ -254,12 +274,15 @@ export function annotateText(
       const entry = lookupWord(phraseHit.key);
       const knownHit = known.has(phraseHit.key);
       const hard = !knownHit && (entry ? isHardWord(entry, prefs) : false);
+      const superHard =
+        !knownHit && (entry ? isSuperHardWord(entry, prefs) : false);
       const learningHit = !knownHit && learning.has(phraseHit.key);
       spans.push({
         type: "token",
         text: phraseHit.raw,
         term: phraseHit.key,
         hard,
+        superHard,
         learning: learningHit,
         zh: entry?.zh,
       });
@@ -288,6 +311,8 @@ export function annotateText(
     const lemmaKey = findLemmaKey(key);
     const knownHit = known.has(key) || known.has(lemmaKey);
     const hard = !knownHit && (entry ? isHardWord(entry, prefs) : false);
+    const superHard =
+      !knownHit && (entry ? isSuperHardWord(entry, prefs) : false);
     const inLearning =
       !knownHit && (learning.has(key) || learning.has(lemmaKey));
 
@@ -296,6 +321,7 @@ export function annotateText(
       text: raw,
       term: lemmaKey || key,
       hard,
+      superHard,
       learning: inLearning,
       zh: entry?.zh,
     });

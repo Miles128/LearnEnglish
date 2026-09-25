@@ -252,6 +252,22 @@ export default function Settings() {
               onChange={(raw) => updateNow({ freq_band: Number(raw) as FreqBand })}
               options={FREQ_OPTIONS}
             />
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={cfg.show_hard_word_gloss}
+                onChange={(e) =>
+                  updateNow({ show_hard_word_gloss: e.target.checked })
+                }
+              />
+              <span>
+                <strong>超级难词自动挂中文</strong>
+                <span className="muted toggle-hint">
+                  在「比下划线再高一档」的词下方淡色显示词典首义（比设定高 2 个 CEFR 档或词频档翻倍），
+                  hover 加深。关闭后阅读区仅保留下划线，点击/划词翻译不变。
+                </span>
+              </span>
+            </label>
             <div className="placement-settings">
               <p className="muted">
                 {cfg.vocab_placement_done

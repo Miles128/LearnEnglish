@@ -50,4 +50,10 @@ theme: string,
  * Auto-ingested articles older than this many days are purged on refresh.
  * 0 = keep forever. Liked articles and user imports are always kept.
  */
-article_retention_days: number, };
+article_retention_days: number, 
+/**
+ * Show a small Chinese gloss beneath "super-hard" words while reading
+ * (≥2 CEFR steps above the user's level, or frequency rank past 2× the
+ * band). Off = the reader stays as clean as before; underline still works.
+ */
+show_hard_word_gloss: boolean, };

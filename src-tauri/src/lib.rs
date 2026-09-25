@@ -68,6 +68,7 @@ pub fn run() {
             commands::articles::get_reading_stats,
             commands::feeds::list_feeds,
             commands::feeds::set_feed_enabled,
+            commands::feeds::reorder_feeds,
             commands::feeds::delete_feed_source,
             commands::feeds::list_feed_categories,
             commands::feeds::add_feed_category,

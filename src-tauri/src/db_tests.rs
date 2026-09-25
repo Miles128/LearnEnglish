@@ -144,6 +144,40 @@ fn seed_feeds_preserves_user_subscriptions() {
 }
 
 #[test]
+fn seed_feeds_skips_auto_removed_curated_ids() {
+    let path = temp_dir().join(format!("le-tombstone-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    // Pick a real curated id so seed would normally re-insert it.
+    let curated = db::list_feeds(&conn)
+        .unwrap()
+        .into_iter()
+        .find(|f| f.origin == "curated")
+        .expect("seeded curated feed");
+    // Simulate auto-removal: row gone + tombstone written.
+    conn.execute(
+        "INSERT INTO removed_feeds (id, removed_at) VALUES (?1, ?2)",
+        rusqlite::params![curated.id, "2026-01-01T00:00:00Z"],
+    )
+    .unwrap();
+    conn.execute(
+        "DELETE FROM feed_sources WHERE id=?1",
+        rusqlite::params![curated.id],
+    )
+    .unwrap();
+    drop(conn);
+
+    let conn = db::open_db(path.clone()).expect("reopen");
+    assert!(
+        !db::list_feeds(&conn)
+            .unwrap()
+            .iter()
+            .any(|f| f.id == curated.id),
+        "tombstoned curated feed must not be re-seeded"
+    );
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn insert_article_if_new_is_idempotent() {
     let path = temp_dir().join(format!("le-idempotent-{}.db", Uuid::new_v4()));
     let conn = db::open_db(path.clone()).expect("open");
@@ -1016,6 +1050,13 @@ fn v10_migration_merges_vocab_and_phrases_into_memory_items() {
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
         "CREATE TABLE articles (id TEXT PRIMARY KEY);
+         CREATE TABLE feed_sources (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL,
+            url TEXT NOT NULL UNIQUE, enabled INTEGER NOT NULL DEFAULT 1,
+            origin TEXT NOT NULL DEFAULT 'curated', description TEXT NOT NULL DEFAULT '',
+            etag TEXT NOT NULL DEFAULT '', last_fetched_at TEXT,
+            fulltext_ratio REAL NOT NULL DEFAULT -1
+         );
          CREATE TABLE vocab (
             id TEXT PRIMARY KEY, term TEXT NOT NULL, definition_zh TEXT NOT NULL,
             word_type TEXT NOT NULL, collocations_json TEXT NOT NULL DEFAULT '[]',
@@ -1046,7 +1087,7 @@ fn v10_migration_merges_vocab_and_phrases_into_memory_items() {
     assert_eq!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        12
+        14
     );
     let words = db::list_memory(&conn, Some("word"), None).unwrap();
     let phrases = db::list_memory(&conn, Some("phrase"), None).unwrap();
@@ -1087,10 +1128,10 @@ fn migration_snapshot_is_written_before_version_bump() {
     // Already up to date → no new snapshot.
     let current = temp_dir().join(format!("le-premigrate-current-{}.db", Uuid::new_v4()));
     let conn2 = rusqlite::Connection::open(&current).unwrap();
-    conn2.pragma_update(None, "user_version", 12).unwrap();
+    conn2.pragma_update(None, "user_version", 14).unwrap();
     db::backup_before_migration(&conn2, &current);
     assert!(!current
-        .with_file_name("shiyan.db.premigrate-v12.bak")
+        .with_file_name("shiyan.db.premigrate-v14.bak")
         .exists());
 
     let _ = std::fs::remove_file(path);
@@ -1117,10 +1158,8 @@ fn add_or_merge_memory_reuses_existing_term() {
     let dir = temp_dir().join(format!("le-vocab-merge-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let state = db::DbState::open(db::db_path(dir.clone())).unwrap();
-    let cfg = crate::config::AppConfig::default();
     let first = crate::vocab::add_or_merge_memory(
         &state,
-        &cfg,
         crate::vocab::AddMemoryInput {
             kind: "word".into(),
             term: "serendipity".into(),
@@ -1134,7 +1173,6 @@ fn add_or_merge_memory_reuses_existing_term() {
     .unwrap();
     let second = crate::vocab::add_or_merge_memory(
         &state,
-        &cfg,
         crate::vocab::AddMemoryInput {
             kind: "word".into(),
             term: "Serendipity".into(),
@@ -1156,7 +1194,6 @@ fn add_or_merge_memory_preserves_srs_progress() {
     let dir = temp_dir().join(format!("le-vocab-srs-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let state = db::DbState::open(db::db_path(dir.clone())).unwrap();
-    let cfg = crate::config::AppConfig::default();
     let input = |ctx: &str| crate::vocab::AddMemoryInput {
         kind: "word".into(),
         term: "persevere".into(),
@@ -1166,7 +1203,7 @@ fn add_or_merge_memory_preserves_srs_progress() {
         word_type: Some("verb".into()),
         collocations: Some(vec![]),
     };
-    let first = crate::vocab::add_or_merge_memory(&state, &cfg, input("Keep going.")).unwrap();
+    let first = crate::vocab::add_or_merge_memory(&state, input("Keep going.")).unwrap();
 
     // Simulate two successful reviews.
     {
@@ -1181,8 +1218,7 @@ fn add_or_merge_memory_preserves_srs_progress() {
     }
 
     // Re-adding the same word merges metadata but never resets SRS state.
-    let merged =
-        crate::vocab::add_or_merge_memory(&state, &cfg, input("Still going.")).unwrap();
+    let merged = crate::vocab::add_or_merge_memory(&state, input("Still going.")).unwrap();
     assert_eq!(merged.id, first.id);
     assert_eq!(merged.reps, 2);
     assert_eq!(merged.consecutive_know, 2);
@@ -1196,10 +1232,8 @@ fn add_or_merge_memory_unifies_word_and_phrase_kinds() {
     let dir = temp_dir().join(format!("le-memory-kinds-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&dir).unwrap();
     let state = db::DbState::open(db::db_path(dir.clone())).unwrap();
-    let cfg = crate::config::AppConfig::default();
     let phrase = crate::vocab::add_or_merge_memory(
         &state,
-        &cfg,
         crate::vocab::AddMemoryInput {
             kind: "phrase".into(),
             term: "  on   the house ".into(),
@@ -1573,7 +1607,7 @@ fn schema_adds_summary_zh_column() {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 12);
+    assert_eq!(version, 14);
     let memory_table: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_items'",
@@ -1813,4 +1847,52 @@ fn db_file_rename_happens_in_place_and_is_idempotent() {
     assert_eq!(db::migrate_legacy_app_dir(&dir).unwrap(), 0);
 
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn reorder_feeds_assigns_priority_within_category() {
+    let path = temp_dir().join(format!("le-reorder-{}.db", Uuid::new_v4()));
+    let conn = db::open_db(path.clone()).expect("open");
+    // Start from a controlled feed set: two tech, two finance.
+    conn.execute("DELETE FROM feed_sources", []).unwrap();
+    for (id, cat) in [
+        ("t1", "tech"),
+        ("t2", "tech"),
+        ("f1", "finance"),
+        ("f2", "finance"),
+    ] {
+        conn.execute(
+            "INSERT INTO feed_sources (id, name, category, url, enabled, origin) VALUES (?1,?1,?2,?3,1,'user')",
+            rusqlite::params![id, cat, format!("https://x/{id}")],
+        )
+        .unwrap();
+    }
+
+    // Flat top-to-bottom order across the tree; priority is per-category, so
+    // the first source of each category shares the same numeric top.
+    db::reorder_feeds(&conn, &["t1".into(), "t2".into(), "f1".into(), "f2".into()])
+        .unwrap();
+
+    let prio = |id: &str| -> i64 {
+        conn.query_row(
+            "SELECT priority FROM feed_sources WHERE id=?1",
+            rusqlite::params![id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(prio("t1"), 2, "first in tech block gets the category size");
+    assert_eq!(prio("t2"), 1);
+    assert_eq!(prio("f1"), 2, "first in finance normalises to the same top");
+    assert_eq!(prio("f2"), 1);
+
+    let cat_max = db::category_priority_max(&conn).unwrap();
+    assert_eq!(cat_max.get("tech"), Some(&2));
+    assert_eq!(cat_max.get("finance"), Some(&2));
+
+    let name_prio = db::source_priority_map(&conn).unwrap();
+    assert_eq!(name_prio.get("t1"), Some(&2));
+    assert_eq!(name_prio.get("f1"), Some(&2));
+
+    let _ = std::fs::remove_file(path);
 }

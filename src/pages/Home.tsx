@@ -138,15 +138,13 @@ export default function Home() {
   const fetchPage = useCallback(
     (offset: number, cursor?: { score: number; id: string } | null) =>
       showPicks
-        ? api.listArticlesRanked(
-            undefined,
-            [],
-            undefined,
-            true,
-            PAGE_SIZE,
+        ? api.listArticlesRanked({
+            tags: [],
+            unreadOnly: true,
+            limit: PAGE_SIZE,
             offset,
-            cursor ?? null,
-          )
+            cursor: cursor ?? null,
+          })
         : api.listLibrary({
             category: undefined,
             tags: selectedTags,
@@ -159,7 +157,11 @@ export default function Home() {
     [showPicks, selectedTags, focusSource, filters],
   );
 
+  // Stale-response guard: rapid filter/source changes fire overlapping loads;
+  // only the newest call may touch state.
+  const loadSeq = useRef(0);
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     setLoading(true);
     try {
       const [list, stats] = await Promise.all([
@@ -167,13 +169,14 @@ export default function Home() {
         api.getLearningStats().catch(() => null),
         ensureLexiconLoaded().catch(() => undefined),
       ]);
+      if (seq !== loadSeq.current) return;
       setArticles(list);
       setHasMore(list.length >= PAGE_SIZE);
       setLearningStats(stats);
     } catch (e) {
-      toast.err(String(e));
+      if (seq === loadSeq.current) toast.err(String(e));
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, [fetchPage, toast]);
 
@@ -245,6 +248,12 @@ export default function Home() {
   // while filtered results are shown requires remembering them.
   const availableTags = useMemo(() => topTags(articles), [articles]);
 
+  /** True when any loaded row still lacks a Chinese blurb (drives the hint). */
+  const needsCardZh = useMemo(
+    () => articles.some(articleNeedsCardZh),
+    [articles],
+  );
+
   // The always-visible tag filter now lives in the sidebar: publish the tags
   // available in this window so its chips match what Home could filter on.
   useEffect(() => {
@@ -291,11 +300,8 @@ export default function Home() {
   // Difficulty fit nudges the 今日推荐 ranking: the sweet spot (a few new words
   // per paragraph) floats up, word walls and trivially-easy pieces sink.
   const orderedArticles = useMemo(
-    () =>
-      applyDifficultyOrder(articles, difficultyById).filter(
-        (a) => matchesLevel(a) && matchesQuery(a),
-      ),
-    [articles, difficultyById, matchesLevel, matchesQuery],
+    () => applyDifficultyOrder(visible, difficultyById),
+    [visible, difficultyById],
   );
   const topPicks = useMemo(
     () => pickTopArticles(orderedArticles, TOP_PICKS),
@@ -379,13 +385,12 @@ export default function Home() {
 
   // Keyboard flow (j/k/Enter/o): navigate exactly what is on screen.
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const navList = useMemo(() => displayList, [displayList]);
 
   // Infinite scroll only makes sense while there is something on screen to
   // read; with everything collapsed it would just stream in new (collapsed)
   // boards. Re-arms as soon as one board is expanded again.
   const sentinelRef = useInfiniteScroll(
-    hasMore && navList.length > 0,
+    hasMore && displayList.length > 0,
     loadMore,
   );
 
@@ -409,29 +414,29 @@ export default function Home() {
       if ((key === "Enter" || key === "o") && (tag === "BUTTON" || tag === "A")) {
         return;
       }
-      if (popover || navList.length === 0) return;
+      if (popover || displayList.length === 0) return;
       e.preventDefault();
       if (key === "j" || key === "k") {
         setSelectedId((prev) => {
-          const idx = prev ? navList.findIndex((a) => a.id === prev) : -1;
+          const idx = prev ? displayList.findIndex((a) => a.id === prev) : -1;
           const next =
             key === "j"
-              ? Math.min(navList.length - 1, idx + 1)
+              ? Math.min(displayList.length - 1, idx + 1)
               : Math.max(0, idx - 1);
-          return navList[next]?.id ?? null;
+          return displayList[next]?.id ?? null;
         });
         return;
       }
       // Enter/o: with a selection open it; without one, select the first row.
       const target = selectedId
-        ? navList.find((a) => a.id === selectedId)
-        : navList[0];
+        ? displayList.find((a) => a.id === selectedId)
+        : displayList[0];
       if (selectedId && target) navigate(`/article/${target.id}`);
       else if (target) setSelectedId(target.id);
     }
     window.addEventListener("keydown", onNavKey);
     return () => window.removeEventListener("keydown", onNavKey);
-  }, [navList, popover, selectedId, navigate]);
+  }, [displayList, popover, selectedId, navigate]);
 
   // Keep the keyboard-selected row in view.
   useEffect(() => {
@@ -583,7 +588,7 @@ export default function Home() {
         </>
       )}
 
-      {!hasLlm && articles.some(articleNeedsCardZh) && (
+      {!hasLlm && needsCardZh && (
         <p className="muted">设置里填 API Key 后，列表会自动补一两句中文简介。</p>
       )}
       {hasLlm && cardFilling && <p className="muted">正在补中文简介…</p>}

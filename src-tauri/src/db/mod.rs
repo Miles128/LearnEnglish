@@ -587,6 +587,27 @@ const LEGACY_COLUMN_ADDITIONS: &[&str] = &[
 /// number (never `LATEST_VERSION`) so later steps are not skipped.
 const LATEST_VERSION: i64 = 15;
 
+/// Run one `ALTER TABLE … ADD COLUMN`, tolerating "duplicate column name" as
+/// a no-op: legacy databases created before version stamping may already have
+/// the column.
+fn add_column_if_missing(conn: &Connection, sql: &str) -> Result<(), AppError> {
+    if let Err(e) = conn.execute(sql, []) {
+        let msg = e.to_string();
+        if !msg.contains("duplicate column name") {
+            return Err(AppError::msg(msg));
+        }
+    }
+    Ok(())
+}
+
+/// [`add_column_if_missing`] over a batch of DDL statements.
+fn add_columns_if_missing(conn: &Connection, sqls: &[&str]) -> Result<(), AppError> {
+    for sql in sqls {
+        add_column_if_missing(conn, sql)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
     let mut stored: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -595,18 +616,9 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
     if stored < 1 {
         // v0 → v1: baseline schema. Idempotent DDL makes this safe both for fresh
         // databases and legacy ones that predate user_version stamping.
-        conn.execute_batch(BASELINE_SCHEMA)
-            ?;
-        for sql in LEGACY_COLUMN_ADDITIONS {
-            if let Err(e) = conn.execute(sql, []) {
-                let msg = e.to_string();
-                if !msg.contains("duplicate column name") {
-                    return Err(AppError::msg(msg));
-                }
-            }
-        }
-        conn.pragma_update(None, "user_version", 1)
-            ?;
+        conn.execute_batch(BASELINE_SCHEMA)?;
+        add_columns_if_missing(conn, LEGACY_COLUMN_ADDITIONS)?;
+        conn.pragma_update(None, "user_version", 1)?;
         stored = 1;
     }
 
@@ -630,41 +642,27 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
     }
 
     if stored < 4 {
-        if let Err(e) = conn.execute(
+        add_column_if_missing(
+            conn,
             "ALTER TABLE articles ADD COLUMN summary_zh TEXT NOT NULL DEFAULT ''",
-            [],
-        ) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column name") {
-                return Err(AppError::msg(msg));
-            }
-        }
-        conn.pragma_update(None, "user_version", 4)
-            ?;
+        )?;
+        conn.pragma_update(None, "user_version", 4)?;
         stored = 4;
     }
 
     if stored < 5 {
-        for sql in [
+        add_columns_if_missing(conn, &[
             "ALTER TABLE articles ADD COLUMN last_opened_at TEXT",
             "ALTER TABLE articles ADD COLUMN open_count INTEGER NOT NULL DEFAULT 0",
-        ] {
-            if let Err(e) = conn.execute(sql, []) {
-                let msg = e.to_string();
-                if !msg.contains("duplicate column name") {
-                    return Err(AppError::msg(msg));
-                }
-            }
-        }
-        conn.pragma_update(None, "user_version", 5)
-            ?;
+        ])?;
+        conn.pragma_update(None, "user_version", 5)?;
         stored = 5;
     }
 
     if stored < 6 {
         // Quality metadata (stamped at ingest) + implicit reading signals
         // (dwell / completion / like) + per-feed HTTP/1.1 cache metadata.
-        for sql in [
+        add_columns_if_missing(conn, &[
             "ALTER TABLE articles ADD COLUMN word_count INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE articles ADD COLUMN quality TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE articles ADD COLUMN extraction_source TEXT NOT NULL DEFAULT ''",
@@ -674,14 +672,7 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
             "ALTER TABLE feed_sources ADD COLUMN etag TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE feed_sources ADD COLUMN last_fetched_at TEXT",
             "ALTER TABLE feed_sources ADD COLUMN fulltext_ratio REAL NOT NULL DEFAULT -1",
-        ] {
-            if let Err(e) = conn.execute(sql, []) {
-                let msg = e.to_string();
-                if !msg.contains("duplicate column name") {
-                    return Err(AppError::msg(msg));
-                }
-            }
-        }
+        ])?;
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_articles_fetched ON articles(fetched_at DESC);
              CREATE INDEX IF NOT EXISTS idx_articles_origin_quality ON articles(origin, quality);",
@@ -694,17 +685,11 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
 
     if stored < 7 {
         // Topic tags from card translation — input for semantic interest profiling.
-        if let Err(e) = conn.execute(
+        add_column_if_missing(
+            conn,
             "ALTER TABLE articles ADD COLUMN tags_json TEXT NOT NULL DEFAULT ''",
-            [],
-        ) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column name") {
-                return Err(AppError::msg(msg));
-            }
-        }
-        conn.pragma_update(None, "user_version", 7)
-            ?;
+        )?;
+        conn.pragma_update(None, "user_version", 7)?;
         stored = 7;
     }
 
@@ -857,15 +842,10 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
         // One-shot dead-feed cleanup support: unused fail counter column
         // (kept for schema stability) + tombstones so curated sources removed
         // by that pass are not resurrected by the next startup seed.
-        if let Err(e) = conn.execute(
+        add_column_if_missing(
+            conn,
             "ALTER TABLE feed_sources ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0",
-            [],
-        ) {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column name") {
-                return Err(AppError::msg(msg));
-            }
-        }
+        )?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS removed_feeds (
                  id TEXT PRIMARY KEY,

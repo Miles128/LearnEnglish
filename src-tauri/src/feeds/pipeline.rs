@@ -242,7 +242,7 @@ pub fn refresh_feeds(
         result.purged_old += purge_expired_articles(&conn, cfg.article_retention_days)?;
     }
     let known_urls = std::sync::Mutex::new({
-        let conn = db.lock_write()?;
+        let conn = db.lock_read()?;
         db::list_article_urls(&conn)?
             .into_iter()
             .map(|u| canonical_article_url(&u))
@@ -584,10 +584,7 @@ fn download_feed_articles(
                     title,
                     feed.name.clone(),
                     feed.category.clone(),
-                    entry
-                        .published
-                        .or(entry.updated)
-                        .map(|d| d.to_rfc3339()),
+                    published.map(|d| d.to_rfc3339()),
                     rss_text,
                     now.clone(),
                     "rss",
@@ -646,10 +643,7 @@ fn download_feed_articles(
             title,
             feed.name.clone(),
             feed.category.clone(),
-            entry
-                .published
-                .or(entry.updated)
-                .map(|d| d.to_rfc3339()),
+            published.map(|d| d.to_rfc3339()),
             content_text,
             now.clone(),
             "page",

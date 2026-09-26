@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useShell } from "../store";
 import { useToast } from "./Toaster";
 import type { FeedSource } from "../api";
@@ -108,6 +108,11 @@ export default function Sidebar({ collapsed, onExpand }: Props) {
   const sort = useRef<SortState | null>(null);
   // A drag that ends still fires click; suppress the select that would follow.
   const didDrag = useRef(false);
+  // Teardown for whichever pointer drag is live (resize / sort). Kept in a ref
+  // so an unmount mid-drag still removes the window listeners and the body
+  // modifier class (is-resizing disables user selection app-wide).
+  const dragCleanup = useRef<(() => void) | null>(null);
+  useEffect(() => () => dragCleanup.current?.(), []);
 
   // Right-edge drag handle: the sidebar width follows the pointer live and the
   // final width is written to localStorage on release.
@@ -126,11 +131,15 @@ export default function Sidebar({ collapsed, onExpand }: Props) {
       );
       setWidth(current);
     };
-    const up = () => {
+    const cleanup = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
       document.body.classList.remove("is-resizing");
+      dragCleanup.current = null;
+    };
+    const up = () => {
+      cleanup();
       try {
         localStorage.setItem(WIDTH_KEY, String(current));
       } catch {
@@ -138,6 +147,7 @@ export default function Sidebar({ collapsed, onExpand }: Props) {
       }
     };
     document.body.classList.add("is-resizing");
+    dragCleanup.current = cleanup;
     window.addEventListener("pointermove", move, { passive: false });
     window.addEventListener("pointerup", up);
     window.addEventListener("pointercancel", up);
@@ -210,6 +220,7 @@ export default function Sidebar({ collapsed, onExpand }: Props) {
     window.removeEventListener("pointerup", s.up);
     window.removeEventListener("pointercancel", s.up);
     sort.current = null;
+    dragCleanup.current = null;
   }
 
   function beginSort(
@@ -259,6 +270,7 @@ export default function Sidebar({ collapsed, onExpand }: Props) {
       if (finished.started) commitMove(finished.cat, finished.fromIndex, finished.target);
     };
     sort.current = s;
+    dragCleanup.current = () => resetSort(s);
     window.addEventListener("pointermove", s.move, { passive: false });
     window.addEventListener("pointerup", s.up);
     window.addEventListener("pointercancel", s.up);

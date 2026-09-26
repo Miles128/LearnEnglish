@@ -27,52 +27,49 @@ pub mod import;
 pub mod net;
 pub mod pipeline;
 
-// The re-exports below form the module's outward facade (`crate::feeds::X`).
-// Some are consumed only by tests or sibling submodules, so unused-import
-// warnings are expected in non-test builds and silenced.
-#[allow(unused_imports)]
+// The module's outward facade (`crate::feeds::X`): only what is used from
+// outside this module. Sibling submodules reach each other by their own path
+// (`super::filters::x`), so nothing else is re-exported here — that is what
+// used to need a pile of `#[allow(unused_imports)]`.
 pub(crate) use cleanup::{
-    audit_rss_bodies_once, clear_stale_paragraph_translations_once, purge_blocked_articles,
-    purge_expired_articles, purge_rss_below_word_threshold, repair_missing_paragraphs,
+    clear_stale_paragraph_translations_once, purge_blocked_articles, repair_missing_paragraphs,
 };
-#[cfg(test)]
-pub(crate) use cleanup::{
-    collect_non_english_rss_ids, delete_articles, purge_non_english_articles,
-    purge_summary_only_articles,
-};
-#[allow(unused_imports)]
-pub(crate) use dedup::{canonical_article_url, is_near_duplicate_title, title_tokens, TitleIndex};
-#[cfg(test)]
-pub(crate) use dedup::partition_new_urls;
-#[allow(unused_imports)]
 pub(crate) use enrich::{
     fill_article_card_zh, fill_missing_card_zh, fill_missing_tags, CARDS_PER_REFRESH,
-    TAGS_PER_REFRESH,
 };
-#[allow(unused_imports)]
-pub(crate) use extract::{extract_article_page, fetch_article_page, html_to_text, title_from_html};
-#[allow(unused_imports)]
-pub(crate) use filters::{
-    choose_article_body, is_blocked_content, is_english_article, is_readable_article_body,
-    looks_like_link_roundup, looks_like_paywall, looks_like_transcript, looks_truncated,
-    rss_trust_chars, TRUST_RSS_FULLTEXT_CHARS,
+pub(crate) use filters::{is_english_article, MIN_IMPORTED_BODY_CHARS};
+pub use import::import_article_from_url;
+pub use net::{validate_feed_url, FeedValidation};
+pub use pipeline::{refresh_feeds, RefreshProgress, RefreshResult};
+
+/// Reached only from tests (`feeds/tests.rs` via `use super::*`, plus
+/// `db_tests.rs` through `crate::feeds::`).
+#[cfg(test)]
+pub(crate) use cleanup::{
+    audit_rss_bodies_once, collect_non_english_rss_ids, delete_articles,
+    purge_expired_articles, purge_non_english_articles, purge_rss_below_word_threshold,
+    purge_summary_only_articles,
 };
 #[cfg(test)]
+pub(crate) use dedup::{
+    canonical_article_url, is_near_duplicate_title, partition_new_urls, TitleIndex,
+};
+#[cfg(test)]
+pub(crate) use extract::{html_to_text, title_from_html};
+#[cfg(test)]
 pub(crate) use filters::is_summary_only_body;
-#[allow(unused_imports)]
-pub use import::{import_article_from_url, source_from_url};
-#[allow(unused_imports)]
-pub use net::{ensure_public_http_url, validate_feed_url, FeedValidation};
-pub use pipeline::{refresh_feeds, RefreshProgress, RefreshResult};
-#[allow(unused_imports)]
+#[cfg(test)]
+pub(crate) use import::source_from_url;
+#[cfg(test)]
+pub(crate) use net::ensure_public_http_url;
+#[cfg(test)]
 pub(crate) use pipeline::select_enabled_feeds;
 
-/// Articles whose body is shorter than this many characters are rejected as
-/// RSS-only teasers unless a trusted page fulltext is available.
-pub(crate) const MIN_FULLTEXT_CHARS: usize = 400;
-/// Articles whose body is shorter than this many words are dropped for RSS
-/// sources: a real learning session needs substance, not a blurb.
-/// User imports (url/file) are never deleted.
+/// The one auto-ingest length bar, in words: a real learning session needs
+/// substance, not a blurb. Every gate that decides whether a fetched body
+/// becomes a library entry uses this ([`filters::is_readable_article_body`]).
+/// User imports have their own, lower floor — see
+/// [`filters::MIN_IMPORTED_BODY_CHARS`].
 pub(crate) const MIN_ARTICLE_WORDS: usize = 400;
 
 pub fn split_paragraphs(text: &str) -> Vec<String> {

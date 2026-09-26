@@ -16,6 +16,8 @@ export type WordLevelEntry = {
   rank: number;
   /** Optional bundled Chinese gloss (may be empty). */
   zh?: string;
+  /** Set on a spaced alias: the hyphenated headword it was derived from. */
+  term?: string;
 };
 
 export type DifficultyPrefs = {
@@ -55,6 +57,7 @@ function ingestRows(rawLevels: RawRow[]) {
     if (key.includes(" ")) phraseList.push(key);
   }
   phraseList.sort((a, b) => b.length - a.length);
+  ingestAliases();
   loaded = true;
 }
 
@@ -225,6 +228,109 @@ export function isSuperHardWord(
   );
 }
 
+/* ─────────────────────────────────────────────────────────────────
+ * 词块 (lexical chunks): bundled src/data/chunks.json, mirroring the
+ * word-levels pattern (lazy-imported read-only asset, matched in-memory).
+ * Runtime row = [key, zh, en, type, [labels]]. Provenance + licenses in
+ * src/data/chunks.SOURCES.md.
+ * ───────────────────────────────────────────────────────────────── */
+export type ChunkType = "idiom" | "phrasal" | "collocation" | "slang";
+export type ChunkEntry = {
+  /** Base key as stored in chunks.json. */
+  key: string;
+  /** Lemma-normalized, space-joined key — what text is matched against. */
+  lemmaKey: string;
+  type: ChunkType;
+  zh?: string;
+  en?: string;
+  labels: string[];
+};
+
+const chunksByLemma = new Map<string, ChunkEntry>();
+let chunksLoad: Promise<void> | null = null;
+let chunksReady = false;
+
+type ChunkRow = [string, string, string, string, string[]];
+const CHUNK_TYPES: ReadonlySet<string> = new Set([
+  "idiom",
+  "phrasal",
+  "collocation",
+  "slang",
+]);
+
+/**
+ * A chunk key spans ≥2 sub-words, where sub-words split on spaces OR hyphens.
+ * So "put up with" (3) and "well-known" (2) qualify, but a bare word like
+ * "bookworm" (1) does not. This is what lets hyphenated chunks like
+ * `rubber-stamp` / `binge-watch` — a single TOKEN_RE token — still be chunks.
+ */
+function isChunkKey(k: string): boolean {
+  return k.split(/[\s-]+/).filter(Boolean).length >= 2;
+}
+
+/**
+ * Canonical base for chunk matching. Unlike `findLemmaKey` (which keeps a
+ * surface form that is itself a lexicon headword), this prefers a reduced
+ * base form even for inflections that are present in the lexicon — so text
+ * "looking" and chunk "look" both canonicalize to "look" and match.
+ */
+function canonicalLemma(tok: string): string {
+  for (const c of lemmaCandidates(tok)) {
+    if (lexicon.has(c)) return c;
+  }
+  return tok;
+}
+
+/**
+ * Space-joined canonical-lemma form of a normalized phrase key. Splits on BOTH
+ * spaces and hyphens so `well-known` and `well known` collapse to the same key
+ * — the basis for separator-agnostic (bidirectional) chunk matching.
+ */
+function lemmaPhraseKey(normKey: string): string {
+  return normKey
+    .split(/[\s-]+/)
+    .filter(Boolean)
+    .map((t) => canonicalLemma(t))
+    .join(" ");
+}
+
+/** Lazy-load bundled chunks; awaits the lexicon first so lemma reduction works. */
+export function ensureChunksLoaded(): Promise<void> {
+  if (chunksReady) return Promise.resolve();
+  if (chunksLoad) return chunksLoad;
+  chunksLoad = ensureLexiconLoaded()
+    .then(() => import("./data/chunks.json"))
+    .then((mod) => {
+      for (const row of mod.default as ChunkRow[]) {
+        const [key, zh, en, type, labels] = row;
+        const nk = normalizeKey(key);
+        if (!nk || !isChunkKey(nk)) continue;
+        const lemmaKey = lemmaPhraseKey(nk);
+        chunksByLemma.set(lemmaKey, {
+          key: nk,
+          lemmaKey,
+          type: (CHUNK_TYPES.has(type) ? type : "collocation") as ChunkType,
+          zh: zh || undefined,
+          en: en || undefined,
+          labels: Array.isArray(labels) ? labels : [],
+        });
+      }
+      chunksReady = true;
+    })
+    .catch((err) => {
+      chunksLoad = null;
+      throw err;
+    });
+  return chunksLoad;
+}
+
+/** Chunk lookup by surface or lemma form (empty until ensureChunksLoaded). */
+export function lookupChunk(term: string): ChunkEntry | null {
+  const nk = normalizeKey(term);
+  if (!nk || !nk.includes(" ")) return null;
+  return chunksByLemma.get(lemmaPhraseKey(nk)) ?? null;
+}
+
 export type AnnotatedSpan =
   | { type: "text"; text: string }
   | {
@@ -236,13 +342,25 @@ export type AnnotatedSpan =
       superHard: boolean;
       learning: boolean;
       zh?: string;
+      /** Omitted = single word. "chunk" = a lexical-chunk span (词块). */
+      kind?: "word" | "chunk";
+      chunkType?: ChunkType;
+      labels?: string[];
     };
 
 const TOKEN_RE = /[A-Za-z][A-Za-z'-]*|[^\sA-Za-z]+|\s+/g;
 
+/** Surface text consumed by a span starting at token `start`. */
+function joinToks(toks: { raw: string }[], start: number, count: number) {
+  let raw = "";
+  for (let k = start; k < start + count; k++) raw += toks[k]!.raw;
+  return raw;
+}
+
 /**
- * Annotate plain text: longest-phrase match from lexicon, then single tokens.
- * Learning vocab terms also marked (even if not hard).
+ * Annotate plain text: longest lexical-chunk match (bundled chunks.json + the
+ * learner's saved phrases, lemma-normalized), then the single-word CEFR pass.
+ * Learning terms are marked even when not hard.
  */
 export function annotateText(
   text: string,
@@ -250,85 +368,305 @@ export function annotateText(
   learningTerms: string[],
   knownTerms: string[] = [],
 ): AnnotatedSpan[] {
-  const learning = new Set(
-    learningTerms.map(normalizeKey).filter((t) => t.length >= 2),
-  );
-  const known = new Set(
-    knownTerms.map(normalizeKey).filter((t) => t.length >= 2),
-  );
-  // Prefer longer learning phrases too
-  const learningPhrases = [...learning]
-    .filter((t) => t.includes(" "))
-    .sort((a, b) => b.length - a.length);
+  const toks: { raw: string; isWord: boolean }[] = [];
+  TOKEN_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = TOKEN_RE.exec(text)) !== null) {
+    const raw = m[0];
+    toks.push({ raw, isWord: /^[A-Za-z]/.test(raw) });
+  }
+
+  const learning = new Set<string>();
+  const learningLemmas = new Set<string>();
+  const known = new Set<string>();
+  const knownLemmas = new Set<string>();
+  for (const t of learningTerms) {
+    const nk = normalizeKey(t);
+    if (nk.length < 2) continue;
+    learning.add(nk);
+    if (nk.includes(" ")) learningLemmas.add(lemmaPhraseKey(nk));
+  }
+  for (const t of knownTerms) {
+    const nk = normalizeKey(t);
+    if (nk.length < 2) continue;
+    known.add(nk);
+    if (nk.includes(" ")) knownLemmas.add(lemmaPhraseKey(nk));
+  }
 
   const spans: AnnotatedSpan[] = [];
   let i = 0;
-  const lower = text.toLowerCase();
-
-  while (i < text.length) {
-    const phraseHit =
-      matchPhraseAt(text, lower, i, phraseList) ??
-      matchPhraseAt(text, lower, i, learningPhrases);
-
-    if (phraseHit) {
-      const entry = lookupWord(phraseHit.key);
-      const knownHit = known.has(phraseHit.key);
-      const hard = !knownHit && (entry ? isHardWord(entry, prefs) : false);
-      const superHard =
-        !knownHit && (entry ? isSuperHardWord(entry, prefs) : false);
-      const learningHit = !knownHit && learning.has(phraseHit.key);
-      spans.push({
-        type: "token",
-        text: phraseHit.raw,
-        term: phraseHit.key,
-        hard,
-        superHard,
-        learning: learningHit,
-        zh: entry?.zh,
-      });
-      i = phraseHit.end;
-      continue;
-    }
-
-    TOKEN_RE.lastIndex = i;
-    const m = TOKEN_RE.exec(text);
-    if (!m || m.index !== i) {
-      spans.push({ type: "text", text: text[i]! });
+  while (i < toks.length) {
+    const t = toks[i]!;
+    if (!t.isWord) {
+      spans.push({ type: "text", text: t.raw });
       i += 1;
       continue;
     }
 
-    const raw = m[0];
-    const isWord = /^[A-Za-z]/.test(raw);
-    if (!isWord) {
-      spans.push({ type: "text", text: raw });
-      i = m.index + raw.length;
+    const hit = matchChunkAt(toks, i, learningLemmas, knownLemmas);
+    if (hit) {
+      const knownHit = known.has(hit.rawKey) || knownLemmas.has(hit.lemmaKey);
+      const learningHit =
+        !knownHit &&
+        (learning.has(hit.rawKey) || learningLemmas.has(hit.lemmaKey));
+      spans.push({
+        type: "token",
+        text: joinToks(toks, i, hit.count),
+        term: hit.entry?.key ?? hit.rawKey,
+        hard: !knownHit,
+        superHard: false,
+        learning: learningHit,
+        zh: hit.entry?.zh,
+        kind: "chunk",
+        chunkType: hit.entry?.type,
+        labels: hit.entry?.labels,
+      });
+      i += hit.count;
       continue;
     }
 
-    const key = normalizeKey(raw);
+    const phrase = matchLexiconPhraseAt(toks, i);
+    if (phrase) {
+      const headword = phrase.entry.term ?? phrase.key;
+      const knownHit = known.has(phrase.key) || known.has(headword);
+      spans.push({
+        type: "token",
+        text: joinToks(toks, i, phrase.count),
+        term: headword,
+        hard: !knownHit && isHardWord(phrase.entry, prefs),
+        superHard: !knownHit && isSuperHardWord(phrase.entry, prefs),
+        learning:
+          !knownHit &&
+          (learning.has(phrase.key) || learning.has(headword)),
+        zh: phrase.entry.zh,
+        kind: "word",
+      });
+      i += phrase.count;
+      continue;
+    }
+
+    const key = normalizeKey(t.raw);
     const entry = lookupWord(key);
     const lemmaKey = findLemmaKey(key);
     const knownHit = known.has(key) || known.has(lemmaKey);
-    const hard = !knownHit && (entry ? isHardWord(entry, prefs) : false);
-    const superHard =
-      !knownHit && (entry ? isSuperHardWord(entry, prefs) : false);
-    const inLearning =
-      !knownHit && (learning.has(key) || learning.has(lemmaKey));
-
     spans.push({
       type: "token",
-      text: raw,
+      text: t.raw,
       term: lemmaKey || key,
-      hard,
-      superHard,
-      learning: inLearning,
+      hard: !knownHit && (entry ? isHardWord(entry, prefs) : false),
+      superHard: !knownHit && (entry ? isSuperHardWord(entry, prefs) : false),
+      learning: !knownHit && (learning.has(key) || learning.has(lemmaKey)),
       zh: entry?.zh,
+      kind: "word",
     });
-    i = m.index + raw.length;
+    i += 1;
   }
 
   return coalesceText(spans);
+}
+
+const MAX_CHUNK_TOKENS = 6;
+
+/**
+ * Flattened keys whose space-separated spelling is just as often a plain free
+ * word combination as it is the compound — so the hyphen must be written by
+ * the author for the compound reading to be claimed. Covers both directions:
+ * a hyphenated chunk may not match spaced text, and a hyphenated headword gets
+ * no spaced alias. `fast track` is a transit/bicycle lane as often as it is
+ * 加速推进; `left hand` is a body part, never 惯用左手的.
+ */
+const AMBIGUOUS_SPACED_KEYS: ReadonlySet<string> = new Set([
+  "also ran",
+  "cold blood",
+  "empty hand",
+  "fast track",
+  "know how",
+  "left hand",
+  "red hand",
+  "right hand",
+  "second hand",
+  "single hand",
+  // noun/adjective compounds whose unhyphenated spelling is the phrasal verb
+  // instead: `take-off` 起飞 vs take off 脱下, `make-up` 化妆品 vs make up 编造.
+  "back up",
+  "check up",
+  "close up",
+  "cut off",
+  "head up",
+  "hard work",
+  "make up",
+  "mix up",
+  "one man",
+  "one night",
+  "one time",
+  "pick up",
+  "set up",
+  "stand up",
+  "take off",
+  "wake up",
+]);
+
+/** Closed-class words: they carry no meaning alone, so they can't anchor an alias. */
+const CLOSED_CLASS: ReadonlySet<string> = new Set([
+  "a", "an", "the", "and", "or", "but", "nor", "of", "to", "in", "on", "at",
+  "by", "for", "from", "with", "as", "that", "this", "these", "those", "it",
+  "its", "is", "are", "was", "were", "be", "been", "being", "he", "she",
+  "they", "them", "their", "i", "you", "your", "we", "our", "my", "me", "us",
+  "who", "which", "what", "when", "where", "how", "not", "no", "yes",
+]);
+
+/**
+ * The unhyphenated spelling of a hyphenated headword, or null when it must not
+ * be registered. CEFR-J stores `state-of-the-art` / `brother-in-law` hyphenated
+ * while news prose often writes them apart; without an alias the spaced form
+ * dissects into four easy words and nothing lights up. Requires two real
+ * content words and no single-letter fragment, so stutters (`i-i`, `a-and`) and
+ * interjections never become multi-word click targets.
+ */
+function spacedAliasOf(lexiconKey: string): string | null {
+  if (!lexiconKey.includes("-")) return null;
+  const parts = lexiconKey
+    .split(/[\s-]+/)
+    .filter(Boolean)
+    .map((p) => canonicalLemma(p));
+  if (parts.length < 2) return null;
+  if (parts.some((p) => p.length < 2)) return null;
+  if (parts.filter((p) => !CLOSED_CLASS.has(p)).length < 2) return null;
+  const alias = parts.join(" ");
+  return AMBIGUOUS_SPACED_KEYS.has(alias) ? null : alias;
+}
+
+/** Register spaced aliases for hyphenated headwords (after the lexicon is whole). */
+function ingestAliases() {
+  const found: [string, string, WordLevelEntry][] = [];
+  for (const [key, entry] of lexicon) {
+    const alias = spacedAliasOf(key);
+    if (alias) found.push([alias, key, entry]);
+  }
+  for (const [alias, headword, entry] of found) {
+    if (lexicon.has(alias)) continue;
+    lexicon.set(alias, { ...entry, term: headword });
+  }
+}
+
+/** True when any token in `words[0..n)` carries a hyphen in its surface form. */
+function windowIsHyphenated(
+  toks: { raw: string }[],
+  words: number[],
+  n: number,
+): boolean {
+  for (let a = 0; a < n; a++) if (toks[words[a]!]!.raw.includes("-")) return true;
+  return false;
+}
+
+/**
+ * Indices of the word tokens reachable from `start` — contiguous through
+ * whitespace only (punctuation breaks the window), capped at `max` tokens.
+ */
+function wordWindow(
+  toks: { raw: string; isWord: boolean }[],
+  start: number,
+  max: number,
+): number[] {
+  const words: number[] = [start];
+  let j = start + 1;
+  while (j < toks.length && words.length < max) {
+    let k = j;
+    let gap = true;
+    while (k < toks.length && !toks[k]!.isWord) {
+      if (!/^\s+$/.test(toks[k]!.raw)) {
+        gap = false;
+        break;
+      }
+      k += 1;
+    }
+    if (!gap || k >= toks.length) break;
+    words.push(k);
+    j = k + 1;
+  }
+  return words;
+}
+
+/** Lemma-normalized key of the first `n` tokens of `words`. */
+function windowLemmaKey(
+  toks: { raw: string }[],
+  words: number[],
+  n: number,
+  splitHyphens: boolean,
+): string {
+  const subs: string[] = [];
+  for (let a = 0; a < n; a++) {
+    const norm = normalizeKey(toks[words[a]!]!.raw);
+    for (const piece of splitHyphens ? norm.split("-") : [norm]) {
+      if (piece) subs.push(canonicalLemma(piece));
+    }
+  }
+  return subs.join(" ");
+}
+
+/**
+ * Longest lexicon phrase starting at token `start`, reached through the spaced
+ * aliases of hyphenated headwords (`state of the art` → `state-of-the-art`).
+ * Only windows of ≥ 2 tokens are tried, and hyphens are not split here: a
+ * hyphenated token already matches its own headword in the single-word pass.
+ */
+function matchLexiconPhraseAt(
+  toks: { raw: string; isWord: boolean }[],
+  start: number,
+): { count: number; key: string; entry: WordLevelEntry } | null {
+  const words = wordWindow(toks, start, MAX_CHUNK_TOKENS);
+  for (let n = words.length; n >= 2; n -= 1) {
+    const key = windowLemmaKey(toks, words, n, false);
+    const entry = lexicon.get(key);
+    if (entry) return { count: words[n - 1]! + 1 - start, key, entry };
+  }
+  return null;
+}
+
+/**
+ * Longest lexical-chunk match starting at token `start`. Word tokens must be
+ * contiguous through whitespace only (no punctuation between). Returns the
+ * consumed token count + matched entry (null entry for a bare saved-phrase hit),
+ * or null when nothing of length ≥ 2 matches.
+ */
+function matchChunkAt(
+  toks: { raw: string; isWord: boolean }[],
+  start: number,
+  learningLemmas: Set<string>,
+  knownLemmas: Set<string>,
+): {
+  count: number;
+  entry: ChunkEntry | null;
+  lemmaKey: string;
+  rawKey: string;
+} | null {
+  if (
+    chunksByLemma.size === 0 &&
+    learningLemmas.size === 0 &&
+    knownLemmas.size === 0
+  ) {
+    return null;
+  }
+  const words = wordWindow(toks, start, MAX_CHUNK_TOKENS);
+  for (let n = Math.min(words.length, MAX_CHUNK_TOKENS); n >= 1; n -= 1) {
+    const lemmaKey = windowLemmaKey(toks, words, n, true);
+    if (
+      AMBIGUOUS_SPACED_KEYS.has(lemmaKey) &&
+      !windowIsHyphenated(toks, words, n)
+    ) {
+      continue;
+    }
+    const entry = chunksByLemma.get(lemmaKey);
+    if (entry || learningLemmas.has(lemmaKey) || knownLemmas.has(lemmaKey)) {
+      return {
+        count: words[n - 1]! + 1 - start,
+        entry: entry ?? null,
+        lemmaKey,
+        rawKey: lemmaKey,
+      };
+    }
+  }
+  return null;
 }
 
 function findLemmaKey(surface: string): string {
@@ -337,26 +675,6 @@ function findLemmaKey(surface: string): string {
     if (lexicon.has(c)) return c;
   }
   return surface;
-}
-
-function matchPhraseAt(
-  text: string,
-  lower: string,
-  start: number,
-  phrases: string[],
-): { key: string; raw: string; end: number } | null {
-  for (const phrase of phrases) {
-    const n = phrase.length;
-    if (start + n > text.length) continue;
-    const slice = lower.slice(start, start + n);
-    if (slice !== phrase) continue;
-    // boundary: start ok; end should not continue a word char
-    const before = start === 0 ? " " : text[start - 1]!;
-    const after = start + n >= text.length ? " " : text[start + n]!;
-    if (/[A-Za-z]/.test(before) || /[A-Za-z]/.test(after)) continue;
-    return { key: phrase, raw: text.slice(start, start + n), end: start + n };
-  }
-  return null;
 }
 
 function coalesceText(spans: AnnotatedSpan[]): AnnotatedSpan[] {

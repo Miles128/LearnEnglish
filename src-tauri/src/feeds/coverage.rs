@@ -5,16 +5,18 @@
 //! so a source that renders its text with JavaScript looks identical to a
 //! source that simply publishes short posts. This module walks the same gates
 //! in the same order as [`super::pipeline`] (trust-RSS → page fetch → paywall →
-//! word count → language → blocked) and keeps the reasons apart.
+//! language → blocked) and keeps the reasons apart.
 //!
 //! It is read-only: nothing here writes articles, feed metadata, or counters.
 
 use super::dedup::canonical_article_url;
-use super::extract::{extract_page, PageFailure};
-use super::filters::{body_reject_reason, choose_article_body, is_blocked_content, is_english_article, is_readable_article_body, looks_like_paywall, looks_truncated, rss_trust_chars};
+use super::extract::extract_page;
+use super::filters::{
+    body_reject_reason, choose_article_body, is_blocked_content, is_english_article,
+    looks_like_paywall, rss_is_full_text, rss_trust_chars, PageFailure,
+};
 use super::extract::html_to_text;
 use super::net::{ensure_public_http_url, read_limited_bytes, HTTP};
-use super::MIN_ARTICLE_WORDS;
 use crate::db::{self, FeedSource};
 use crate::error::AppError;
 use chrono::Utc;
@@ -29,8 +31,6 @@ use std::collections::{BTreeMap, HashSet};
 const UNSAMPLED: &str = "未抽样（超出本次配额）";
 /// The feed itself could not be read, so none of its entries could be judged.
 const FEED_UNREADABLE: &str = "订阅源抓取失败";
-/// Body passed every readability gate but is under the word bar.
-const TOO_FEW_WORDS: &str = "字数不足";
 const NOT_ENGLISH: &str = "非英文内容";
 const BLOCKED_KIND: &str = "链接周报或播客稿";
 
@@ -156,11 +156,8 @@ fn audit_one_feed(
 
         // Same bar as the refresh: a full-text feed needs no page fetch. Both
         // routes converge on the gates below, exactly as the pipeline does —
-        // the word-count and language bars apply to a trusted RSS body too.
-        let body = if rss_text.chars().count() >= trust_chars
-            && is_readable_article_body(&rss_text)
-            && !looks_truncated(&rss_text)
-        {
+        // the language and blocked-content bars apply to a trusted RSS body too.
+        let body = if rss_is_full_text(&rss_text, trust_chars) {
             rss_text
         } else {
             if sampled >= pages_per_feed {
@@ -179,11 +176,13 @@ fn audit_one_feed(
             };
 
             let Some(body) = choose_article_body(&rss_text, page_text.as_deref()) else {
-                // Neither the RSS body nor the page gave us prose. Report against
-                // the page when we have one — that is the difference between a
-                // client-rendered shell and a source with nothing to read.
+                // Neither the RSS body nor the page gave us a usable article.
+                // Report against the page when we have one — that is the
+                // difference between a client-rendered shell and a source with
+                // nothing to read.
                 let rejected = page_text.as_deref().unwrap_or(&rss_text);
-                cov.note(PageFailure::from(body_reject_reason(rejected)).label(), &url);
+                let failure = body_reject_reason(rejected).unwrap_or(PageFailure::TooShort);
+                cov.note(failure.label(), &url);
                 continue;
             };
             body
@@ -191,10 +190,6 @@ fn audit_one_feed(
 
         if looks_like_paywall(&body) {
             cov.note(PageFailure::Paywall.label(), &url);
-            continue;
-        }
-        if body.split_whitespace().count() < MIN_ARTICLE_WORDS {
-            cov.note(TOO_FEW_WORDS, &url);
             continue;
         }
         let language = entry.language.as_deref().or(parsed.language.as_deref());

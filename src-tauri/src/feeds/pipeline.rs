@@ -9,11 +9,10 @@ use super::dedup::{canonical_article_url, TitleIndex};
 use super::enrich::{fill_missing_card_zh, fill_missing_tags, CARDS_PER_REFRESH, TAGS_PER_REFRESH};
 use super::extract::{fetch_article_page, html_to_text};
 use super::filters::{
-    choose_article_body, is_blocked_content, is_english_article, is_readable_article_body,
-    looks_like_paywall, looks_truncated, rss_trust_chars,
+    choose_article_body, is_blocked_content, is_english_article, looks_like_paywall,
+    rss_is_full_text, rss_trust_chars,
 };
 use super::net::{ensure_public_http_url, read_limited_bytes, HTTP};
-use super::{MIN_ARTICLE_WORDS};
 use crate::config::AppConfig;
 use crate::db::{self, Article, DbState, FeedSource};
 use crate::error::AppError;
@@ -541,12 +540,7 @@ fn download_feed_articles(
         if is_known {
             let stored_len = known_lengths.get(&url).copied().unwrap_or(0);
             stats.evaluated += 1;
-            if rss_text.chars().count() >= trust_chars
-                && is_readable_article_body(&rss_text)
-                && !looks_truncated(&rss_text)
-                && rss_text.split_whitespace().count() >= MIN_ARTICLE_WORDS
-                && rss_text.chars().count() > stored_len
-            {
+            if rss_is_full_text(&rss_text, trust_chars) && rss_text.chars().count() > stored_len {
                 // Two parallel workers can see the same URL from different
                 // feeds; only the first upgrade wins.
                 let mut upgraded = upgraded.lock().map_err(|_| "upgraded set poisoned")?;
@@ -576,12 +570,11 @@ fn download_feed_articles(
             continue;
         }
 
-        // Full-text RSS can be trusted; teaser / chrome / tag-wall / truncated
-        // bodies must fetch the article page. If the page is also junk, skip.
-        let content_text = if rss_text.chars().count() >= trust_chars
-            && is_readable_article_body(&rss_text)
-            && !looks_truncated(&rss_text)
-        {
+        // Full-text RSS can be trusted; teaser / chrome / tag-wall / truncated /
+        // too-thin bodies must fetch the article page. If the page is also
+        // junk, skip. Both branches are already past [`MIN_ARTICLE_WORDS`] —
+        // that bar lives inside the gate, so there is no second copy here.
+        let content_text = if rss_is_full_text(&rss_text, trust_chars) {
             stats.evaluated += 1;
             stats.rss_fulltext_hits += 1;
             rss_text
@@ -603,11 +596,6 @@ fn download_feed_articles(
         };
 
         if looks_like_paywall(&content_text) {
-            stats.skipped_short += 1;
-            continue;
-        }
-
-        if content_text.split_whitespace().count() < MIN_ARTICLE_WORDS {
             stats.skipped_short += 1;
             continue;
         }

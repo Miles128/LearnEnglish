@@ -29,20 +29,6 @@ pub fn load_article_view(conn: &Connection, id: &str) -> Result<Option<ArticleVi
     }))
 }
 
-#[tauri::command]
-pub async fn list_articles(
-    app: AppHandle,
-    category: Option<String>,
-    limit: Option<i64>,
-    offset: Option<i64>,
-) -> Result<Vec<ArticleListItem>, AppError> {
-    crate::commands::spawn_db(app, move |state| {
-        let conn = state.lock_read()?;
-        db::list_articles(&conn, category.as_deref(), limit, offset)
-    })
-    .await
-}
-
 /// Ranked window size for interest scoring. Wide enough that cursor pages can
 /// reach past the first few screens of a daily reading session.
 const RANK_WINDOW: i64 = 800;
@@ -78,7 +64,6 @@ pub async fn list_articles_ranked(
                         db::ReadState::All
                     },
                     liked_only: false,
-                    recent_first: false,
                 },
                 Some(RANK_WINDOW),
                 Some(0),
@@ -148,7 +133,6 @@ pub async fn list_library(
                 source: source.as_deref(),
                 read_state,
                 liked_only: liked_only.unwrap_or(false),
-                recent_first: true,
             },
             limit,
             offset,

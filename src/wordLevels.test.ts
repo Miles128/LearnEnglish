@@ -1,9 +1,12 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   annotateText,
+  ensureChunksLoaded,
   ensureLexiconLoaded,
   isHardWord,
   isSuperHardWord,
+  lookupChunk,
+  lookupWord,
   type AnnotatedSpan,
   type DifficultyPrefs,
 } from "./wordLevels";
@@ -113,5 +116,158 @@ describe("annotateText", () => {
     const c2 = hardCount(prefsC2);
     expect(b1).toBeGreaterThan(0);
     expect(b1).toBeGreaterThanOrEqual(c2);
+  });
+});
+
+function chunkSpan(spans: AnnotatedSpan[], term: string) {
+  return spans.find(
+    (s) => s.type === "token" && s.kind === "chunk" && s.term === term,
+  );
+}
+
+describe("lexical chunks (chunks.json)", () => {
+  beforeAll(async () => {
+    await ensureChunksLoaded();
+  });
+
+  it("lookupChunk resolves a bundled phrasal verb", () => {
+    expect(lookupChunk("put up with")?.type).toBe("phrasal");
+  });
+
+  it("underlines a multi-token chunk and keeps its surface span", () => {
+    const spans = annotateText("I learned to put up with noise.", prefsC2, []);
+    const hit = chunkSpan(spans, "put up with");
+    expect(hit).toBeDefined();
+    if (hit?.type === "token") {
+      expect(hit.hard).toBe(true);
+      expect(hit.text).toBe("put up with");
+    }
+  });
+
+  it("matches inflected forms (looking → look forward to)", () => {
+    const spans = annotateText("We are looking forward to it.", prefsC2, []);
+    const hit = chunkSpan(spans, "look forward to");
+    expect(hit).toBeDefined();
+    if (hit?.type === "token") expect(hit.text).toBe("looking forward to");
+  });
+
+  it("suppresses a chunk the learner already knows", () => {
+    const spans = annotateText("Please bear in mind.", prefsC2, [], [
+      "bear in mind",
+    ]);
+    const hit = chunkSpan(spans, "bear in mind");
+    expect(hit).toBeDefined();
+    if (hit?.type === "token") {
+      expect(hit.hard).toBe(false);
+      expect(hit.learning).toBe(false);
+    }
+  });
+
+  it("marks a saved learning chunk", () => {
+    const spans = annotateText("You must bear in mind.", prefsC2, [
+      "bear in mind",
+    ]);
+    const hit = chunkSpan(spans, "bear in mind");
+    if (hit?.type === "token") expect(hit.learning).toBe(true);
+  });
+
+  it("still round-trips to the original text with chunks active", () => {
+    const text = "They decided to cut corners, and it backfired.";
+    expect(plain(annotateText(text, prefsC2, []))).toBe(text);
+  });
+
+  it("matches a hyphenated single-token chunk (rubber-stamp)", () => {
+    const spans = annotateText("It was just a rubber-stamp approval.", prefsC2, []);
+    const hit = chunkSpan(spans, "rubber-stamp");
+    expect(hit).toBeDefined();
+    if (hit?.type === "token") expect(hit.text).toBe("rubber-stamp");
+  });
+
+  it("matches a hyphenated chunk written with spaces (bidirectional)", () => {
+    const spans = annotateText("The approval was a rubber stamp formality.", prefsC2, []);
+    const hit = chunkSpan(spans, "rubber-stamp");
+    expect(hit).toBeDefined();
+    if (hit?.type === "token") expect(hit.text).toBe("rubber stamp");
+  });
+
+  it("matches an ambiguous hyphenated chunk when the text hyphenates it", () => {
+    const spans = annotateText("The scheme was fast-track for graduates.", prefsC2, []);
+    const hit = chunkSpan(spans, "fast-track");
+    expect(hit).toBeDefined();
+    if (hit?.type === "token") expect(hit.text).toBe("fast-track");
+  });
+
+  it("does not match an ambiguous chunk written as free words", () => {
+    const text = "Cyclists used a fast track near the river.";
+    const spans = annotateText(text, prefsC2, []);
+    expect(chunkSpan(spans, "fast-track")).toBeUndefined();
+    expect(plain(spans)).toBe(text);
+  });
+});
+describe("spaced aliases of hyphenated headwords", () => {
+  function wordSpan(spans: AnnotatedSpan[], term: string) {
+    return spans.find(
+      (s) => s.type === "token" && s.kind === "word" && s.term === term,
+    );
+  }
+
+  it("annotates the unhyphenated spelling as its headword", () => {
+    const spans = annotateText("a world class chip", prefsB1, []);
+    const hit = wordSpan(spans, "world-class");
+    expect(hit).toBeDefined();
+    if (hit?.type === "token") {
+      expect(hit.text).toBe("world class");
+      expect(hit.hard).toBe(true);
+      expect(hit.zh).toBeTruthy();
+    }
+  });
+
+  it("resolves the spaced form through the dictionary lookup", () => {
+    expect(lookupWord("world class")?.term).toBe("world-class");
+  });
+
+  it("leaves a free word combination to the single-word pass", () => {
+    const text = "He raised his left hand and said it was hard work.";
+    const spans = annotateText(text, prefsB1, []);
+    expect(wordSpan(spans, "left-handed")).toBeUndefined();
+    expect(wordSpan(spans, "hard-working")).toBeUndefined();
+  });
+
+  it("does not claim a spaced phrasal verb for the noun compound", () => {
+    const text = "She had to take off her shoes.";
+    expect(wordSpan(annotateText(text, prefsB1, []), "take-off")).toBeUndefined();
+  });
+
+  it("suppresses an alias the learner already knows", () => {
+    const spans = annotateText("a world class chip", prefsB1, [], [
+      "world-class",
+    ]);
+    const hit = wordSpan(spans, "world-class");
+    if (hit?.type === "token") expect(hit.hard).toBe(false);
+  });
+
+  it("round-trips a paragraph full of compounds", () => {
+    const text =
+      "The long term, up to date deal was world class, so it won win support.";
+    expect(plain(annotateText(text, prefsB1, []))).toBe(text);
+  });
+});
+
+describe("hyphenated news compounds in the chunk table", () => {
+  beforeAll(async () => {
+    await ensureChunksLoaded();
+  });
+
+  it("matches the spaced spelling of a political compound", () => {
+    const spans = annotateText("The far right took a hard line.", prefsC2, []);
+    expect(chunkSpan(spans, "far-right")).toBeDefined();
+    expect(chunkSpan(spans, "hard-line")).toBeDefined();
+  });
+
+  it("leaves the phrasal verb alone when only the noun is hyphenated", () => {
+    const text = "Troops cut off the highway.";
+    const spans = annotateText(text, prefsC2, []);
+    expect(chunkSpan(spans, "cut-off")).toBeUndefined();
+    expect(chunkSpan(annotateText("the water cut-off lasted hours.", prefsC2, []), "cut-off")).toBeDefined();
   });
 });

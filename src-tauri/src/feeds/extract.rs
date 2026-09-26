@@ -1,6 +1,6 @@
 //! Fetching a public article page and extracting title + main text.
 
-use super::filters::{self, is_readable_article_body, looks_like_paywall, BodyReject};
+use super::filters::{body_defect, looks_like_paywall, PageFailure};
 use super::net::{ensure_public_http_url, read_limited_bytes};
 use crate::error::AppError;
 use reqwest::blocking::Client;
@@ -47,51 +47,6 @@ pub(crate) fn title_from_html(html: &str) -> Option<String> {
 pub(crate) struct ExtractedPage {
     pub title: String,
     pub text: String,
-}
-
-/// Why a candidate article page never became a library entry. The refresh
-/// pipeline folds all of these into one "too short" counter, which makes a
-/// source that needs a real browser look identical to one that is simply
-/// thin — so the coverage audit needs them apart.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PageFailure {
-    /// Request failed or the server refused us (non-2xx, timeout, oversized body).
-    FetchFailed,
-    /// Blocked behind a subscription prompt — deliberately never ingested.
-    Paywall,
-    /// Answered fine but yielded almost no text: a client-side-rendered shell.
-    Shell,
-    /// Real prose, under the minimum length.
-    TooShort,
-    /// Navigation, tag walls, or a link list.
-    NavOrLinks,
-    /// Ends on a "read more" style marker.
-    Truncated,
-}
-
-impl PageFailure {
-    /// Label used in the coverage report.
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            PageFailure::FetchFailed => "抓取失败或被拒",
-            PageFailure::Paywall => "疑似付费墙",
-            PageFailure::Shell => "空壳页（正文靠脚本渲染）",
-            PageFailure::TooShort => "正文过短",
-            PageFailure::NavOrLinks => "导航或链接堆",
-            PageFailure::Truncated => "正文被截断",
-        }
-    }
-}
-
-impl From<BodyReject> for PageFailure {
-    fn from(reject: BodyReject) -> Self {
-        match reject {
-            BodyReject::Shell => PageFailure::Shell,
-            BodyReject::TooShort => PageFailure::TooShort,
-            BodyReject::NavOrLinks => PageFailure::NavOrLinks,
-            BodyReject::Truncated => PageFailure::Truncated,
-        }
-    }
 }
 
 /// A page that never became an entry: the classified failure, plus the
@@ -176,10 +131,10 @@ pub(crate) fn extract_page(
         None => full_page,
     };
 
-    if !is_readable_article_body(&text) {
+    if let Some(defect) = body_defect(&text) {
         return Err(fail(
-            filters::body_reject_reason(&text).into(),
-            "正文太短，未能抽到可读全文",
+            defect,
+            format!("未能抽到可用正文：{}", defect.label()),
         ));
     }
 

@@ -1527,11 +1527,37 @@ mark.vocab-hit:hover {
   background: rgba(15, 92, 76, 0.14);
 }
 
-/* 超级难词下方挂淡色中文：绝对定位，不挤行高；hover 时加深 + 微微放大，
-   让「一眼看不出、想知道再聚焦」的层级差可读性对齐。 */
+/* 词块（chunks.json）：结构分 4 类，靠下划线线型区分；hover / 点按沿用难词交互。
+   已知词块渲染为 plain（无下划线），学习中的沿用 vocab-hit 高亮。 */
+.chunk-word {
+  box-decoration-break: clone;
+}
+.chunk-word.hard-word {
+  text-decoration-thickness: 1.6px;
+  text-underline-offset: 4px;
+}
+.chunk-idiom.hard-word {
+  text-decoration-style: wavy;
+  text-decoration-color: rgba(180, 83, 9, 0.6);
+}
+.chunk-phrasal.hard-word {
+  text-decoration-style: solid;
+  text-decoration-color: rgba(15, 92, 76, 0.62);
+}
+.chunk-collocation.hard-word {
+  text-decoration-style: dotted;
+  text-decoration-color: rgba(56, 89, 175, 0.72);
+}
+.chunk-slang.hard-word {
+  text-decoration-style: double;
+  text-decoration-color: rgba(147, 51, 234, 0.55);
+}
+
+/* 中文释义挂在词/短语正下方：绝对定位只占行距留白，不撑行盒、不影响排版。
+   能放下的前提是行距够大 —— 开关打开时 readingCssVars 会把 --reader-lh 抬到下限。 */
 .gloss-wrap {
   position: relative;
-  display: inline-block;
+  display: inline;
 }
 
 .word-gloss {
@@ -1539,9 +1565,8 @@ mark.vocab-hit:hover {
   top: 100%;
   left: 50%;
   transform: translateX(-50%);
-  margin-top: -2px;
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", sans-serif;
-  font-size: 0.58em;
+  font-size: calc(0.55em + 2pt);
   line-height: 1;
   letter-spacing: 0;
   color: var(--muted);
@@ -1549,14 +1574,13 @@ mark.vocab-hit:hover {
   white-space: nowrap;
   pointer-events: none;
   font-variant-numeric: normal;
-  transition: opacity 120ms ease, transform 120ms ease, color 120ms ease;
+  transition: opacity 120ms ease, color 120ms ease;
 }
 
 .gloss-wrap:hover .word-gloss,
 .gloss-wrap:focus-within .word-gloss {
   opacity: 1;
   color: var(--ink);
-  transform: translateX(-50%) scale(1.08);
 }
 
 /* Settings 开关行 */

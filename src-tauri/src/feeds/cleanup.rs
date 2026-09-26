@@ -1,10 +1,10 @@
 //! One-time audits, retention purges, and body repair for stored RSS articles.
 
 use super::extract::extract_article_page;
-use super::filters::{is_blocked_content, is_english_article, is_readable_article_body, looks_truncated};
+use super::filters::{is_blocked_content, is_english_article, is_readable_article_body};
 use super::net::HTTP;
 use super::MIN_ARTICLE_WORDS;
-use crate::db::{self, DbState};
+use crate::db::{self, Article, DbState};
 use crate::error::AppError;
 use chrono::Utc;
 use rusqlite::{params, Connection};
@@ -23,10 +23,7 @@ pub(crate) fn audit_rss_bodies_once(conn: &Connection) -> Result<usize, AppError
     let mut removed = 0usize;
     for article in &articles {
         let word_count = article.content_text.split_whitespace().count() as i64;
-        let bad = word_count < MIN_ARTICLE_WORDS as i64
-            || !is_readable_article_body(&article.content_text)
-            || looks_truncated(&article.content_text);
-        if bad {
+        if !is_readable_article_body(&article.content_text) {
             db::delete_article(conn, &article.id)?;
             removed += 1;
         } else if article.word_count != word_count {
@@ -73,6 +70,12 @@ pub(crate) fn purge_expired_articles(
     db::purge_old_rss_articles(conn, &cutoff)
 }
 
+/// Rows the learner has claimed: liked, or opened and not finished. Purges and
+/// audits never delete these, whatever the body looks like.
+fn is_protected(article: &Article) -> bool {
+    article.liked || (!article.read_completed && article.last_opened_at.is_some())
+}
+
 /// Assess rows whose quality was never stamped (legacy rows and anything
 /// that predates the quality column). Deletes non-English / junk bodies and
 /// stamps the rest as 'fulltext'. Assessed rows are never re-derived later,
@@ -82,14 +85,17 @@ pub(crate) fn assess_unassessed_articles(conn: &Connection) -> Result<(usize, us
     let mut del_non_english = 0usize;
     let mut del_short = 0usize;
     for article in &unassessed {
-        if !is_english_article(None, &article.title, &article.content_text) {
+        let word_count = article.content_text.split_whitespace().count() as i64;
+        let english = is_english_article(None, &article.title, &article.content_text);
+        let readable = is_readable_article_body(&article.content_text);
+        let protected = is_protected(article);
+        if !protected && !english {
             db::delete_article(conn, &article.id)?;
             del_non_english += 1;
-        } else if !is_readable_article_body(&article.content_text) {
+        } else if !protected && !readable {
             db::delete_article(conn, &article.id)?;
             del_short += 1;
         } else {
-            let word_count = article.content_text.split_whitespace().count() as i64;
             db::set_article_quality(conn, &article.id, "fulltext", "rss", word_count)?;
         }
     }
@@ -177,10 +183,7 @@ pub fn repair_missing_paragraphs(db: &DbState, limit: usize) -> Result<usize, Ap
 pub fn purge_blocked_articles(conn: &Connection) -> Result<usize, AppError> {
     let mut removed = 0usize;
     for article in db::list_all_rss_articles(conn)? {
-        if article.liked || (!article.read_completed && article.last_opened_at.is_some()) {
-            continue;
-        }
-        if is_blocked_content(&article.title, &article.content_text) {
+        if !is_protected(&article) && is_blocked_content(&article.title, &article.content_text) {
             db::delete_article(conn, &article.id)?;
             removed += 1;
         }

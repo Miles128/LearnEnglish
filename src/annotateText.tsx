@@ -59,15 +59,25 @@ function renderSpan(
 ): ReactNode {
   if (span.type === "text") return span.text;
 
-  const classNames = [
-    span.hard ? "hard-word" : "plain-word",
-    span.learning ? "vocab-hit" : null,
-  ]
+  const isChunk = span.kind === "chunk";
+  const wordClass = isChunk
+    ? [
+        "chunk-word",
+        span.chunkType ? `chunk-${span.chunkType}` : "",
+        span.hard ? "hard-word" : "plain-word",
+      ]
+        .filter(Boolean)
+        .join(" ")
+    : span.hard
+      ? "hard-word"
+      : "plain-word";
+
+  const classNames = [wordClass, span.learning ? "vocab-hit" : null]
     .filter(Boolean)
     .join(" ");
 
   const accessibleName = [
-    span.hard ? "超出当前难度，单击翻译" : "单击翻译",
+    isChunk ? "词块 · 单击翻译" : span.hard ? "超出当前难度，单击翻译" : "单击翻译",
     span.learning ? "生词库 · 学习中" : null,
   ]
     .filter(Boolean)
@@ -122,9 +132,14 @@ function renderSpan(
           span.text,
         );
 
-  // 仅对「超级难词 + 词典里有中文首义 + 用户开了开关」挂淡色小字；hover 时 CSS 提升可读性。
+  // 词块始终挂淡色中文（chunks 是学习核心目标）；单词只在「超级难词 + 词典有中文 + 用户开了开关」时挂。
   // 点词/键盘 Enter 仍走原 LLM 上下文翻译路径，不受这里影响。
-  if (showGloss && span.superHard && span.hard && span.zh) {
+  // 释义挂在词/短语正下方（绝对定位，只占行距留白），所以开启时行高有下限。
+  const wantsGloss =
+    showGloss &&
+    !!span.zh &&
+    (isChunk || (span.superHard && span.hard));
+  if (wantsGloss) {
     return createElement(
       "span",
       { key: `g-${key}`, className: "gloss-wrap" },

@@ -32,5 +32,9 @@ src-tauri/target
 # dictionary build cache (large downloads)
 scripts/.cache/
 
+# 词块(chunks)构建：本地一次性管线 + 原始 vendor 源 + 中间产物；只把成品 src/data/chunks.json 入库
+chunks-vendor/
+chunks.seed.json
+
 # WorkBuddy workspace data
 .workbuddy/

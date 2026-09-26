@@ -56,7 +56,6 @@ pub fn run() {
             commands::config::save_config_cmd,
             commands::data::backup_database,
             commands::data::restore_database,
-            commands::articles::list_articles,
             commands::articles::list_articles_ranked,
             commands::articles::list_library,
             commands::articles::list_article_sources,

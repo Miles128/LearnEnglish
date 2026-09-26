@@ -1,4 +1,3 @@
-use crate::config;
 use crate::db::{self, DbState, LookupEntry, MemoryItem};
 use crate::error::AppError;
 use crate::srs::{apply_rating, Rating};

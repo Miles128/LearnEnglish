@@ -10,6 +10,7 @@ const ARTICLE_COLS: &str =
 /// Home list only needs an excerpt (known% + blurb). Full body stays on get_article.
 pub const LIST_EXCERPT_CHARS: i32 = 6000;
 
+#[cfg(test)]
 pub fn list_articles(
     conn: &Connection,
     category: Option<&str>,
@@ -58,8 +59,6 @@ pub struct ArticleQuery<'a> {
     pub source: Option<&'a str>,
     pub read_state: ReadState,
     pub liked_only: bool,
-    /// Newest first (library) instead of source-grouped (default).
-    pub recent_first: bool,
 }
 
 /// Filtered article list. Tags are OR; everything else is AND.
@@ -69,10 +68,12 @@ pub fn query_articles(
     limit: Option<i64>,
     offset: Option<i64>,
 ) -> Result<Vec<ArticleListItem>, AppError> {
-    // Same columns as ARTICLE_COLS, with the body truncated to an excerpt.
+    // Same columns as ARTICLE_COLS, with the body truncated and renamed to the
+    // field the list row carries. Named lookups in [`map_article_list_item`]
+    // depend on that alias.
     let list_cols = ARTICLE_COLS.replace(
         "content_text",
-        &format!("SUBSTR(content_text,1,{LIST_EXCERPT_CHARS})"),
+        &format!("SUBSTR(content_text,1,{LIST_EXCERPT_CHARS}) AS excerpt"),
     );
     let mut sql = format!("SELECT {list_cols} FROM articles");
     let mut params: Vec<rusqlite::types::Value> = vec![];
@@ -117,13 +118,10 @@ pub fn query_articles(
         sql.push_str(" WHERE ");
         sql.push_str(&clauses.join(" AND "));
     }
-    if query.recent_first {
-        sql.push_str(" ORDER BY fetched_at DESC, published_at DESC, id ASC");
-    } else {
-        // For ranked scoring, prefer recent articles over alphabetical source
-        // ordering so the window is not starved by source name.
-        sql.push_str(" ORDER BY fetched_at DESC, published_at DESC, id ASC");
-    }
+    // Recency for every caller: the library shows newest first, and the ranked
+    // home feed needs the fetched window to be recent rather than starved by
+    // alphabetical source ordering.
+    sql.push_str(" ORDER BY fetched_at DESC, published_at DESC, id ASC");
     sql.push_str(" LIMIT ? OFFSET ?");
     params.push(rusqlite::types::Value::Integer(
         limit.unwrap_or(60).clamp(1, MAX_LIST_LIMIT),
@@ -152,48 +150,48 @@ pub fn list_article_sources(conn: &Connection) -> Result<Vec<(String, i64)>, App
 
 pub fn map_article_list_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArticleListItem> {
     Ok(ArticleListItem {
-        id: row.get(0)?,
-        url: row.get(1)?,
-        title: row.get(2)?,
-        source: row.get(3)?,
-        category: row.get(4)?,
-        published_at: row.get(5)?,
-        excerpt: row.get(6)?,
-        fetched_at: row.get(7)?,
-        origin: row.get(8)?,
-        summary_zh: row.get(9)?,
-        last_opened_at: row.get(10)?,
-        open_count: row.get(11)?,
-        word_count: row.get(12)?,
+        id: row.get("id")?,
+        url: row.get("url")?,
+        title: row.get("title")?,
+        source: row.get("source")?,
+        category: row.get("category")?,
+        published_at: row.get("published_at")?,
+        excerpt: row.get("excerpt")?,
+        fetched_at: row.get("fetched_at")?,
+        origin: row.get("origin")?,
+        summary_zh: row.get("summary_zh")?,
+        last_opened_at: row.get("last_opened_at")?,
+        open_count: row.get("open_count")?,
+        word_count: row.get("word_count")?,
         rank_score: 0.0,
-        dwell_ms: row.get(15)?,
-        read_completed: row.get::<_, i64>(16)? != 0,
-        liked: row.get::<_, i64>(17)? != 0,
-        tags: parse_tags_json(&row.get::<_, String>(18)?),
+        dwell_ms: row.get("dwell_ms")?,
+        read_completed: row.get::<_, i64>("read_completed")? != 0,
+        liked: row.get::<_, i64>("liked")? != 0,
+        tags: parse_tags_json(&row.get::<_, String>("tags_json")?),
     })
 }
 
 pub fn map_article(row: &rusqlite::Row<'_>) -> rusqlite::Result<Article> {
     Ok(Article {
-        id: row.get(0)?,
-        url: row.get(1)?,
-        title: row.get(2)?,
-        source: row.get(3)?,
-        category: row.get(4)?,
-        published_at: row.get(5)?,
-        content_text: row.get(6)?,
-        fetched_at: row.get(7)?,
-        origin: row.get(8)?,
-        summary_zh: row.get(9)?,
-        last_opened_at: row.get(10)?,
-        open_count: row.get(11)?,
-        word_count: row.get(12)?,
-        quality: row.get(13)?,
-        extraction_source: row.get(14)?,
-        dwell_ms: row.get(15)?,
-        read_completed: row.get::<_, i64>(16)? != 0,
-        liked: row.get::<_, i64>(17)? != 0,
-        tags: parse_tags_json(&row.get::<_, String>(18)?),
+        id: row.get("id")?,
+        url: row.get("url")?,
+        title: row.get("title")?,
+        source: row.get("source")?,
+        category: row.get("category")?,
+        published_at: row.get("published_at")?,
+        content_text: row.get("content_text")?,
+        fetched_at: row.get("fetched_at")?,
+        origin: row.get("origin")?,
+        summary_zh: row.get("summary_zh")?,
+        last_opened_at: row.get("last_opened_at")?,
+        open_count: row.get("open_count")?,
+        word_count: row.get("word_count")?,
+        quality: row.get("quality")?,
+        extraction_source: row.get("extraction_source")?,
+        dwell_ms: row.get("dwell_ms")?,
+        read_completed: row.get::<_, i64>("read_completed")? != 0,
+        liked: row.get::<_, i64>("liked")? != 0,
+        tags: parse_tags_json(&row.get::<_, String>("tags_json")?),
     })
 }
 
@@ -779,21 +777,31 @@ pub fn parse_tags_json(raw: &str) -> Vec<String> {
 }
 
 /// Articles that still lack topic tags (for the one-time / rolling backfill).
-pub fn articles_missing_tags(conn: &Connection, limit: usize) -> Result<Vec<Article>, AppError> {
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT {ARTICLE_COLS} FROM articles
-             WHERE IFNULL(tags_json,'') = '' AND quality='fulltext'
-             ORDER BY fetched_at DESC
-             LIMIT ?1"
-        ))
-        ?;
+/// Newest-first batch of full rows matching a fixed predicate. `where_clause`
+/// is only ever a literal from this file — nothing caller-supplied reaches it.
+fn recent_articles_where(
+    conn: &Connection,
+    where_clause: &str,
+    limit: usize,
+) -> Result<Vec<Article>, AppError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {ARTICLE_COLS} FROM articles
+         WHERE {where_clause}
+         ORDER BY fetched_at DESC
+         LIMIT ?1"
+    ))?;
     let rows = stmt
-        .query_map(params![limit as i64], map_article)
-        ?
-        .collect::<Result<Vec<_>, _>>()
-        ?;
+        .query_map(params![limit as i64], map_article)?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+pub fn articles_missing_tags(conn: &Connection, limit: usize) -> Result<Vec<Article>, AppError> {
+    recent_articles_where(
+        conn,
+        "IFNULL(tags_json,'') = '' AND quality='fulltext'",
+        limit,
+    )
 }
 
 /// Interest profile inputs for tag-based ranking:
@@ -885,20 +893,7 @@ pub fn delete_article(conn: &Connection, id: &str) -> Result<(), AppError> {
 }
 
 pub fn articles_missing_card_zh(conn: &Connection, limit: usize) -> Result<Vec<Article>, AppError> {
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT {ARTICLE_COLS} FROM articles
-             WHERE IFNULL(summary_zh,'') = ''
-             ORDER BY fetched_at DESC
-             LIMIT ?1"
-        ))
-        ?;
-    let rows = stmt
-        .query_map(params![limit as i64], map_article)
-        ?
-        .collect::<Result<Vec<_>, _>>()
-        ?;
-    Ok(rows)
+    recent_articles_where(conn, "IFNULL(summary_zh,'') = ''", limit)
 }
 
 /// RSS articles whose stored body has no paragraph breaks (extraction loss),
@@ -907,17 +902,11 @@ pub fn articles_without_paragraphs(
     conn: &Connection,
     limit: usize,
 ) -> Result<Vec<Article>, AppError> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {ARTICLE_COLS} FROM articles
-         WHERE origin='rss' AND url LIKE 'http%'
-           AND instr(content_text, char(10)) = 0
-         ORDER BY fetched_at DESC
-         LIMIT ?1"
-    ))?;
-    let rows = stmt
-        .query_map(params![limit as i64], map_article)?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
+    recent_articles_where(
+        conn,
+        "origin='rss' AND url LIKE 'http%' AND instr(content_text, char(10)) = 0",
+        limit,
+    )
 }
 
 /// Replace an article body after a successful re-extraction.

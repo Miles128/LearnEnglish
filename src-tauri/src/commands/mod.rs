@@ -40,3 +40,101 @@ where
 {
     crate::error::flatten_blocking(tauri::async_runtime::spawn_blocking(f).await)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+    use std::fs::read_dir;
+    use std::path::Path;
+
+    /// A command with no `invoke` in the frontend cannot be smoke-tested from a
+    /// running window, so "registered" and "called" are compared as text:
+    /// registered-but-uncalled is dead surface (a `lib.rs` line and an adapter
+    /// nothing exercises), called-but-unregistered fails at runtime.
+    ///
+    /// A command that legitimately has no UI yet belongs in `UNCALLED` with the
+    /// reason, so the decision is written down instead of rediscovered.
+    const UNCALLED: &[(&str, &str)] = &[];
+
+    fn ts_files(dir: &Path, found: &mut Vec<std::path::PathBuf>) {
+        for entry in read_dir(dir).expect("read frontend dir") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                ts_files(&path, found);
+            } else if matches!(
+                path.extension().and_then(|e| e.to_str()),
+                Some("ts" | "tsx")
+            ) {
+                found.push(path);
+            }
+        }
+    }
+
+    fn registered() -> BTreeSet<String> {
+        let lib = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"))
+            .expect("read lib.rs");
+        let start = lib.find("generate_handler![").expect("handler list");
+        let body = &lib[start..start + lib[start..].find("])").expect("handler list end")];
+        body.lines()
+            .filter_map(|line| {
+                let line = line.trim().trim_end_matches(',');
+                line.strip_prefix("commands::")
+                    .and_then(|rest| rest.split("::").last())
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    fn invoked() -> BTreeSet<String> {
+        static RE_INVOKE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+            regex::Regex::new(r#"invoke(?:<[^;()]{0,120}>)?\s*\(\s*"([a-z0-9_]+)""#).unwrap()
+        });
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../src");
+        let mut files = Vec::new();
+        ts_files(&root, &mut files);
+        let mut names = BTreeSet::new();
+        for file in files {
+            let source = std::fs::read_to_string(file).expect("read frontend file");
+            for cap in RE_INVOKE.captures_iter(&source) {
+                names.insert(cap[1].to_string());
+            }
+        }
+        names
+    }
+
+    #[test]
+    fn every_registered_command_has_a_frontend_call_site() {
+        let (handlers, called) = (registered(), invoked());
+        let allow: BTreeSet<String> =
+            UNCALLED.iter().map(|(name, _)| (*name).to_string()).collect();
+        let orphans: Vec<&String> = handlers
+            .difference(&called)
+            .filter(|name| !allow.contains(*name))
+            .collect();
+        assert!(orphans.is_empty(), "registered but never invoked: {orphans:?}");
+    }
+
+    #[test]
+    fn every_invoked_command_is_registered() {
+        let (handlers, called) = (registered(), invoked());
+        let missing: Vec<&String> = called.difference(&handlers).collect();
+        assert!(missing.is_empty(), "invoked but not registered: {missing:?}");
+    }
+
+    #[test]
+    fn uncalled_allowlist_is_not_stale() {
+        let (handlers, called) = (registered(), invoked());
+        for (name, reason) in UNCALLED {
+            let name = name.to_string();
+            assert!(
+                handlers.contains(&name) && !called.contains(&name),
+                "{name} is allowlisted ({reason}) but is gone or now called"
+            );
+        }
+        assert!(
+            handlers.len() > 40,
+            "only {} commands parsed out of the handler list, which is not a real read of it",
+            handlers.len()
+        );
+    }
+}

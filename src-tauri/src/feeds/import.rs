@@ -3,7 +3,9 @@
 use super::dedup::canonical_article_url;
 use super::enrich::fill_article_card_zh;
 use super::extract::extract_article_page;
-use super::filters::{is_english_article, looks_like_paywall, looks_truncated};
+use super::filters::{
+    body_defect, is_english_article, looks_like_paywall, MIN_IMPORTED_BODY_CHARS,
+};
 use super::net::HTTP;
 use crate::db::{self, Article, DbState};
 use crate::error::AppError;
@@ -45,8 +47,11 @@ pub fn import_article_from_url(db: &DbState, url: &str) -> Result<Article, AppEr
     if !is_english_article(None, &extracted.title, &extracted.text) {
         return Err("看起来不是英文文章".into());
     }
-    if looks_truncated(&extracted.text) {
-        return Err("正文疑似被截断，已跳过".into());
+    if let Some(defect) = body_defect(&extracted.text) {
+        return Err(format!("未能抽到可用正文：{}", defect.label()).into());
+    }
+    if extracted.text.chars().count() < MIN_IMPORTED_BODY_CHARS {
+        return Err("内容太短，无法作为阅读文章".into());
     }
 
     let article = Article {

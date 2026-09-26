@@ -1,12 +1,17 @@
 //! Content gates: readability, English-only, blocked content, paywall,
 //! and the RSS-vs-page body decision.
 
-use super::MIN_FULLTEXT_CHARS;
+use super::MIN_ARTICLE_WORDS;
 use std::sync::LazyLock;
 
 /// RSS bodies at or above this length are treated as full-text feeds (no page required).
 /// Shorter bodies are teasers/summaries — page fetch must succeed or the entry is skipped.
 pub(crate) const TRUST_RSS_FULLTEXT_CHARS: usize = 2000;
+
+/// Floor for a body a learner chose by hand (import by URL, or a local
+/// file). Deliberately lower than [`MIN_ARTICLE_WORDS`]: a 90-word post they
+/// pointed at is still theirs to read, while auto-ingest needs substance.
+pub(crate) const MIN_IMPORTED_BODY_CHARS: usize = 400;
 
 static RE_TAG_STRIP: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"<[^>]+>").unwrap());
@@ -69,14 +74,19 @@ pub(crate) fn rss_trust_chars(fulltext_ratio: f64) -> usize {
     }
 }
 
-/// Why a candidate body failed [`is_readable_article_body`]. The boolean gate
-/// lumps these together; the coverage audit needs them apart, because an empty
-/// client-rendered shell and a genuinely short story call for different fixes.
+/// Why a candidate page never became a library entry. The refresh pipeline
+/// folds all of these into one "too short" counter, which makes a source that
+/// needs a real browser look identical to one that is simply thin — so the
+/// coverage audit needs them apart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BodyReject {
-    /// Almost no visible text came out — a page that only fills in under JS.
+pub(crate) enum PageFailure {
+    /// Request failed or the server refused us (non-2xx, timeout, oversized body).
+    FetchFailed,
+    /// Blocked behind a subscription prompt — deliberately never ingested.
+    Paywall,
+    /// Answered fine but yielded almost no text: a client-side-rendered shell.
     Shell,
-    /// Real prose, but under the minimum length.
+    /// Real prose, under the minimum length.
     TooShort,
     /// Navigation, tag walls, or a link list.
     NavOrLinks,
@@ -84,30 +94,64 @@ pub(crate) enum BodyReject {
     Truncated,
 }
 
+impl PageFailure {
+    /// Label used in the coverage report.
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            PageFailure::FetchFailed => "抓取失败或被拒",
+            PageFailure::Paywall => "疑似付费墙",
+            PageFailure::Shell => "空壳页（正文靠脚本渲染）",
+            PageFailure::TooShort => "正文过短",
+            PageFailure::NavOrLinks => "导航或链接堆",
+            PageFailure::Truncated => "正文被截断",
+        }
+    }
+}
+
 /// Visible text below this many characters is a shell, not a short article.
 const SHELL_MAX_CHARS: usize = 200;
 
-/// Classify a rejected body. Uses the same predicates as the gate, so the two
-/// can never disagree about whether a body is acceptable.
-pub(crate) fn body_reject_reason(text: &str) -> BodyReject {
+/// What is wrong with this text *apart from length*: scaffolding, a link dump,
+/// a cut-off tail, or nothing that came out at all. Length is left to the
+/// caller because auto-ingest and a hand-picked import use different bars.
+///
+/// Everything that decides "is this body usable" goes through here, so the
+/// audit label and the real gate cannot disagree.
+pub(crate) fn body_defect(text: &str) -> Option<PageFailure> {
     if prose_char_count(text) < SHELL_MAX_CHARS {
-        return BodyReject::Shell;
+        return Some(PageFailure::Shell);
     }
     if looks_like_page_chrome(text) || is_link_or_nav_dump(text) {
-        return BodyReject::NavOrLinks;
+        return Some(PageFailure::NavOrLinks);
     }
     if looks_truncated(text) {
-        return BodyReject::Truncated;
+        return Some(PageFailure::Truncated);
     }
-    BodyReject::TooShort
+    None
 }
 
-/// Nav chrome, keyword teasers, or link lists — not a readable article.
-pub(crate) fn is_readable_article_body(text: &str) -> bool {
-    if looks_like_page_chrome(text) || is_link_or_nav_dump(text) {
-        return false;
+/// Auto-ingest verdict: `None` when the body is a real article of at least
+/// [`MIN_ARTICLE_WORDS`] words.
+pub(crate) fn body_reject_reason(text: &str) -> Option<PageFailure> {
+    match body_defect(text) {
+        Some(defect) => Some(defect),
+        None if text.split_whitespace().count() < MIN_ARTICLE_WORDS => {
+            Some(PageFailure::TooShort)
+        }
+        None => None,
     }
-    prose_char_count(text) >= MIN_FULLTEXT_CHARS
+}
+
+/// Auto-ingest acceptance bar, as a boolean.
+pub(crate) fn is_readable_article_body(text: &str) -> bool {
+    body_reject_reason(text).is_none()
+}
+
+/// An RSS body that stands as the article itself: at least `trust_chars` long
+/// for this feed, and real prose. Teasers, chrome and cut-off extracts need
+/// the article page instead.
+pub(crate) fn rss_is_full_text(rss_text: &str, trust_chars: usize) -> bool {
+    rss_text.chars().count() >= trust_chars && is_readable_article_body(rss_text)
 }
 
 fn looks_like_page_chrome(text: &str) -> bool {
@@ -232,19 +276,14 @@ fn looks_like_english(title: &str, content: &str) -> bool {
 /// Decide final article body from RSS text and an optional page extract.
 ///
 /// - Long, readable RSS (≥ [`TRUST_RSS_FULLTEXT_CHARS`]): trust as full-text.
-/// - Otherwise only accept a page extract that is real prose (not a teaser,
-///   nav/tag wall, or link dump). Never keep chrome just because it is long.
+/// - Otherwise only accept a page extract that is real prose. Never keep chrome
+///   just because it is long.
 pub(crate) fn choose_article_body(rss_text: &str, page_text: Option<&str>) -> Option<String> {
-    if rss_text.chars().count() >= TRUST_RSS_FULLTEXT_CHARS
-        && is_readable_article_body(rss_text)
-        && !looks_truncated(rss_text)
-    {
+    if rss_is_full_text(rss_text, TRUST_RSS_FULLTEXT_CHARS) {
         return Some(rss_text.to_string());
     }
     match page_text {
-        Some(page) if is_readable_article_body(page) && !looks_truncated(page) => {
-            Some(page.to_string())
-        }
+        Some(page) if is_readable_article_body(page) => Some(page.to_string()),
         _ => None,
     }
 }

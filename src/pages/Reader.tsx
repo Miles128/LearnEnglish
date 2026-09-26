@@ -35,6 +35,7 @@ import {
   translateProgressLabel,
 } from "../readerUtils";
 import {
+  ensureChunksLoaded,
   ensureLexiconLoaded,
   isCefrLevel,
   isFreqBand,
@@ -186,7 +187,7 @@ export default function Reader() {
   });
 
   useEffect(() => {
-    void ensureLexiconLoaded()
+    Promise.all([ensureLexiconLoaded(), ensureChunksLoaded()])
       .then(() => setLexReady(true))
       .catch(() => setLexReady(true));
     void api.listFeedCategories().then(setCategories).catch(() => undefined);
@@ -524,7 +525,7 @@ export default function Reader() {
     <div
       className={`page reader${reading.fullWidth ? " reader-full" : ""}`}
       ref={rootRef}
-      style={readingCssVars(reading)}
+      style={readingCssVars(reading, cfg.show_hard_word_gloss)}
     >
 
       {error && <p className="banner err">{error}</p>}
@@ -539,7 +540,6 @@ export default function Reader() {
                 learningTerms={vocabTerms}
                 knownTerms={knownTerms}
                 onHardClick={onHardWordClick}
-                showGloss={cfg.show_hard_word_gloss}
               />
             ) : (
               title

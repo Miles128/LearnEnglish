@@ -163,11 +163,27 @@ export function resolveReadingPrefs(
   };
 }
 
-export function readingCssVars(resolved: ResolvedReading): CSSProperties {
+/** 释义下挂后住在行距留白里：低于这个行高会压到下一行，开启释义时抬到它。
+ *  释义字号 = 0.55em + 2pt，16px 正文时最吃行距，故取 2.1 再叠下面的 1pt。 */
+export const GLOSS_MIN_LINE_HEIGHT = 2.1;
+
+/** 开释义时在档位/下限之上再给的绝对留白：1pt（CSS 1pt = 4/3px）。 */
+const GLOSS_LINE_HEIGHT_BONUS_PT = 4 / 3;
+
+export function readingCssVars(
+  resolved: ResolvedReading,
+  glossBelow = false,
+): CSSProperties {
+  const base = glossBelow
+    ? Math.max(resolved.lineHeight, GLOSS_MIN_LINE_HEIGHT)
+    : resolved.lineHeight;
+  // 折算成倍数而非 calc 长度：--reader-lh 保持无单位，继承到更小字号的元素
+  // （如 markdown 行内 code）仍按自身字号缩放，和改之前一致。
+  const lineHeight = base + (glossBelow ? GLOSS_LINE_HEIGHT_BONUS_PT / resolved.fontSizePx : 0);
   return {
     "--reader-font": resolved.fontFamily,
     "--reader-size": `${resolved.fontSizePx}px`,
-    "--reader-lh": String(resolved.lineHeight),
+    "--reader-lh": String(Math.round(lineHeight * 1000) / 1000),
     "--reader-measure": resolved.measure,
   } as CSSProperties;
 }

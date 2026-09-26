@@ -2,7 +2,7 @@
 
 use crate::db::{self, Article, DbState};
 use crate::error::AppError;
-use crate::feeds::{self, MIN_FULLTEXT_CHARS};
+use crate::feeds::{self, MIN_IMPORTED_BODY_CHARS};
 use chrono::Utc;
 use regex::Regex;
 use std::io::Read;
@@ -59,7 +59,7 @@ pub fn import_article_from_file(db: &DbState, path: &str) -> Result<Article, App
     .map_err(|_| AppError::msg("文件解析失败：文件损坏或格式不支持"))??;
 
     let content_text = normalize_whitespace(&content_text);
-    if content_text.chars().count() < MIN_FULLTEXT_CHARS {
+    if content_text.chars().count() < MIN_IMPORTED_BODY_CHARS {
         return Err("内容太短，无法作为阅读文章".into());
     }
 
@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(article.source, "导入");
         assert_eq!(article.category, "other");
         assert!(article.url.starts_with("file://import/"));
-        assert!(article.content_text.chars().count() >= MIN_FULLTEXT_CHARS);
+        assert!(article.content_text.chars().count() >= MIN_IMPORTED_BODY_CHARS);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

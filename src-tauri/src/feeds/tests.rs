@@ -1,4 +1,9 @@
 use super::*;
+use super::filters::{
+    body_defect, choose_article_body, is_blocked_content, is_readable_article_body,
+    looks_truncated, rss_trust_chars, MIN_IMPORTED_BODY_CHARS, PageFailure,
+    TRUST_RSS_FULLTEXT_CHARS,
+};
 use std::collections::HashSet;
 
 #[test]
@@ -544,7 +549,7 @@ fn skips_rss_summary_when_page_fetch_fails() {
     // Mid-length teaser (≥ old 400 threshold) must not be kept if page is unavailable
     // (anti-crawl / paywall / short extract).
     let teaser = "a".repeat(500);
-    assert!(teaser.chars().count() >= MIN_FULLTEXT_CHARS);
+    assert!(teaser.chars().count() >= MIN_IMPORTED_BODY_CHARS);
     assert!(teaser.chars().count() < TRUST_RSS_FULLTEXT_CHARS);
     assert!(choose_article_body(&teaser, None).is_none());
     assert!(choose_article_body(&teaser, Some("too short")).is_none());
@@ -553,8 +558,8 @@ fn skips_rss_summary_when_page_fetch_fails() {
 #[test]
 fn accepts_page_fulltext_over_rss_teaser() {
     let teaser = "teaser ".repeat(80); // ~560 chars
-    let full = "full article body ".repeat(40); // ~720 chars
-    assert!(full.chars().count() >= MIN_FULLTEXT_CHARS);
+    let full = "full article body here ".repeat(140); // 560 words
+    assert!(full.split_whitespace().count() >= MIN_ARTICLE_WORDS);
     let chosen = choose_article_body(&teaser, Some(&full)).expect("page body");
     assert_eq!(chosen, full);
 }
@@ -627,16 +632,17 @@ fn rejects_link_dump_even_when_long() {
     assert!(choose_article_body(&dump, Some(&dump)).is_none());
 }
 
+/// A short post is a real article — it just is not auto-ingest material. The
+/// learner can still import it by hand, so the structural verdict and the
+/// ingest bar are deliberately two different questions.
 #[test]
-fn keeps_short_real_prose() {
+fn short_real_prose_is_importable_but_not_auto_ingested() {
     let post = short_real_post();
-    assert!(post.chars().count() >= MIN_FULLTEXT_CHARS);
+    assert!(post.chars().count() >= MIN_IMPORTED_BODY_CHARS);
     assert!(post.chars().count() < TRUST_RSS_FULLTEXT_CHARS);
-    assert!(is_readable_article_body(&post));
-    assert_eq!(
-        choose_article_body("teaser", Some(&post)).as_deref(),
-        Some(post.as_str())
-    );
+    assert!(body_defect(&post).is_none(), "nothing wrong with its shape");
+    assert!(!is_readable_article_body(&post), "under the word bar");
+    assert!(choose_article_body("teaser", Some(&post)).is_none());
 }
 
 /// The coverage audit must tell a client-rendered shell apart from a thin
@@ -748,13 +754,13 @@ fn coverage_audit_separates_shell_pages_from_refusals() {
         assert_eq!(cov.already_stored, 0);
         assert_eq!(cov.recoverable, 1, "the real article is recoverable");
         assert_eq!(
-            cov.drops.get(extract::PageFailure::Shell.label()),
+            cov.drops.get(PageFailure::Shell.label()),
             Some(&1),
             "shell page must be attributed to rendering, not thinness: {:?}",
             cov.drops
         );
         assert_eq!(
-            cov.drops.get(extract::PageFailure::FetchFailed.label()),
+            cov.drops.get(PageFailure::FetchFailed.label()),
             Some(&1),
             "403 must be a refusal: {:?}",
             cov.drops

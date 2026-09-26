@@ -10,6 +10,7 @@ mod feeds;
 mod known;
 mod lookups;
 mod memory;
+mod sentences;
 mod translations;
 
 pub use articles::*;
@@ -17,6 +18,7 @@ pub use curated_feeds::*;
 pub use known::*;
 pub use lookups::*;
 pub use memory::*;
+pub use sentences::*;
 pub use feeds::*;
 pub use translations::*;
 
@@ -583,7 +585,7 @@ const LEGACY_COLUMN_ADDITIONS: &[&str] = &[
 /// Version-gated migrations. To add one: raise `LATEST_VERSION` and apply its
 /// DDL inside `migrate` when `stored < N`. Stamp each version with its own
 /// number (never `LATEST_VERSION`) so later steps are not skipped.
-const LATEST_VERSION: i64 = 14;
+const LATEST_VERSION: i64 = 15;
 
 pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
     let mut stored: i64 = conn
@@ -872,6 +874,25 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), AppError> {
         )?;
         conn.pragma_update(None, "user_version", 14)?;
         stored = 14;
+    }
+
+    if stored < 15 {
+        // 好句摘录：单句 + 出处快照（见 docs/superpowers/specs/
+        // 2026-09-26-saved-sentence-design.md）。不接复习链路。
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS saved_sentences (
+                id TEXT PRIMARY KEY,
+                article_id TEXT,
+                quote TEXT NOT NULL,
+                para_index INTEGER NOT NULL DEFAULT -1,
+                source_title TEXT NOT NULL DEFAULT '',
+                source_url TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_sentences_created ON saved_sentences(created_at DESC);",
+        )?;
+        conn.pragma_update(None, "user_version", 15)?;
+        stored = 15;
     }
 
     if stored < LATEST_VERSION {

@@ -45,7 +45,7 @@
 新表 `compare_cards(article_id PK, payload_json, generated_at)` —— 对照卡缓存。
 新表 `article_chunks(article_id PK, keys_json)` —— 该篇命中的词块键，供术语线统计。
 
-迁移沿用 `db/mod.rs` 现有风格：`CREATE TABLE IF NOT EXISTS`，不写回滚脚本。
+迁移沿用 `db/mod.rs` 现有风格：`user_version` 逐版推进，当前最高 14；**本设计占 v16**（v15 已让给同期排在前面的 `2026-09-26-saved-sentence-design.md`，两份计划共用一套号避免撞车）。`CREATE TABLE IF NOT EXISTS`，不写回滚。
 
 ### 3.2 归入还是新立
 

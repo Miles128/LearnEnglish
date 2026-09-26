@@ -275,20 +275,25 @@ fn looks_like_english(title: &str, content: &str) -> bool {
 
 /// Decide final article body from RSS text and an optional page extract.
 ///
-/// - Long, readable RSS (≥ [`TRUST_RSS_FULLTEXT_CHARS`]): trust as full-text.
+/// - RSS that clears this feed's own trust bar (see [`rss_trust_chars`]) is
+///   trusted as full-text and no page is needed.
 /// - Otherwise only accept a page extract that is real prose. Never keep chrome
 ///   just because it is long.
+///
+/// The bar comes from the caller on purpose: a teaser-only feed is held to a
+/// higher one, and a body that clears the generic 2000-character line but not
+/// the feed's own would otherwise throw the page we just fetched away.
 pub(crate) fn choose_article_body(rss_text: &str, page_text: Option<&str>) -> Option<String> {
-    if rss_is_full_text(rss_text, TRUST_RSS_FULLTEXT_CHARS) {
-        return Some(rss_text.to_string());
-    }
     match page_text {
         Some(page) if is_readable_article_body(page) => Some(page.to_string()),
+        // No usable page: a body that clears the ingest bar on its own is still
+        // worth reading, so a blocked page must not throw away a long RSS body.
+        _ if is_readable_article_body(rss_text) => Some(rss_text.to_string()),
         _ => None,
     }
 }
 
-/// True when stored body would be rejected as RSS-only teaser (no trusted page fulltext).
+/// Test-only: the shape of the refresh decision with the default trust bar.
 #[cfg(test)]
 pub(crate) fn is_summary_only_body(content: &str) -> bool {
     choose_article_body(content, None).is_none()

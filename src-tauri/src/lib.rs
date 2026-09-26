@@ -58,7 +58,6 @@ pub fn run() {
             commands::data::restore_database,
             commands::articles::list_articles_ranked,
             commands::articles::list_library,
-            commands::articles::list_article_sources,
             commands::articles::get_article_view,
             commands::articles::mark_article_opened,
             commands::articles::mark_article_progress,

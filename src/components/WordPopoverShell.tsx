@@ -3,7 +3,7 @@ import { normalizeKey } from "../wordLevels";
 import { isPhraseSelection } from "../wordResolve";
 import SelectionPopover, { type Popover } from "./SelectionPopover";
 
-type Props = {
+export type WordPopoverShellProps = {
   popover: Popover;
   speaking: boolean;
   speakTarget: SpeakTarget | null;
@@ -25,7 +25,7 @@ export default function WordPopoverShell({
   onAddPhrase,
   onToggleKnown,
   ...rest
-}: Props) {
+}: WordPopoverShellProps) {
   const isPhrase =
     popover.source != null && isPhraseSelection(popover.source);
   return (

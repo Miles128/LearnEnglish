@@ -155,8 +155,8 @@ pub fn config_path() -> PathBuf {
 }
 
 /// In-process config cache: paragraph-level LLM calls used to re-read the
-/// file on every command. Saves update the cache; call
-/// [`invalidate_config_cache`] to force the next load to re-read the file.
+/// file on every command. First `load_config` wins; `save_config` keeps it in
+/// step. External edits to config.local.json are only picked up on restart.
 static CONFIG_CACHE: std::sync::LazyLock<std::sync::Mutex<Option<AppConfig>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
@@ -199,15 +199,6 @@ pub fn save_config(cfg: &AppConfig) -> Result<(), AppError> {
     }
     *CONFIG_CACHE.lock().map_err(|_| AppError::Locked)? = Some(cfg.clone());
     Ok(())
-}
-
-/// Drop the cached config so the next `load_config` re-reads the file
-/// (external edits to config.local.json; ops/debug helper).
-#[allow(dead_code)]
-pub fn invalidate_config_cache() {
-    if let Ok(mut cache) = CONFIG_CACHE.lock() {
-        *cache = None;
-    }
 }
 
 #[cfg(test)]

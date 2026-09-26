@@ -13,7 +13,7 @@ use super::dedup::canonical_article_url;
 use super::extract::extract_page;
 use super::filters::{
     body_reject_reason, choose_article_body, is_blocked_content, is_english_article,
-    looks_like_paywall, rss_is_full_text, rss_trust_chars, PageFailure,
+    looks_like_paywall, looks_truncated, rss_is_full_text, rss_trust_chars, PageFailure,
 };
 use super::extract::html_to_text;
 use super::net::{ensure_public_http_url, read_limited_bytes, HTTP};
@@ -152,12 +152,16 @@ fn audit_one_feed(
             .and_then(|c| c.body)
             .or_else(|| entry.summary.map(|s| s.content))
             .unwrap_or_default();
-        let rss_text = html_to_text(&raw_html);
+        // Mirrors the refresh: same clean, same truncation check on the raw body.
+        let raw_rss = html_to_text(&raw_html);
+        let rss_text = crate::reflow::clean_body(&raw_rss);
+        let rss_trusted =
+            !looks_truncated(&raw_rss) && rss_is_full_text(&rss_text, trust_chars);
 
         // Same bar as the refresh: a full-text feed needs no page fetch. Both
         // routes converge on the gates below, exactly as the pipeline does —
         // the language and blocked-content bars apply to a trusted RSS body too.
-        let body = if rss_is_full_text(&rss_text, trust_chars) {
+        let body = if rss_trusted {
             rss_text
         } else {
             if sampled >= pages_per_feed {

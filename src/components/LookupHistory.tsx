@@ -85,8 +85,8 @@ export default function LookupHistory() {
   }
 
   return (
-    <div className="lookup-history">
-      <div className="lookup-toolbar">
+    <div>
+      <div>
         <input
           className="search"
           placeholder="搜索查过的词…"

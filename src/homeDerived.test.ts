@@ -8,9 +8,7 @@ import {
   articleListBlurb,
   articleNeedsCardZh,
   difficultyAdjustment,
-  groupBySource,
   pickTopArticles,
-  topPickIds,
   topTags,
 } from "./homeDerived";
 
@@ -89,27 +87,6 @@ describe("articleNeedsCardZh", () => {
   });
 });
 
-describe("groupBySource", () => {
-  it("keeps article order inside a source", () => {
-    const grouped = groupBySource([
-      { id: "1", source: "BBC", category: "world" },
-      { id: "2", source: "NPR", category: "world" },
-      { id: "3", source: "BBC", category: "world" },
-    ]);
-    expect(grouped.map((s) => s.source)).toEqual(["BBC", "NPR"]);
-    expect(grouped[0]?.articles.map((a) => a.id)).toEqual(["1", "3"]);
-  });
-
-  it("groups by first appearance, which is the ranked order from the backend", () => {
-    const grouped = groupBySource([
-      { id: "1", source: "CNN", category: "world" },
-      { id: "2", source: "BBC", category: "world" },
-      { id: "3", source: "CNN", category: "world" },
-    ]);
-    expect(grouped.map((s) => s.source)).toEqual(["CNN", "BBC"]);
-  });
-});
-
 describe("topTags", () => {
   it("ranks tags by frequency and caps the list", () => {
     const tags = topTags(
@@ -162,13 +139,6 @@ describe("pickTopArticles", () => {
     // world is capped at 3, so the rest of the row comes from other sections.
     expect(picks.filter((id) => id.startsWith("w"))).toHaveLength(3);
     expect(picks.some((id) => !id.startsWith("w"))).toBe(true);
-  });
-
-  it("topPickIds covers picks only", () => {
-    const picks = pickTopArticles([item("x"), item("y")], 5);
-    const ids = topPickIds(picks);
-    expect(ids.has("x")).toBe(true);
-    expect(ids.has("missing")).toBe(false);
   });
 });
 

@@ -135,19 +135,6 @@ pub fn query_articles(
     Ok(rows)
 }
 
-/// Distinct sources with article counts, busiest first (library filter).
-pub fn list_article_sources(conn: &Connection) -> Result<Vec<(String, i64)>, AppError> {
-    let mut stmt = conn
-        .prepare("SELECT source, COUNT(*) FROM articles GROUP BY source ORDER BY COUNT(*) DESC, source ASC")
-        ?;
-    let rows = stmt
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))
-        ?
-        .collect::<Result<Vec<_>, _>>()
-        ?;
-    Ok(rows)
-}
-
 pub fn map_article_list_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArticleListItem> {
     Ok(ArticleListItem {
         id: row.get("id")?,

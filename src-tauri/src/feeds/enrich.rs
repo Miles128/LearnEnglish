@@ -4,6 +4,7 @@ use crate::config::AppConfig;
 use crate::db::{self, DbState};
 use crate::error::AppError;
 use crate::vocab;
+use rusqlite::Connection;
 
 /// Articles per batch LLM request. Big enough to amortise the per-request
 /// overhead; small enough that a retry split stays cheap.
@@ -59,10 +60,21 @@ fn fill_slots<T, O>(
     fill_slots(&items[mid..], job, out, last_err);
 }
 
-pub fn fill_missing_card_zh(
+/// Shared driver for the two LLM backfills below. It batches the work, halves a
+/// batch when the model answers badly (see [`run_with_split`]), writes back each
+/// surviving row, reports progress, and gives up as soon as a whole batch comes
+/// back empty — that means the provider is down or misconfigured, so burning
+/// split-retries on the remaining chunks is pointless.
+///
+/// `write_back` reports whether it actually stored anything; that count is the
+/// job's return value.
+fn run_backfill<O>(
     db: &DbState,
     cfg: &AppConfig,
-    limit: usize,
+    label: &str,
+    missing: Vec<db::Article>,
+    mut call: impl FnMut(&[vocab::ArticleCardIn]) -> Result<Vec<O>, AppError>,
+    mut write_back: impl FnMut(&Connection, &db::Article, O) -> Result<bool, AppError>,
     mut on_progress: impl FnMut(usize, usize),
 ) -> Result<usize, AppError> {
     // Fail fast instead of splitting every batch against a dead configuration.
@@ -71,18 +83,13 @@ pub fn fill_missing_card_zh(
             "请先在设置中配置 API Key（config.local.json）",
         ));
     }
-    let missing = {
-        let conn = db.lock_read()?;
-        db::articles_missing_card_zh(&conn, limit)?
-    };
-    if missing.is_empty() {
+    let total = missing.len();
+    if total == 0 {
         on_progress(0, 0);
         return Ok(0);
     }
-
-    let total = missing.len();
-    // `done` counts summaries actually written; `processed` drives progress so
-    // a split-retrying batch still moves the bar.
+    // `done` counts rows actually written; `processed` drives progress so a
+    // split-retrying batch still moves the bar.
     let mut done = 0usize;
     let mut processed = 0usize;
     let mut last_err: Option<String> = None;
@@ -93,12 +100,11 @@ pub fn fill_missing_card_zh(
             .iter()
             .map(|a| vocab::card_from_article(&a.title, &a.content_text))
             .collect();
-        let mut job = |batch: &[vocab::ArticleCardIn]| vocab::translate_article_cards(cfg, batch);
-        let (rows, err) = run_with_split(&cards, &mut job);
+        let (rows, err) = run_with_split(&cards, &mut call);
         let usable = rows.iter().filter(|row| row.is_some()).count();
         if let Some(e) = err {
             last_err = Some(format!(
-                "简介（第 {}–{} 条）：{e}",
+                "{label}（第 {}–{} 条）：{e}",
                 processed + 1,
                 processed + cards.len()
             ));
@@ -106,27 +112,52 @@ pub fn fill_missing_card_zh(
         {
             let conn = db.lock_write()?;
             for (article, row) in chunk.iter().zip(rows) {
-                let Some(card) = row else { continue };
-                if article.summary_zh.is_empty() && !card.summary_zh.is_empty() {
-                    db::set_article_summary_zh(&conn, &article.id, &card.summary_zh)?;
+                let Some(out) = row else { continue };
+                if write_back(&conn, article, out)? {
                     done += 1;
-                }
-                if !card.tags.is_empty() {
-                    db::set_article_tags(&conn, &article.id, &card.tags)?;
                 }
             }
         }
         processed += cards.len();
         on_progress(processed, total);
-        // Nothing survived a whole batch: the provider is down / misconfigured,
-        // so stop instead of burning split-retries on every remaining chunk.
         if usable == 0 {
             return Err(AppError::msg(
-                last_err.unwrap_or_else(|| "简介生成失败".into()),
+                last_err.unwrap_or_else(|| format!("{label}生成失败")),
             ));
         }
     }
     Ok(done)
+}
+
+pub fn fill_missing_card_zh(
+    db: &DbState,
+    cfg: &AppConfig,
+    limit: usize,
+    on_progress: impl FnMut(usize, usize),
+) -> Result<usize, AppError> {
+    let missing = {
+        let conn = db.lock_read()?;
+        db::articles_missing_card_zh(&conn, limit)?
+    };
+    run_backfill(
+        db,
+        cfg,
+        "简介",
+        missing,
+        |batch: &[vocab::ArticleCardIn]| vocab::translate_article_cards(cfg, batch),
+        |conn: &Connection, article: &db::Article, card: vocab::ArticleCardOut| {
+            let wrote_summary =
+                article.summary_zh.is_empty() && !card.summary_zh.is_empty();
+            if wrote_summary {
+                db::set_article_summary_zh(conn, &article.id, &card.summary_zh)?;
+            }
+            if !card.tags.is_empty() {
+                db::set_article_tags(conn, &article.id, &card.tags)?;
+            }
+            Ok(wrote_summary)
+        },
+        on_progress,
+    )
 }
 
 /// Backfill topic tags for articles that lack them (existing library +
@@ -135,64 +166,27 @@ pub fn fill_missing_tags(
     db: &DbState,
     cfg: &AppConfig,
     limit: usize,
-    mut on_progress: impl FnMut(usize, usize),
+    on_progress: impl FnMut(usize, usize),
 ) -> Result<usize, AppError> {
-    // Fail fast instead of splitting every batch against a dead configuration.
-    if cfg.api_key.trim().is_empty() {
-        return Err(AppError::msg(
-            "请先在设置中配置 API Key（config.local.json）",
-        ));
-    }
     let missing = {
         let conn = db.lock_read()?;
         db::articles_missing_tags(&conn, limit)?
     };
-    if missing.is_empty() {
-        on_progress(0, 0);
-        return Ok(0);
-    }
-
-    let total = missing.len();
-    let mut done = 0usize;
-    let mut processed = 0usize;
-    let mut last_err: Option<String> = None;
-    on_progress(0, total);
-
-    for chunk in missing.chunks(CHUNK) {
-        let cards: Vec<vocab::ArticleCardIn> = chunk
-            .iter()
-            .map(|a| vocab::card_from_article(&a.title, &a.content_text))
-            .collect();
-        let mut job = |batch: &[vocab::ArticleCardIn]| vocab::assign_article_tags(cfg, batch);
-        let (rows, err) = run_with_split(&cards, &mut job);
-        let usable = rows.iter().filter(|row| row.is_some()).count();
-        if let Some(e) = err {
-            last_err = Some(format!(
-                "主题标签（第 {}–{} 条）：{e}",
-                processed + 1,
-                processed + cards.len()
-            ));
-        }
-        {
-            let conn = db.lock_write()?;
-            for (article, row) in chunk.iter().zip(rows) {
-                let Some(tags) = row else { continue };
-                if tags.is_empty() {
-                    continue;
-                }
-                db::set_article_tags(&conn, &article.id, &tags)?;
-                done += 1;
+    run_backfill(
+        db,
+        cfg,
+        "主题标签",
+        missing,
+        |batch: &[vocab::ArticleCardIn]| vocab::assign_article_tags(cfg, batch),
+        |conn: &Connection, article: &db::Article, tags: Vec<String>| {
+            if tags.is_empty() {
+                return Ok(false);
             }
-        }
-        processed += cards.len();
-        on_progress(processed, total);
-        if usable == 0 {
-            return Err(AppError::msg(
-                last_err.unwrap_or_else(|| "主题标签生成失败".into()),
-            ));
-        }
-    }
-    Ok(done)
+            db::set_article_tags(conn, &article.id, &tags)?;
+            Ok(true)
+        },
+        on_progress,
+    )
 }
 
 /// Translate + persist the summary card for a single article (used right

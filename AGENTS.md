@@ -30,7 +30,7 @@ src/                  React 前端
   wordLevels.ts       懒加载内置 CEFR+词频词典(word-levels.json)
   tts.ts/useTts.ts    Web Speech 朗读
 src-tauri/src/        Rust 后端
-  lib.rs              应用入口：打开 SQLite(app_data_dir) 注入 DbState(Mutex<Connection>)，注册全部 command
+  lib.rs              应用入口：打开 SQLite(app_data_dir) 注入 DbState(读写双连接)，注册全部 command
   commands/           Tauri command 薄层(articles/config/feeds/known/memory)：阻塞工作 spawn_blocking，进度走 event("refresh-progress"/"translate-progress")
   db/                 仓储层：mod(schema+migration) articles feeds curated_feeds(内置订阅源种子) translations memory(生词+短语统一表) known(已认识词)
   feeds/              RSS 管线（按职责分模块）：net(HTTP/SSRF/URL校验) filters(可读性/英文/屏蔽/付费墙) extract(页面抽取) dedup(URL/标题去重) pipeline(refresh主流程) cleanup(审计/清理/修复) enrich(翻译/标签回填) import(URL导入) tests
@@ -47,7 +47,7 @@ src-tauri/src/        Rust 后端
 ## 数据流与关键约定
 
 - 前端一律经 `api/*` invoke 后端 command；后端分层 commands → (feeds/vocab/translate/import_file 业务) → db 仓储，db 不做网络。
-- 全局单连接 SQLite，`DbState(Mutex<Connection>)`；命令内 lock 后尽快释放，网络调用不持锁。
+- 同一 WAL 库上开读写双连接，`DbState { write, read }` 各一把 Mutex；写走 `lock_write`、读走 `lock_read`（读不再排在写后面）；命令内 lock 后尽快释放，网络调用不持锁。
 - 文章幂等去重按 `url UNIQUE`，`insert_article_if_new` 冲突即跳过；RSS 旧文只在 RSS 正文可信且更长时升级。
 - 正文阈值：RSS 正文 ≥2000 字符且像可读文章才信任；否则须抓文章页。导航/关键词墙、链接列表、不足 400 字散文（MIN_FULLTEXT_CHARS）一律不入库，刷新时清掉。
 - `origin` 字段区分 rss/url/file 导入；refresh 的清理(purge)只处理 rss 来源，永不删用户导入。

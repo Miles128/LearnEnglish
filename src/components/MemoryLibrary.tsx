@@ -297,7 +297,7 @@ export default function MemoryLibrary({
             }
             return (
               <>
-                <p className="muted review-meta">
+                <p className="muted">
                   {practiceDeck ? (
                     <>
                       练习模式 · 剩余 {practiceDeck.length} 张 · 不计入复习计划{" "}

@@ -51,7 +51,7 @@ export default function Vocab() {
       </header>
       {exportMsg && <p className="muted">{exportMsg}</p>}
 
-      <div className="tabs library-switch">
+      <div className="tabs">
         {(
           [
             ["vocab", "生词"],
@@ -79,6 +79,7 @@ export default function Vocab() {
           kind="phrase"
           searchPlaceholder="搜索短语 / 释义 / 例句"
           emptyText="还没有短语。阅读时选中一串词语，点「加入短语组合」即可收藏。"
+          onChanged={() => void refreshLearningTerms()}
         />
       ) : (
         <MemoryLibrary

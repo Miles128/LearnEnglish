@@ -50,37 +50,31 @@ pub async fn list_articles_ranked(
 ) -> Result<Vec<ArticleListItem>, AppError> {
     let tags = tags.unwrap_or_default();
     crate::commands::spawn_db(app, move |state| {
-        let items = {
-            let conn = state.lock_read()?;
-            db::query_articles(
-                &conn,
-                &db::ArticleQuery {
-                    category: category.as_deref(),
-                    tags: &tags,
-                    source: source.as_deref(),
-                    read_state: if unread_only.unwrap_or(false) {
-                        db::ReadState::Unfinished
-                    } else {
-                        db::ReadState::All
-                    },
-                    liked_only: false,
+        // One snapshot for the page. These four queries used to take the read
+        // lock separately, so a refresh landing in between could rank a page
+        // against a half-updated profile.
+        let conn = state.lock_read()?;
+        let items = db::query_articles(
+            &conn,
+            &db::ArticleQuery {
+                category: category.as_deref(),
+                tags: &tags,
+                source: source.as_deref(),
+                read_state: if unread_only.unwrap_or(false) {
+                    db::ReadState::Unfinished
+                } else {
+                    db::ReadState::All
                 },
-                Some(RANK_WINDOW),
-                Some(0),
-            )?
-        };
-        let (source_opens, category_opens) = {
-            let conn = state.lock_read()?;
-            db::affinity_open_counts(&conn)?
-        };
-        let (tag_weights, tag_doc_counts, tagged_docs) = {
-            let conn = state.lock_read()?;
-            db::tag_profile(&conn)?
-        };
-        let (source_priority, category_priority_max) = {
-            let conn = state.lock_read()?;
-            (db::source_priority_map(&conn)?, db::category_priority_max(&conn)?)
-        };
+                liked_only: false,
+            },
+            Some(RANK_WINDOW),
+            Some(0),
+        )?;
+        let (source_opens, category_opens) = db::affinity_open_counts(&conn)?;
+        let (tag_weights, tag_doc_counts, tagged_docs) = db::tag_profile(&conn)?;
+        let (source_priority, category_priority_max) =
+            (db::source_priority_map(&conn)?, db::category_priority_max(&conn)?);
+        drop(conn);
         let affinity = crate::rank::Affinity::from_maps(
             source_opens,
             category_opens,
@@ -139,15 +133,6 @@ pub async fn list_library(
         )
     })
     .await
-}
-
-/// Distinct sources with counts for the library source filter.
-#[tauri::command]
-pub fn list_article_sources(
-    state: tauri::State<'_, DbState>,
-) -> Result<Vec<(String, i64)>, AppError> {
-    let conn = state.lock_read()?;
-    db::list_article_sources(&conn)
 }
 
 /// One-off translation without article caching (used outside the reader,

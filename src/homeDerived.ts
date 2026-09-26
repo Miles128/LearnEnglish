@@ -1,7 +1,7 @@
 import type { ArticleListItem } from "./api/types";
 import type { DifficultyLevel } from "./difficulty";
 
-// Home 列表的全部派生逻辑：摘要/长度标签、按来源分组、标签栏、
+// Home 列表的全部派生逻辑：摘要/长度标签、标签栏、
 // 今日推荐、难度加权排序。保持纯函数，供 Home / ArticleRow 消费。
 
 /** Titles stay English now — only the Chinese synopsis is generated. */
@@ -26,24 +26,6 @@ export function articleLengthLabel(wordCount: number): string {
   if (wordCount < 1800) return "长";
   if (wordCount < 3000) return "很长";
   return "极长";
-}
-
-/** Group articles into per-source sections, preserving first appearance
- * order — the backend hands the list over already interest-ranked. */
-export function groupBySource<
-  T extends { source: string; category: string },
->(articles: T[]): { source: string; category: string; articles: T[] }[] {
-  const map = new Map<string, { source: string; category: string; articles: T[] }>();
-  for (const a of articles) {
-    const key = a.source || "其他";
-    let sec = map.get(key);
-    if (!sec) {
-      sec = { source: key, category: a.category, articles: [] };
-      map.set(key, sec);
-    }
-    sec.articles.push(a);
-  }
-  return Array.from(map.values());
 }
 
 /** Tag chips shown in the filter row: most frequent first, capped. */
@@ -93,11 +75,6 @@ export function pickTopArticles(
     if (picks.length >= max) break;
   }
   return picks;
-}
-
-/** Ids of top picks, used to keep source boards duplicate-free. */
-export function topPickIds(picks: ArticleListItem[]): Set<string> {
-  return new Set(picks.map((p) => p.id));
 }
 
 /**

@@ -14,7 +14,7 @@ import {
   difficultyLabel,
   type DifficultyLevel,
 } from "../difficulty";
-import { useAppConfig, useShell, useVocab } from "../store";
+import { useAppConfig, useSearchQuery, useShell, useVocab } from "../store";
 import { useToast } from "../components/Toaster";
 import { emitEvent, onEvent } from "../events";
 import {
@@ -27,7 +27,6 @@ import {
 import ArticleRow from "../components/ArticleRow";
 import { lastArticlePath } from "../useArticle";
 import WordPopoverShell from "../components/WordPopoverShell";
-import { createKnownToggle } from "../knownWords";
 import {
   bundledGloss,
   cachedTranslation,
@@ -89,14 +88,13 @@ export default function Home() {
   const {
     selectedTags,
     publishAvailableTags,
-    query,
-    setQuery,
     rerankNonce,
     filtersOpen,
     focusSource,
     setFocusSource,
     publishTopPickSources,
   } = useShell();
+  const { query, setQuery } = useSearchQuery();
   /** Archive filters (merged in from the old Library page). */
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const patchFilters = useCallback(
@@ -119,7 +117,6 @@ export default function Home() {
     unmarkKnown,
   } = useVocab();
   const tts = useTts();
-  const { speaking, speakTarget } = tts;
   const freqBand: FreqBand = isFreqBand(cfg.freq_band) ? cfg.freq_band : 3000;
   const cefrLevel: CefrLevel = isCefrLevel(cfg.cefr_level)
     ? cfg.cefr_level
@@ -362,14 +359,7 @@ export default function Home() {
   }, [load, toast]);
 
   // Selection-to-translate on the home list (titles / summaries).
-  const {
-    popover,
-    closePopover,
-    showMeaning,
-    speakWord,
-    addToVocab,
-    addToPhrase,
-  } = useWordPopover({
+  const { popover, showMeaning, mount: popoverMount } = useWordPopover({
     articleId: null,
     tts,
     localGloss: (term) => bundledGloss(term) ?? cachedTranslation(term),
@@ -382,6 +372,9 @@ export default function Home() {
     onError: (m) => toast.err(m),
     onSuccess: (m) => toast.ok(m),
     onVocabAdded: () => void refreshLearningTerms(),
+    knownTerms,
+    markKnown,
+    unmarkKnown,
   });
 
   // Keyboard flow (j/k/Enter/o): navigate exactly what is on screen.
@@ -456,17 +449,6 @@ export default function Home() {
     }
     await showMeaning({ text, x: e.clientX, y: e.clientY });
   }
-
-  const toggleKnown = useMemo(
-    () =>
-      createKnownToggle({
-        knownTerms,
-        markKnown,
-        unmarkKnown,
-        onError: (m) => toast.err(m),
-      }),
-    [knownTerms, markKnown, unmarkKnown, toast],
-  );
 
   const resumePath = lastArticlePath();
 
@@ -662,22 +644,10 @@ export default function Home() {
         </>
       )}
 
-      {popover && (
-        <WordPopoverShell
-          popover={popover}
-          speaking={speaking}
-          speakTarget={speakTarget}
-          knownTerms={knownTerms}
-          onSpeakWord={speakWord}
-          onAddVocab={() => void addToVocab()}
-          onAddPhrase={() => void addToPhrase()}
-          onToggleKnown={(term) => void toggleKnown(term)}
-          onClose={closePopover}
-        />
-      )}
+      {popoverMount && <WordPopoverShell {...popoverMount} />}
 
       {hasMore && (
-        <div ref={sentinelRef} className="load-more-row">
+        <div ref={sentinelRef}>
           {loadingMore && <p className="muted">加载中…</p>}
         </div>
       )}

@@ -20,70 +20,41 @@ impl Rating {
     }
 }
 
-/// The spaced-repetition fields shared by vocab items and phrases.
-pub struct SrsFields<'a> {
-    pub status: &'a mut String,
-    pub interval_days: &'a mut f64,
-    pub reps: &'a mut i64,
-    pub consecutive_know: &'a mut i64,
-    pub next_review_at: &'a mut String,
-}
-
 /// Simplified SRS: again ~10m, hard 1d, easy 1→7→14 days.
 /// Mastered when 3 *consecutive* easy ratings reach the 14-day step: any
 /// again/hard rating resets the streak. (PRD requires "3 consecutive easy
 /// ratings reaching the 14-day step", so the ladder has 3 steps.)
-pub fn apply_rating_fields(fields: SrsFields<'_>, rating: Rating) {
-    let SrsFields {
-        status,
-        interval_days,
-        reps,
-        consecutive_know,
-        next_review_at,
-    } = fields;
-    *reps += 1;
+pub fn apply_rating(item: &mut MemoryItem, rating: Rating) {
+    item.reps += 1;
     let now = Utc::now();
     match rating {
         Rating::Again => {
-            *consecutive_know = 0;
-            *interval_days = 0.0;
-            *next_review_at = (now + Duration::minutes(10)).to_rfc3339();
+            item.consecutive_know = 0;
+            item.interval_days = 0.0;
+            item.next_review_at = (now + Duration::minutes(10)).to_rfc3339();
         }
         Rating::Hard => {
             // Gentle reminder: schedule tomorrow, but a fuzzy recall is not
             // an easy one — the consecutive-easy streak restarts.
-            *consecutive_know = 0;
-            *interval_days = 1.0;
-            *next_review_at = (now + Duration::days(1)).to_rfc3339();
+            item.consecutive_know = 0;
+            item.interval_days = 1.0;
+            item.next_review_at = (now + Duration::days(1)).to_rfc3339();
         }
         Rating::Easy => {
-            *consecutive_know += 1;
-            let next = match *interval_days {
+            item.consecutive_know += 1;
+            let next = match item.interval_days {
                 x if x < 1.0 => 1.0,
                 x if x < 7.0 => 7.0,
                 _ => 14.0,
             };
-            *interval_days = next;
-            *next_review_at = (now + Duration::days(next as i64)).to_rfc3339();
+            item.interval_days = next;
+            item.next_review_at = (now + Duration::days(next as i64)).to_rfc3339();
             // PRD: 3 consecutive easy ratings reaching the 14-day step → mastered.
-            if *consecutive_know >= 3 && (next - 14.0).abs() < f64::EPSILON {
-                *status = "mastered".into();
+            if item.consecutive_know >= 3 && (next - 14.0).abs() < f64::EPSILON {
+                item.status = "mastered".into();
             }
         }
     }
-}
-
-pub fn apply_rating(item: &mut MemoryItem, rating: Rating) {
-    apply_rating_fields(
-        SrsFields {
-            status: &mut item.status,
-            interval_days: &mut item.interval_days,
-            reps: &mut item.reps,
-            consecutive_know: &mut item.consecutive_know,
-            next_review_at: &mut item.next_review_at,
-        },
-        rating,
-    );
 }
 
 #[cfg(test)]

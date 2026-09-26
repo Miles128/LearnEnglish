@@ -9,12 +9,6 @@ export function formatLearningInsight(stats: LearningStats): string {
   return parts.join(" · ");
 }
 
-/** Compact top source/category for the Home insight line. */
-export function formatTopSource(stats: LearningStats): string | null {
-  if (stats.top_source) return `常读 ${stats.top_source}`;
-  return null;
-}
-
 /** Whether an article counts as read for learning stats. */
 export function articleIsRead(article: { read_completed?: number | boolean }): boolean {
   return Boolean(article.read_completed);

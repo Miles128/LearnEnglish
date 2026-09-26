@@ -18,7 +18,6 @@ import {
 import { AnnotatedPara } from "../annotateText";
 import { bundledGloss, rememberTranslation } from "../wordResolve";
 import WordPopoverShell from "../components/WordPopoverShell";
-import { createKnownToggle } from "../knownWords";
 import ReaderTypePanel from "../components/ReaderTypePanel";
 import ReaderParagraph from "../components/ReaderParagraph";
 import { useEscapeKey } from "../useEscapeKey";
@@ -160,15 +159,7 @@ export default function Reader() {
     [cfg.cefr_level, cfg.freq_band],
   );
   const reading: ResolvedReading = useMemo(() => resolveReadingPrefs(cfg), [cfg]);
-  const {
-    popover,
-    setPopover,
-    closePopover,
-    showMeaning,
-    speakWord,
-    addToVocab,
-    addToPhrase,
-  } = useWordPopover({
+  const { setPopover, showMeaning, mount: popoverMount } = useWordPopover({
     articleId: id ?? null,
     tts,
     localGloss: (term) => lookupWord(term)?.zh ?? bundledGloss(term),
@@ -184,6 +175,9 @@ export default function Reader() {
     onError: (m) => setError(m),
     onSuccess: (m) => wordToast.ok(m),
     onVocabAdded: () => void refreshLearningTerms(),
+    knownTerms,
+    markKnown,
+    unmarkKnown,
   });
 
   useEffect(() => {
@@ -494,17 +488,6 @@ export default function Reader() {
     await showMeaning({ text, x: e.clientX, y: e.clientY });
   }
 
-  const toggleKnown = useMemo(
-    () =>
-      createKnownToggle({
-        knownTerms,
-        markKnown,
-        unmarkKnown,
-        onError: (m) => setError(m),
-      }),
-    [knownTerms, markKnown, unmarkKnown, setError],
-  );
-
   if (view !== "ready" || !article) {
     return (
       <div className="page">
@@ -654,19 +637,7 @@ export default function Reader() {
         </div>
       )}
 
-      {popover && (
-        <WordPopoverShell
-          popover={popover}
-          speaking={speaking}
-          speakTarget={speakTarget}
-          knownTerms={knownTerms}
-          onSpeakWord={speakWord}
-          onAddVocab={() => void addToVocab()}
-          onAddPhrase={() => void addToPhrase()}
-          onToggleKnown={(term) => void toggleKnown(term)}
-          onClose={closePopover}
-        />
-      )}
+      {popoverMount && <WordPopoverShell {...popoverMount} />}
     </div>
   );
 }

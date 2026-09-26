@@ -9,46 +9,62 @@ import type {
   TranslationRow,
 } from "./types";
 
+/** Read-state filter; mirrors the backend's `ReadState`. */
+type ReadStateFilter = "all" | "unfinished" | "unread" | "reading" | "read";
+
+/**
+ * Filter shared by both list commands — one place to add a field, instead of
+ * repeating the backend's query struct in every caller.
+ */
+export type ArticleFilter = {
+  category?: string;
+  tags?: string[];
+  source?: string;
+  limit?: number;
+  offset?: number;
+};
+
+/**
+ * Tauri deserializes an absent argument as `None`, but the empty tag list must
+ * not reach the SQL as a filter that matches nothing, so tags are normalized
+ * here once rather than at each call site.
+ */
+function filterArgs(filter: ArticleFilter) {
+  return {
+    category: filter.category ?? null,
+    tags: filter.tags && filter.tags.length > 0 ? filter.tags : null,
+    source: filter.source ?? null,
+    limit: filter.limit ?? null,
+    offset: filter.offset ?? null,
+  };
+}
+
 export const apiArticles = {
+  /** Interest-ranked digest window (home). */
   listArticlesRanked: (
-    category?: string,
-    tags?: string[],
-    source?: string,
-    unreadOnly?: boolean,
-    limit?: number,
-    offset?: number,
-    cursor?: { score: number; id: string } | null,
+    filter: ArticleFilter & {
+      unreadOnly?: boolean;
+      cursor?: { score: number; id: string } | null;
+    },
   ) =>
     invoke<ArticleListItem[]>("list_articles_ranked", {
-      category: category ?? null,
-      tags: tags && tags.length > 0 ? tags : null,
-      source: source ?? null,
-      unreadOnly: unreadOnly ?? null,
-      limit: limit ?? null,
-      offset: offset ?? null,
-      cursorScore: cursor?.score ?? null,
-      cursorId: cursor?.id ?? null,
+      ...filterArgs(filter),
+      unreadOnly: filter.unreadOnly ?? null,
+      cursorScore: filter.cursor?.score ?? null,
+      cursorId: filter.cursor?.id ?? null,
     }),
-  listLibrary: (filters: {
-    category?: string;
-    tags?: string[];
-    source?: string;
-    readState?: "all" | "unfinished" | "unread" | "reading" | "read";
-    likedOnly?: boolean;
-    limit?: number;
-    offset?: number;
-  }) =>
+  /** Plain newest-first library list with the full filter set. */
+  listLibrary: (
+    filter: ArticleFilter & {
+      readState?: ReadStateFilter;
+      likedOnly?: boolean;
+    },
+  ) =>
     invoke<ArticleListItem[]>("list_library", {
-      category: filters.category ?? null,
-      tags: filters.tags && filters.tags.length > 0 ? filters.tags : null,
-      source: filters.source ?? null,
-      readState: filters.readState ?? null,
-      likedOnly: filters.likedOnly ?? null,
-      limit: filters.limit ?? null,
-      offset: filters.offset ?? null,
+      ...filterArgs(filter),
+      readState: filter.readState ?? null,
+      likedOnly: filter.likedOnly ?? null,
     }),
-  listArticleSources: () =>
-    invoke<[string, number][]>("list_article_sources"),
   fillMissingTags: (limit?: number) =>
     invoke<number>("fill_missing_tags", { limit: limit ?? null }),
   getArticleView: (id: string) =>

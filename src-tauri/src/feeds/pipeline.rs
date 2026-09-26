@@ -10,7 +10,7 @@ use super::enrich::{fill_missing_card_zh, fill_missing_tags, CARDS_PER_REFRESH, 
 use super::extract::{fetch_article_page, html_to_text};
 use super::filters::{
     choose_article_body, is_blocked_content, is_english_article, looks_like_paywall,
-    rss_is_full_text, rss_trust_chars,
+    looks_truncated, rss_is_full_text, rss_trust_chars,
 };
 use super::net::{ensure_public_http_url, read_limited_bytes, HTTP};
 use crate::config::AppConfig;
@@ -76,6 +76,86 @@ pub(crate) struct FeedDownload {
     etag: Option<String>,
     /// Server answered 304 Not-Modified — nothing to parse or insert.
     unchanged: bool,
+}
+
+/// The refresh result every worker reports into.
+type Shared<'a> = std::sync::Mutex<&'a mut RefreshResult>;
+
+/// Record one feed's failure and carry on: a dead or misbehaving source must
+/// not take the other feeds' downloads down with it.
+fn note_failure(shared: &Shared<'_>, feed_name: &str, error: impl std::fmt::Display) {
+    shared
+        .lock()
+        .expect("refresh lock")
+        .errors
+        .push(format!("{feed_name}: {error}"));
+}
+
+/// Insert a feed's new articles, one transaction per [`WRITE_BATCH_SIZE`] chunk.
+/// The write lock is released between chunks so one feed cannot starve readers
+/// or the other workers; inside a chunk SQLite fsyncs once instead of once per
+/// article, and a mid-chunk failure rolls that whole chunk back — the next
+/// refresh re-fetches it.
+///
+/// `Err` means stop writing this feed; everything committed so far stays.
+fn persist_articles(
+    db: &DbState,
+    shared: &Shared<'_>,
+    articles: &[Article],
+    known_urls: &std::sync::Mutex<HashSet<String>>,
+    title_index: &std::sync::Mutex<TitleIndex>,
+    stats: &mut DownloadStats,
+) -> Result<(), AppError> {
+    for chunk in articles.chunks(WRITE_BATCH_SIZE) {
+        let conn = db.lock_write()?;
+        let tx = conn.unchecked_transaction()?;
+        for article in chunk {
+            if title_index
+                .lock()
+                .expect("title index lock")
+                .is_dup(&article.title)
+            {
+                stats.skipped_duplicate += 1;
+                continue;
+            }
+            match db::insert_article_if_new(&tx, article) {
+                Ok(true) => {
+                    known_urls
+                        .lock()
+                        .expect("known urls lock")
+                        .insert(article.url.clone());
+                    title_index
+                        .lock()
+                        .expect("title index lock")
+                        .insert(&article.title);
+                    shared.lock().expect("refresh lock").added_or_updated += 1;
+                }
+                Ok(false) => stats.skipped_existing += 1,
+                Err(e) => return Err(e),
+            }
+        }
+        tx.commit()?;
+    }
+    Ok(())
+}
+
+/// Upgrade the stored body of articles already in the library, again as a
+/// single transaction. A per-update error used to be swallowed while the loop
+/// carried on, which is not something a transaction can report honestly.
+fn persist_updates(
+    db: &DbState,
+    shared: &Shared<'_>,
+    updates: &[Article],
+) -> Result<(), AppError> {
+    let conn = db.lock_write()?;
+    let tx = conn.unchecked_transaction()?;
+    for update in updates {
+        if db::refresh_article_content(&tx, update)? {
+            shared.lock().expect("refresh lock").updated += 1;
+        }
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -232,98 +312,46 @@ pub fn refresh_feeds(
                         if download.unchanged {
                             (shared.lock().expect("refresh lock")).feeds_unchanged += 1;
                         }
+                        let mut stats = download.stats;
+                        let insert_ok = match persist_articles(
+                            db,
+                            &shared,
+                            &download.articles,
+                            &known_urls,
+                            &title_index,
+                            &mut stats,
+                        ) {
+                            Ok(()) => true,
+                            Err(e) => {
+                                ok = false;
+                                note_failure(&shared, &feed.name, e);
+                                false
+                            }
+                        };
+                        // Body upgrades only rewrite rows the insert phase left
+                        // alone, so a failed insert means a stale picture.
+                        if insert_ok && !download.updates.is_empty() {
+                            if let Err(e) = persist_updates(db, &shared, &download.updates) {
+                                ok = false;
+                                note_failure(&shared, &feed.name, e);
+                            }
+                        }
+                        if stats.evaluated > 0 {
+                            ratio =
+                                Some(stats.rss_fulltext_hits as f64 / stats.evaluated as f64);
+                        }
                         {
-                            let stats = download.stats;
-                            let mut stats = stats;
-                                    // Insert in small batches, releasing the
-                                    // write lock between batches so one feed's
-                                    // download cannot starve readers or the
-                                    // other refresh workers.
-                                    let mut write_ok = true;
-                                    'batches: for chunk in
-                                        download.articles.chunks(WRITE_BATCH_SIZE)
-                                    {
-                                        let conn = match db.lock_write() {
-                                            Err(e) => {
-                                                ok = false;
-                                                (shared.lock().expect("refresh lock"))
-                                                    .errors
-                                                    .push(format!("{}: {e}", feed.name));
-                                                write_ok = false;
-                                                break 'batches;
-                                            }
-                                            Ok(conn) => conn,
-                                        };
-                                        for article in chunk {
-                                            if title_index
-                                                .lock()
-                                                .expect("title index lock")
-                                                .is_dup(&article.title)
-                                            {
-                                                stats.skipped_duplicate += 1;
-                                                continue;
-                                            }
-                                            match db::insert_article_if_new(&conn, article) {
-                                                Ok(true) => {
-                                                    known_urls
-                                                        .lock()
-                                                        .expect("known urls lock")
-                                                        .insert(article.url.clone());
-                                                    title_index
-                                                        .lock()
-                                                        .expect("title index lock")
-                                                        .insert(&article.title);
-                                                    (shared.lock().expect("refresh lock"))
-                                                        .added_or_updated += 1;
-                                                }
-                                                Ok(false) => {
-                                                    stats.skipped_existing += 1;
-                                                }
-                                                Err(e) => {
-                                                    ok = false;
-                                                    (shared.lock().expect("refresh lock"))
-                                                        .errors
-                                                        .push(format!("{}: {e}", feed.name));
-                                                    write_ok = false;
-                                                    break 'batches;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if write_ok {
-                                        match db.lock_write() {
-                                            Err(e) => {
-                                                ok = false;
-                                                (shared.lock().expect("refresh lock"))
-                                                    .errors
-                                                    .push(format!("{}: {e}", feed.name));
-                                            }
-                                            Ok(conn) => {
-                                                for update in &download.updates {
-                                                    if let Ok(true) =
-                                                        db::refresh_article_content(&conn, update)
-                                                    {
-                                                        (shared.lock().expect("refresh lock"))
-                                                            .updated += 1;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if stats.evaluated > 0 {
-                                        ratio = Some(
-                                            stats.rss_fulltext_hits as f64
-                                                / stats.evaluated as f64,
-                                        );
-                                    }
-                                    let mut result = shared.lock().expect("refresh lock");
-                                    result.skipped_existing +=
-                                        stats.skipped_existing + stats.skipped_old;
-                                    result.skipped_short += stats.skipped_short;
-                                    result.skipped_non_english += stats.skipped_non_english;
-                                    result.skipped_duplicate += stats.skipped_duplicate;
+                            let mut result = shared.lock().expect("refresh lock");
+                            result.skipped_existing += stats.skipped_existing + stats.skipped_old;
+                            result.skipped_short += stats.skipped_short;
+                            result.skipped_non_english += stats.skipped_non_english;
+                            result.skipped_duplicate += stats.skipped_duplicate;
                         }
                         match db.lock_write() {
+                            Err(e) => {
+                                ok = false;
+                                note_failure(&shared, &feed.name, e);
+                            }
                             Ok(conn) => {
                                 if let Err(e) = db::set_feed_refresh_meta(
                                     &conn,
@@ -333,24 +361,14 @@ pub fn refresh_feeds(
                                     ratio,
                                 ) {
                                     ok = false;
-                                    (shared.lock().expect("refresh lock"))
-                                        .errors
-                                        .push(format!("{}: {e}", feed.name));
+                                    note_failure(&shared, &feed.name, e);
                                 }
-                            }
-                            Err(e) => {
-                                ok = false;
-                                (shared.lock().expect("refresh lock"))
-                                    .errors
-                                    .push(format!("{}: {e}", feed.name));
                             }
                         }
                     }
                     Err(e) => {
                         ok = false;
-                        (shared.lock().expect("refresh lock"))
-                            .errors
-                            .push(format!("{}: {e}", feed.name));
+                        note_failure(&shared, &feed.name, e);
                     }
                 }
                 if ok {
@@ -526,7 +544,17 @@ fn download_feed_articles(
             .or_else(|| entry.summary.map(|s| s.content))
             .unwrap_or_default();
 
-        let rss_text = html_to_text(&raw_html);
+        // Clean before anything measures it: the appended link-reference block
+        // is page furniture, and counting it as prose let a 250-word story with a
+        // 150-word definition wall pass the ingest bar. reflow() cleans again on
+        // display, which is idempotent.
+        let raw_rss = html_to_text(&raw_html);
+        let rss_text = crate::reflow::clean_body(&raw_rss);
+        // Cleaning removes a standalone "Continue reading" line, which is the
+        // very evidence the truncation gate reads — so that one check runs on
+        // the body as it came from the feed.
+        let rss_trusted =
+            !looks_truncated(&raw_rss) && rss_is_full_text(&rss_text, trust_chars);
 
         // Already downloaded — only upgrade when the RSS body itself is now
         // trusted full-text AND meaningfully longer than what we stored.
@@ -540,7 +568,7 @@ fn download_feed_articles(
         if is_known {
             let stored_len = known_lengths.get(&url).copied().unwrap_or(0);
             stats.evaluated += 1;
-            if rss_is_full_text(&rss_text, trust_chars) && rss_text.chars().count() > stored_len {
+            if rss_trusted && rss_text.chars().count() > stored_len {
                 // Two parallel workers can see the same URL from different
                 // feeds; only the first upgrade wins.
                 let mut upgraded = upgraded.lock().map_err(|_| "upgraded set poisoned")?;
@@ -570,11 +598,11 @@ fn download_feed_articles(
             continue;
         }
 
-        // Full-text RSS can be trusted; teaser / chrome / tag-wall / truncated /
-        // too-thin bodies must fetch the article page. If the page is also
-        // junk, skip. Both branches are already past [`MIN_ARTICLE_WORDS`] —
-        // that bar lives inside the gate, so there is no second copy here.
-        let content_text = if rss_is_full_text(&rss_text, trust_chars) {
+        // Trusted RSS needs no page fetch; teaser / chrome / tag-wall /
+        // truncated / too-thin bodies do. If the page is also junk, skip. Both
+        // branches are already past [`MIN_ARTICLE_WORDS`] — that bar lives
+        // inside the gate, so there is no second copy here.
+        let content_text = if rss_trusted {
             stats.evaluated += 1;
             stats.rss_fulltext_hits += 1;
             rss_text

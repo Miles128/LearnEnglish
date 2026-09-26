@@ -200,12 +200,6 @@ body.is-resizing {
   color: var(--muted);
 }
 
-.sidebar-hint {
-  font-size: 10pt;
-  color: var(--muted);
-  opacity: 0.7;
-}
-
 .sidebar-clear {
   appearance: none;
   border: none;
@@ -642,7 +636,6 @@ body.is-sorting {
   letter-spacing: 0.01em;
 }
 
-
 .page-header {
   display: flex;
   justify-content: space-between;
@@ -655,7 +648,6 @@ body.is-sorting {
   align-items: center;
   margin-bottom: 14px;
 }
-
 
 .reader-heading {
   margin-bottom: 22px;
@@ -814,7 +806,6 @@ body.is-sorting {
 
 /* Locked first row: refresh + search + insight + 继续阅读 stay put.
    与阅读页标题栏同一配方：全宽贴死顶栏与两侧，不悬浮。 */
-.home-tabs,
 .home-toolbar {
   display: flex;
   align-items: center;
@@ -1038,18 +1029,6 @@ body.is-sorting {
   margin-left: auto;
 }
 
-/* Small caption before the tag chips inside the conditions row. */
-.filter-label {
-  color: var(--muted);
-  font-size: 10pt;
-}
-
-/* +N / 收起 expander for overflow tag chips. */
-.tag-more {
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
 .tag-chip {
   appearance: none;
   border: 1px solid var(--line);
@@ -1091,11 +1070,6 @@ body.is-sorting {
   background: var(--panel);
   border-color: var(--line);
   color: var(--ink);
-}
-
-/* Home first row (category tabs): ~20% shorter than the default .tab. */
-.home-tabs .tab {
-  padding: 5px 12px;
 }
 
 .banner {
@@ -1215,83 +1189,6 @@ body.is-sorting {
   background: #c0453b;
 }
 
-
-.source-boards {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-/* Row above the boards: source count + 全部折叠/全部展开. */
-.boards-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: -8px;
-  font-size: 0.85rem;
-}
-
-.boards-toolbar .linklike {
-  font-size: 0.85rem;
-}
-
-.source-board-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  width: 100%;
-  margin: 0 0 12px;
-  padding: 4px 0 8px;
-  border: none;
-  border-bottom: 1px solid var(--line);
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.source-board-head:hover h2 {
-  color: var(--accent);
-}
-
-.source-board-head:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
-
-.source-board-head[aria-expanded="false"] {
-  margin-bottom: 0;
-}
-
-.source-board-chevron {
-  display: inline-block;
-  flex-shrink: 0;
-  width: 0.9em;
-  color: var(--muted);
-  font-size: 0.85rem;
-  line-height: 1;
-  transform: rotate(0deg);
-  transition: transform 0.15s ease;
-}
-
-.source-board-head[aria-expanded="false"] .source-board-chevron {
-  transform: rotate(-90deg);
-}
-
-.source-board-head h2 {
-  margin: 0;
-  font-size: 1.25rem;
-}
-
-.article-meta {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
 .pill {
   display: inline-flex;
   align-items: center;
@@ -1304,12 +1201,6 @@ body.is-sorting {
 
 .pill.inline {
   margin-top: 8px;
-}
-
-.snippet {
-  margin: 0;
-  color: var(--muted);
-  line-height: 1.5;
 }
 
 .article-summary-zh {
@@ -2067,22 +1958,6 @@ button.flashcard {
   gap: 16px;
 }
 
-.feeds-drawer-root {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  justify-content: flex-end;
-}
-
-.feeds-drawer-backdrop {
-  position: absolute;
-  inset: 0;
-  border: 0;
-  background: color-mix(in srgb, var(--ink) 30%, transparent);
-  cursor: pointer;
-}
-
 .feeds-drawer {
   position: relative;
   width: min(440px, 100%);
@@ -2097,32 +1972,18 @@ button.flashcard {
   gap: 16px;
 }
 
-.feeds-drawer-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.feeds-drawer-head h2 {
-  margin: 0 0 4px;
-  font-size: 1.35rem;
-}
-
 .feeds-cat-row {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.feeds-add-cat,
 .feeds-paste {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.feeds-add-cat input,
 .feeds-paste input {
   flex: 1 1 140px;
   min-width: 0;
@@ -2264,7 +2125,6 @@ button.flashcard {
     margin-inline: calc(clamp(1rem, 5vw, 1.5rem) * -1);
     padding-inline: clamp(1rem, 5vw, 1.5rem);
   }
-  .home-tabs,
   .home-toolbar {
     margin-inline: calc(var(--page-pad-x, 16px) * -1);
     padding-inline: var(--page-pad-x, 16px);
@@ -2289,7 +2149,6 @@ button.flashcard {
   font-size: var(--home-title);
 }
 
-.home-tabs .tab,
 .article-summary-zh,
 .article-row-source,
 .article-list .article-tags,
@@ -2424,7 +2283,6 @@ button.flashcard {
   gap: 6px;
 }
 
-
 /* ManageFeeds: inline category add, compact feed rows, collapsible add block. */
 .feeds-cat-row {
   display: flex;
@@ -2541,7 +2399,7 @@ button.flashcard {
 }
 
 /* Pages with a back button: lock the first row under the topbar while
-   scrolling (same sticky recipe as .home-tabs). Settings folds its back
+   scrolling (same sticky recipe as .home-toolbar). Settings folds its back
    button into the tab row (.header-tabs); Vocab/Stats use .page-header-slim;
    Placement phases use .page-header inside .placement-page. */
 .page-header-slim,

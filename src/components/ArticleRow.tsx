@@ -32,7 +32,7 @@ export default function ArticleRow({
   const lengthLabel = articleLengthLabel(article.word_count);
   const read = articleIsRead(article);
   return (
-    <li className="article-row-li" data-article-row={article.id}>
+    <li data-article-row={article.id}>
       <Link
         to={`/article/${article.id}`}
         className={`article-row${read ? " is-read" : ""}${highlighted ? " is-active" : ""}`}

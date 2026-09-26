@@ -1,8 +1,10 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import type { WordPopoverShellProps } from "./components/WordPopoverShell";
 import type { Popover } from "./components/SelectionPopover";
 import type { SpeakTarget } from "./useTts";
 import { useEscapeKey } from "./useEscapeKey";
+import { createKnownToggle } from "./knownWords";
 import { ensureDetailsLoaded, lookupDetail, prepareLookup } from "./wordResolve";
 
 type TtsState = {
@@ -26,6 +28,10 @@ export type WordPopoverConfig = {
   /** Success feedback (e.g. 已加入生词库); hosts usually route this to useToast(). */
   onSuccess?: (message: string) => void;
   onVocabAdded?: () => void;
+  /** 已认识词库与其增删：浮窗的「认识 / 不认识」开关，两个页面同一份。 */
+  knownTerms: string[];
+  markKnown: (term: string) => Promise<void>;
+  unmarkKnown: (term: string) => Promise<void>;
 };
 
 /**
@@ -138,6 +144,35 @@ export function useWordPopover(config: WordPopoverConfig) {
     }
   }, [popover]);
 
+  // Both pages keep their own popover wiring alive: one shared 已认识 toggle
+  // and one prop bundle ready to spread into the shell, so a new host cannot
+  // forget one of the nine callbacks.
+  const { knownTerms, markKnown, unmarkKnown } = config;
+  const toggleKnown = useMemo(
+    () =>
+      createKnownToggle({
+        knownTerms,
+        markKnown,
+        unmarkKnown,
+        onError: (m) => cfg.current.onError(m),
+      }),
+    [knownTerms, markKnown, unmarkKnown],
+  );
+
+  const mount: WordPopoverShellProps | null = popover
+    ? {
+        popover,
+        speaking: config.tts.speaking,
+        speakTarget: config.tts.speakTarget,
+        knownTerms,
+        onSpeakWord: speakWord,
+        onAddVocab: () => void addToVocab(),
+        onAddPhrase: () => void addToPhrase(),
+        onToggleKnown: (term) => void toggleKnown(term),
+        onClose: closePopover,
+      }
+    : null;
+
   return {
     popover,
     setPopover,
@@ -146,5 +181,6 @@ export function useWordPopover(config: WordPopoverConfig) {
     speakWord,
     addToVocab,
     addToPhrase,
+    mount,
   };
 }

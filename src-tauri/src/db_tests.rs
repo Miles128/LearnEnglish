@@ -1,7 +1,56 @@
 use crate::db;
 use crate::feeds;
 use std::env::temp_dir;
+use std::path::PathBuf;
 use uuid::Uuid;
+
+/// A throwaway database folder under the OS temp dir, deleted when the test
+/// ends. Every test used to hand-write `let _ = remove_file(path)` as its last
+/// line, which never runs when an assertion above it fails — and never touched
+/// the `-wal`/`-shm` siblings or the premigrate snapshots the open path writes
+/// beside the file, so each run left a few dozen databases behind.
+///
+/// Locals drop in reverse order of declaration, so a `conn`/`state` bound after
+/// `TmpDb` is closed before the folder is removed.
+struct TmpDb {
+    dir: PathBuf,
+}
+
+impl TmpDb {
+    /// `tag` names the folder so a run aborted before `Drop` stays diagnosable.
+    fn new(tag: &str) -> Self {
+        let dir = temp_dir().join(format!("shiyan-test-{tag}-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        Self { dir }
+    }
+
+    /// The app-data folder itself, for tests that stage extra files beside the
+    /// database (legacy-bundle renames, `VACUUM INTO` targets).
+    fn dir(&self) -> PathBuf {
+        self.dir.clone()
+    }
+
+    /// The database path, using the production filename.
+    fn file(&self) -> PathBuf {
+        db::db_path(self.dir.clone())
+    }
+
+    /// Open the database: create, migrate, seed.
+    fn conn(&self) -> rusqlite::Connection {
+        db::open_db(self.file()).expect("open test db")
+    }
+
+    /// Open the read/write connection pair the app uses.
+    fn state(&self) -> db::DbState {
+        db::DbState::open(self.file()).expect("open test db state")
+    }
+}
+
+impl Drop for TmpDb {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
 
 fn sample_article(id: &str) -> db::Article {
     db::Article {
@@ -23,8 +72,8 @@ fn sample_article(id: &str) -> db::Article {
 
 #[test]
 fn db_seeds_feeds_and_stores_article() {
-    let path = temp_dir().join(format!("le-test-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("test");
+    let conn = tmp.conn();
     let feeds = db::list_feeds(&conn).expect("feeds");
     assert!(
         feeds.len() >= 80,
@@ -66,13 +115,12 @@ fn db_seeds_feeds_and_stores_article() {
     db::upsert_article(&conn, &article).unwrap();
     let list = db::list_articles(&conn, Some("tech"), None, None).unwrap();
     assert_eq!(list.len(), 1);
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn seed_feeds_adds_new_curated_sources() {
-    let path = temp_dir().join(format!("le-test-seed-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("test-seed");
+    let conn = tmp.conn();
     let before = db::list_feeds(&conn).unwrap().len();
     // Simulate older DB missing a curated feed; re-open triggers seed INSERT OR IGNORE.
     conn.execute("DELETE FROM feed_sources WHERE id='propublica'", [])
@@ -80,20 +128,19 @@ fn seed_feeds_adds_new_curated_sources() {
     let mid = db::list_feeds(&conn).unwrap().len();
     assert_eq!(mid, before - 1);
     drop(conn);
-    let conn = db::open_db(path.clone()).expect("reopen");
+    let conn = tmp.conn();
     let after = db::list_feeds(&conn).unwrap().len();
     assert_eq!(after, before);
     assert!(db::list_feeds(&conn)
         .unwrap()
         .iter()
         .any(|f| f.id == "propublica"));
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn seed_feeds_removes_obsolete_sources() {
-    let path = temp_dir().join(format!("le-test-obsolete-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("test-obsolete");
+    let conn = tmp.conn();
     conn.execute(
         "INSERT INTO feed_sources (id, name, category, url, enabled, origin, description) VALUES ('rust-blog','Rust Blog','tech','https://example.com/rust',1,'curated','')",
         [],
@@ -104,7 +151,7 @@ fn seed_feeds_removes_obsolete_sources() {
         .iter()
         .any(|f| f.id == "rust-blog"));
     drop(conn);
-    let conn = db::open_db(path.clone()).expect("reopen");
+    let conn = tmp.conn();
     assert!(
         !db::list_feeds(&conn)
             .unwrap()
@@ -112,13 +159,12 @@ fn seed_feeds_removes_obsolete_sources() {
             .any(|f| f.id == "rust-blog"),
         "obsolete curated feeds should be deleted on open"
     );
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn seed_feeds_preserves_user_subscriptions() {
-    let path = temp_dir().join(format!("le-test-user-feed-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("test-user-feed");
+    let conn = tmp.conn();
     let feed = db::subscribe_feed(
         &conn,
         "My Climate Blog",
@@ -129,7 +175,7 @@ fn seed_feeds_preserves_user_subscriptions() {
     .unwrap();
     assert_eq!(feed.origin, "user");
     drop(conn);
-    let conn = db::open_db(path.clone()).expect("reopen");
+    let conn = tmp.conn();
     let feeds = db::list_feeds(&conn).unwrap();
     assert!(
         feeds.iter().any(|f| f.id == feed.id && f.origin == "user"),
@@ -140,13 +186,12 @@ fn seed_feeds_preserves_user_subscriptions() {
     let custom = db::add_feed_category(&conn, "气候").unwrap();
     assert!(!custom.builtin);
     assert!(!custom.id.is_empty());
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn seed_feeds_skips_auto_removed_curated_ids() {
-    let path = temp_dir().join(format!("le-tombstone-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("tombstone");
+    let conn = tmp.conn();
     // Pick a real curated id so seed would normally re-insert it.
     let curated = db::list_feeds(&conn)
         .unwrap()
@@ -166,7 +211,7 @@ fn seed_feeds_skips_auto_removed_curated_ids() {
     .unwrap();
     drop(conn);
 
-    let conn = db::open_db(path.clone()).expect("reopen");
+    let conn = tmp.conn();
     assert!(
         !db::list_feeds(&conn)
             .unwrap()
@@ -174,13 +219,12 @@ fn seed_feeds_skips_auto_removed_curated_ids() {
             .any(|f| f.id == curated.id),
         "tombstoned curated feed must not be re-seeded"
     );
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn insert_article_if_new_is_idempotent() {
-    let path = temp_dir().join(format!("le-idempotent-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("idempotent");
+    let conn = tmp.conn();
 
     let first = db::Article {
         id: "id-1".into(),
@@ -224,13 +268,12 @@ fn insert_article_if_new_is_idempotent() {
     assert_eq!(stored.content_text, "original content that should stay");
     assert_eq!(stored.fetched_at, "2020-01-01T00:00:00Z");
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn list_article_urls_supports_incremental_skip() {
-    let path = temp_dir().join(format!("le-urls-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("urls");
+    let conn = tmp.conn();
     let a = db::Article {
         id: "a1".into(),
         url: "https://example.com/one".into(),
@@ -249,7 +292,6 @@ fn list_article_urls_supports_incremental_skip() {
     db::insert_article_if_new(&conn, &a).unwrap();
     let urls = db::list_article_urls(&conn).unwrap();
     assert!(urls.contains("https://example.com/one"));
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -283,8 +325,8 @@ fn filter_new_entries_skips_known_urls() {
 
 #[test]
 fn purge_summary_only_removes_teasers_keeps_fulltext() {
-    let path = temp_dir().join(format!("le-purge-summary-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("purge-summary");
+    let conn = tmp.conn();
 
     let mut chrome = String::from("Skip to main content\n\n");
     for i in 1..40 {
@@ -329,13 +371,12 @@ fn purge_summary_only_removes_teasers_keeps_fulltext() {
     assert!(db::get_article(&conn, "teaser").unwrap().is_none());
     assert!(db::get_article(&conn, "full").unwrap().is_some());
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn purge_never_touches_user_imported_articles() {
-    let path = temp_dir().join(format!("le-purge-import-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("purge-import");
+    let conn = tmp.conn();
 
     for (id, url, origin) in [
         ("u1", "https://example.com/url-import", "url"),
@@ -370,13 +411,12 @@ fn purge_never_touches_user_imported_articles() {
         2
     );
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn collect_non_english_ids_does_not_delete() {
-    let path = temp_dir().join(format!("le-collect-zh-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("collect-zh");
+    let conn = tmp.conn();
     let zh = db::Article {
         id: "zh1".into(),
         url: "https://example.com/zh".into(),
@@ -403,13 +443,12 @@ fn collect_non_english_ids_does_not_delete() {
     assert_eq!(removed, 1);
     assert!(db::get_article(&conn, "zh1").unwrap().is_none());
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn purge_word_threshold_drops_short_rss_keeps_imports() {
-    let path = temp_dir().join(format!("le-word-threshold-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("word-threshold");
+    let conn = tmp.conn();
 
     let mut short = sample_article("short");
     short.word_count = 100;
@@ -440,13 +479,12 @@ fn purge_word_threshold_drops_short_rss_keeps_imports() {
         "user imports are never deleted by threshold purges"
     );
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn refresh_article_content_updates_longer_body() {
-    let path = temp_dir().join(format!("le-refresh-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("refresh");
+    let conn = tmp.conn();
     let a = db::Article {
         id: "r1".into(),
         url: "https://example.com/refresh".into(),
@@ -495,13 +533,12 @@ fn refresh_article_content_updates_longer_body() {
     let changed_again = db::refresh_article_content(&conn, &update).unwrap();
     assert!(!changed_again);
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn body_replacement_invalidates_paragraph_translations() {
-    let path = temp_dir().join(format!("le-invalidate-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("invalidate");
+    let conn = tmp.conn();
     let a = db::Article {
         id: "inv1".into(),
         url: "https://example.com/invalidate".into(),
@@ -545,13 +582,12 @@ fn body_replacement_invalidates_paragraph_translations() {
         .unwrap()
         .is_none());
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn refresh_article_content_skips_url_imports() {
-    let path = temp_dir().join(format!("le-refresh-url-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("refresh-url");
+    let conn = tmp.conn();
     let original = "imported body ".repeat(40);
     let a = db::Article {
         id: "imp1".into(),
@@ -592,13 +628,12 @@ fn refresh_article_content_skips_url_imports() {
     assert_eq!(stored.content_text, original);
     assert_eq!(stored.origin, "url");
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn list_articles_returns_excerpt_not_full_body() {
-    let path = temp_dir().join(format!("le-list-excerpt-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("list-excerpt");
+    let conn = tmp.conn();
     let body = "x".repeat(9000);
     let a = db::Article {
         id: "long1".into(),
@@ -627,13 +662,12 @@ fn list_articles_returns_excerpt_not_full_body() {
     let stored = db::get_article(&conn, "long1").unwrap().expect("exists");
     assert_eq!(stored.content_text.len(), 9000);
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn list_articles_paginates() {
-    let path = temp_dir().join(format!("le-page-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("page");
+    let conn = tmp.conn();
     for i in 0..5 {
         let a = db::Article {
             id: format!("p{i}"),
@@ -666,13 +700,12 @@ fn list_articles_paginates() {
         .collect();
     assert_eq!(ids.len(), 5);
     assert!(ids.iter().all(|id| id.starts_with('p')));
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn reading_stats_counts_days_streak_and_time() {
-    let path = temp_dir().join(format!("le-stats-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("stats");
+    let conn = tmp.conn();
 
     let mut a = sample_article("today");
     a.source = "NPR".into();
@@ -716,13 +749,12 @@ fn reading_stats_counts_days_streak_and_time() {
     assert_eq!(stats.top_sources.first().unwrap().name, "NPR");
     assert_eq!(stats.top_sources.first().unwrap().minutes, 18);
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn list_article_titles_dedup_window() {
-    let path = temp_dir().join(format!("le-dedup-window-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("dedup-window");
+    let conn = tmp.conn();
 
     let mut recurring_old = sample_article("old-briefing");
     recurring_old.fetched_at = (chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339();
@@ -743,13 +775,12 @@ fn list_article_titles_dedup_window() {
     let all = db::list_article_titles(&conn, None).unwrap();
     assert_eq!(all.len(), 2);
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn query_articles_filters_read_state_source_liked_and_tags() {
-    let path = temp_dir().join(format!("le-query-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("query");
+    let conn = tmp.conn();
 
     let mut unread = sample_article("unread");
     unread.source = "NPR".into();
@@ -833,13 +864,12 @@ fn query_articles_filters_read_state_source_liked_and_tags() {
     );
     assert_eq!(combined.len(), 2);
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn content_audit_removes_synopsis_only_bodies_once() {
-    let path = temp_dir().join(format!("le-audit-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("audit");
+    let conn = tmp.conn();
 
     // A 500-char synopsis that ends with a read-more marker (teaser).
     let mut teaser = sample_article("teaser");
@@ -866,13 +896,12 @@ fn content_audit_removes_synopsis_only_bodies_once() {
     assert_eq!(feeds::audit_rss_bodies_once(&conn).unwrap(), 0);
     assert!(db::get_article(&conn, "junk").unwrap().is_some());
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn retention_purge_drops_old_rss_but_keeps_liked_and_imports() {
-    let path = temp_dir().join(format!("le-retention-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("retention");
+    let conn = tmp.conn();
 
     let recent = chrono::Utc::now().to_rfc3339();
     let old = (chrono::Utc::now() - chrono::Duration::days(40)).to_rfc3339();
@@ -904,7 +933,6 @@ fn retention_purge_drops_old_rss_but_keeps_liked_and_imports() {
     // 0 = keep forever.
     assert_eq!(feeds::purge_expired_articles(&conn, 0).unwrap(), 0);
 
-    let _ = std::fs::remove_file(path);
 }
 
 fn sample_phrase(id: &str, text: &str) -> db::MemoryItem {
@@ -928,8 +956,8 @@ fn sample_phrase(id: &str, text: &str) -> db::MemoryItem {
 
 #[test]
 fn phrase_library_dedup_review_and_listing() {
-    let path = temp_dir().join(format!("le-phrases-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("phrases");
+    let conn = tmp.conn();
 
     db::insert_memory(&conn, &sample_phrase("p1", "on the house")).unwrap();
     assert!(db::get_memory_by_term(&conn, "phrase", "On The House")
@@ -963,13 +991,12 @@ fn phrase_library_dedup_review_and_listing() {
     db::delete_memory(&conn, "p1").unwrap();
     assert!(db::list_memory(&conn, Some("phrase"), None).unwrap().is_empty());
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn word_and_phrase_libraries_are_independent() {
-    let path = temp_dir().join(format!("le-memory-kind-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("memory-kind");
+    let conn = tmp.conn();
 
     // Same text in both libraries is allowed (uniqueness is per kind).
     db::insert_memory(&conn, &sample_vocab("w1", "make", "2020-01-01T00:00:00Z")).unwrap();
@@ -979,13 +1006,12 @@ fn word_and_phrase_libraries_are_independent() {
     assert_eq!(db::list_memory(&conn, Some("phrase"), None).unwrap().len(), 1);
     assert_eq!(db::list_memory(&conn, None, None).unwrap().len(), 2);
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn vocab_dedup_by_term_and_delete_article_detaches() {
-    let path = temp_dir().join(format!("le-vocab-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("vocab");
+    let conn = tmp.conn();
 
     let item = db::MemoryItem {
         term: "Ubiquitous".into(),
@@ -1021,7 +1047,6 @@ fn vocab_dedup_by_term_and_delete_article_detaches() {
     let detached = db::get_memory(&conn, "v1").unwrap().expect("still exists");
     assert_eq!(detached.article_id, None);
 
-    let _ = std::fs::remove_file(path);
 }
 
 fn sample_vocab(id: &str, term: &str, created_at: &str) -> db::MemoryItem {
@@ -1046,8 +1071,8 @@ fn sample_vocab(id: &str, term: &str, created_at: &str) -> db::MemoryItem {
 /// v10 folds the legacy `vocab` and `phrases` tables into `memory_items`.
 #[test]
 fn v10_migration_merges_vocab_and_phrases_into_memory_items() {
-    let path = temp_dir().join(format!("le-v10-migrate-{}.db", Uuid::new_v4()));
-    let conn = rusqlite::Connection::open(&path).unwrap();
+    let tmp = TmpDb::new("v10-migrate");
+    let conn = rusqlite::Connection::open(tmp.file()).unwrap();
     conn.execute_batch(
         "CREATE TABLE articles (id TEXT PRIMARY KEY);
          CREATE TABLE feed_sources (
@@ -1112,37 +1137,37 @@ fn v10_migration_merges_vocab_and_phrases_into_memory_items() {
         .unwrap();
     assert_eq!(legacy_phrases, 1, "legacy phrase rows preserved");
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn migration_snapshot_is_written_before_version_bump() {
-    let path = temp_dir().join(format!("le-premigrate-{}.db", Uuid::new_v4()));
-    let conn = rusqlite::Connection::open(&path).unwrap();
+    let tmp = TmpDb::new("premigrate");
+    let conn = rusqlite::Connection::open(tmp.file()).unwrap();
     conn.pragma_update(None, "user_version", 5).unwrap();
 
-    db::backup_before_migration(&conn, &path);
-    let backup = path.with_file_name("shiyan.db.premigrate-v5.bak");
+    db::backup_before_migration(&conn, &tmp.file());
+    let backup = tmp
+        .file()
+        .with_file_name("shiyan.db.premigrate-v5.bak");
     assert!(backup.exists(), "pre-migration snapshot should exist");
 
-    // Already up to date → no new snapshot.
-    let current = temp_dir().join(format!("le-premigrate-current-{}.db", Uuid::new_v4()));
+    // Already up to date → no new snapshot. A sibling folder keeps this file's
+    // own name, so the assertion below targets the real snapshot path.
+    let up_to_date = tmp.dir().join("uptodate");
+    std::fs::create_dir_all(&up_to_date).unwrap();
+    let current = up_to_date.join("shiyan.db");
     let conn2 = rusqlite::Connection::open(&current).unwrap();
     conn2.pragma_update(None, "user_version", 15).unwrap();
     db::backup_before_migration(&conn2, &current);
     assert!(!current
         .with_file_name("shiyan.db.premigrate-v15.bak")
         .exists());
-
-    let _ = std::fs::remove_file(path);
-    let _ = std::fs::remove_file(backup);
-    let _ = std::fs::remove_file(current);
 }
 
 #[test]
 fn vocab_term_unique_index_rejects_case_insensitive_dup() {
-    let path = temp_dir().join(format!("le-vocab-uniq-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("vocab-uniq");
+    let conn = tmp.conn();
     db::insert_memory(&conn, &sample_vocab("v1", "Focus", "2020-01-01T00:00:00Z")).unwrap();
     let err = db::insert_memory(&conn, &sample_vocab("v2", "focus", "2020-01-02T00:00:00Z"))
         .expect_err("duplicate term");
@@ -1150,14 +1175,12 @@ fn vocab_term_unique_index_rejects_case_insensitive_dup() {
         err.to_string().to_lowercase().contains("unique"),
         "expected unique violation, got {err}"
     );
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn add_or_merge_memory_reuses_existing_term() {
-    let dir = temp_dir().join(format!("le-vocab-merge-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let state = db::DbState::open(db::db_path(dir.clone())).unwrap();
+    let tmp = TmpDb::new("vocab-merge");
+    let state = tmp.state();
     let first = crate::vocab::add_or_merge_memory(
         &state,
         crate::vocab::AddMemoryInput {
@@ -1186,14 +1209,12 @@ fn add_or_merge_memory_reuses_existing_term() {
     .unwrap();
     assert_eq!(first.id, second.id);
     assert!(second.collocations.contains(&"pure serendipity".to_string()));
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
 fn add_or_merge_memory_preserves_srs_progress() {
-    let dir = temp_dir().join(format!("le-vocab-srs-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let state = db::DbState::open(db::db_path(dir.clone())).unwrap();
+    let tmp = TmpDb::new("vocab-srs");
+    let state = tmp.state();
     let input = |ctx: &str| crate::vocab::AddMemoryInput {
         kind: "word".into(),
         term: "persevere".into(),
@@ -1224,14 +1245,12 @@ fn add_or_merge_memory_preserves_srs_progress() {
     assert_eq!(merged.consecutive_know, 2);
     assert_eq!(merged.interval_days, 3.0);
     assert_eq!(merged.status, "learning");
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
 fn add_or_merge_memory_unifies_word_and_phrase_kinds() {
-    let dir = temp_dir().join(format!("le-memory-kinds-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let state = db::DbState::open(db::db_path(dir.clone())).unwrap();
+    let tmp = TmpDb::new("memory-kinds");
+    let state = tmp.state();
     let phrase = crate::vocab::add_or_merge_memory(
         &state,
         crate::vocab::AddMemoryInput {
@@ -1248,13 +1267,12 @@ fn add_or_merge_memory_unifies_word_and_phrase_kinds() {
     assert_eq!(phrase.kind, "phrase");
     assert_eq!(phrase.term, "on the house", "whitespace normalized");
     assert_eq!(phrase.definition_zh, "本店请客");
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
 fn known_words_add_list_remove_roundtrip() {
-    let path = temp_dir().join(format!("le-known-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("known");
+    let conn = tmp.conn();
 
     // Insert normalizes case/whitespace; a differently-cased re-add is ignored.
     db::add_known_word(&conn, "  Serendipity ").unwrap();
@@ -1276,13 +1294,12 @@ fn known_words_add_list_remove_roundtrip() {
     // Removing a missing term is a no-op, not an error.
     db::remove_known_word(&conn, "ghost").unwrap();
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn known_words_normalize_apostrophes_and_legacy_rows() {
-    let path = temp_dir().join(format!("le-known-norm-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("known-norm");
+    let conn = tmp.conn();
 
     // Curly apostrophes fold to straight ones on write.
     db::add_known_word(&conn, "it’s").unwrap();
@@ -1313,13 +1330,12 @@ fn known_words_normalize_apostrophes_and_legacy_rows() {
     .unwrap();
     assert_eq!(db::normalize_known_words_once(&conn).unwrap(), 0);
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn read_state_reading_and_unfinished_filters() {
-    let path = temp_dir().join(format!("le-reading-state-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("reading-state");
+    let conn = tmp.conn();
 
     let mut untouched = sample_article("untouched");
     untouched.source = "NPR".into();
@@ -1368,13 +1384,12 @@ fn read_state_reading_and_unfinished_filters() {
         vec!["in-progress".to_string()]
     );
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn repair_target_selection_and_body_replacement() {
-    let path = temp_dir().join(format!("le-repair-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("repair");
+    let conn = tmp.conn();
 
     // Target: RSS article whose body lost all paragraph breaks.
     let mut flat = sample_article("flat");
@@ -1407,13 +1422,12 @@ fn repair_target_selection_and_body_replacement() {
     // Repaired rows leave the candidate set.
     assert!(db::articles_without_paragraphs(&conn, 50).unwrap().is_empty());
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn apply_legacy_disabled_feeds_sets_enabled_false() {
-    let path = temp_dir().join(format!("le-disabled-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("disabled");
+    let conn = tmp.conn();
     let some = db::list_feeds(&conn).unwrap().into_iter().next().expect("seed");
     assert!(some.enabled);
     db::apply_legacy_disabled_feeds(&conn, &[some.id.clone()]).unwrap();
@@ -1423,13 +1437,12 @@ fn apply_legacy_disabled_feeds_sets_enabled_false() {
         .find(|f| f.id == some.id)
         .unwrap();
     assert!(!after.enabled);
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn article_foreign_keys_cascade_and_reject_orphans() {
-    let path = temp_dir().join(format!("le-fk-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("fk");
+    let conn = tmp.conn();
 
     db::upsert_article(&conn, &sample_article("a1")).unwrap();
     db::save_translation(&conn, "a1", "paragraph", "0", "Hello", "你好", "test").unwrap();
@@ -1479,13 +1492,12 @@ fn article_foreign_keys_cascade_and_reject_orphans() {
     let detached = db::get_memory(&conn, "v1").unwrap().expect("vocab kept");
     assert_eq!(detached.article_id, None);
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn reflow_cleanup_clears_paragraph_translations_once() {
-    let path = temp_dir().join(format!("le-reflow-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("reflow");
+    let conn = tmp.conn();
     db::upsert_article(&conn, &sample_article("a1")).unwrap();
     db::save_translation(&conn, "a1", "paragraph", "0", "Hello", "你好", "test").unwrap();
     db::save_translation(&conn, "a1", "selection", "abc", "hi", "嗨", "test").unwrap();
@@ -1515,7 +1527,6 @@ fn reflow_cleanup_clears_paragraph_translations_once() {
         .unwrap()
         .is_some());
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -1535,11 +1546,12 @@ fn stats_day_is_offset_aware_not_a_substring() {
 
 #[test]
 fn vacuum_into_file_produces_valid_backup() {
-    let path = temp_dir().join(format!("le-vacuum-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("vacuum");
+    let conn = tmp.conn();
     db::upsert_article(&conn, &sample_article("a1")).unwrap();
-    let dest = temp_dir().join(format!("le-vacuum-out-{}.db", Uuid::new_v4()));
-    let _ = std::fs::remove_file(&dest);
+    // VACUUM INTO refuses an existing file; a fresh guarded folder guarantees
+    // the destination is absent, which the old pre-clear remove_file only hoped for.
+    let dest = tmp.dir().join("out.db");
 
     db::vacuum_into_file(&conn, &dest).unwrap();
     assert!(dest.exists(), "VACUUM INTO must write the snapshot");
@@ -1553,15 +1565,12 @@ fn vacuum_into_file_produces_valid_backup() {
         })
         .unwrap();
     assert_eq!(count, 1);
-
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(&dest);
 }
 
 #[test]
 fn article_view_loads_paragraphs_and_translations() {
-    let path = temp_dir().join(format!("le-view-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("view");
+    let conn = tmp.conn();
     db::upsert_article(&conn, &sample_article("a1")).unwrap();
     conn.execute(
         "UPDATE articles SET content_text = ?1 WHERE id = 'a1'",
@@ -1581,13 +1590,12 @@ fn article_view_loads_paragraphs_and_translations() {
     assert!(crate::commands::articles::load_article_view(&conn, "missing")
         .unwrap()
         .is_none());
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn schema_adds_summary_zh_column() {
-    let path = temp_dir().join(format!("le-summary-col-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("summary-col");
+    let conn = tmp.conn();
     let has: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM pragma_table_info('articles') WHERE name='summary_zh'",
@@ -1648,13 +1656,12 @@ fn schema_adds_summary_zh_column() {
         )
         .unwrap();
     assert_eq!(ratio_col, 1, "feed_sources.fulltext_ratio should exist after migrate");
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn summary_zh_roundtrips_and_missing_query() {
-    let path = temp_dir().join(format!("le-summary-zh-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("summary-zh");
+    let conn = tmp.conn();
     let mut a = sample_article("s1");
     a.summary_zh = String::new();
     db::insert_article_if_new(&conn, &a).unwrap();
@@ -1668,13 +1675,12 @@ fn summary_zh_roundtrips_and_missing_query() {
     assert_eq!(stored.summary_zh, "这是一条不超过五十字的中文简介");
     assert!(db::articles_missing_card_zh(&conn, 40).unwrap().is_empty());
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn mark_article_opened_is_implicit_and_repeatable() {
-    let path = temp_dir().join(format!("le-opened-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("opened");
+    let conn = tmp.conn();
     db::insert_article_if_new(&conn, &sample_article("r1")).unwrap();
 
     let before = db::get_article(&conn, "r1").unwrap().expect("exists");
@@ -1692,13 +1698,12 @@ fn mark_article_opened_is_implicit_and_repeatable() {
     assert!(twice.last_opened_at >= once.last_opened_at);
 
     assert!(db::mark_article_opened(&conn, "missing").is_err());
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn learning_stats_uses_opens_and_new_vocab() {
-    let path = temp_dir().join(format!("le-learn-stats-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("learn-stats");
+    let conn = tmp.conn();
 
     let mut bbc = sample_article("bbc1");
     bbc.source = "BBC".into();
@@ -1731,22 +1736,19 @@ fn learning_stats_uses_opens_and_new_vocab() {
     assert_eq!(stats.vocab_created_7d, 1);
     assert_eq!(stats.vocab_learning, 2);
 
-    let empty_path = temp_dir().join(format!("le-learn-empty-{}.db", Uuid::new_v4()));
-    let empty = db::open_db(empty_path.clone()).expect("open");
+    let other = TmpDb::new("learn-empty");
+    let empty = other.conn();
     let zero = db::learning_stats(&empty).unwrap();
     assert_eq!(zero.opened_total, 0);
     assert_eq!(zero.opened_7d, 0);
     assert!(zero.top_source.is_none());
     assert_eq!(zero.vocab_created_7d, 0);
-
-    let _ = std::fs::remove_file(path);
-    let _ = std::fs::remove_file(empty_path);
 }
 
 #[test]
 fn export_memory_csv_dumps_all_libraries_with_escaping() {
-    let path = temp_dir().join(format!("le-vocab-export-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("vocab-export");
+    let conn = tmp.conn();
 
     // A word whose definition contains a comma+quote exercises RFC 4180 escaping.
     let mut word = sample_vocab("w1", "ubiquitous", "2020-01-01T00:00:00Z");
@@ -1782,12 +1784,12 @@ fn export_memory_csv_dumps_all_libraries_with_escaping() {
         "term,kind,status,definition_zh,word_type,collocations,context_sentence,created_at,next_review_at,reps,interval_days\n"
     );
 
-    let _ = std::fs::remove_file(path);
 }
 
 #[test]
 fn bundle_id_rename_adopts_legacy_data_dir_once() {
-    let parent = temp_dir().join(format!("le-bundle-{}", Uuid::new_v4()));
+    let tmp = TmpDb::new("bundle");
+    let parent = tmp.dir();
     let legacy = parent.join("com.sihai.learnenglish");
     let current = parent.join("com.sihai.shiyan");
     std::fs::create_dir_all(&legacy).unwrap();
@@ -1816,19 +1818,16 @@ fn bundle_id_rename_adopts_legacy_data_dir_once() {
     assert_eq!(std::fs::read(current.join("shiyan.db")).unwrap(), b"new-db");
 
     // No legacy dir at all is also a no-op.
-    let bare_parent = temp_dir().join(format!("le-bundle-bare-{}", Uuid::new_v4()));
+    let bare_parent = tmp.dir().join("bare");
     let fresh = bare_parent.join("com.sihai.shiyan");
     assert_eq!(db::migrate_legacy_app_dir(&fresh).unwrap(), 0);
-
-    let _ = std::fs::remove_dir_all(parent);
-    let _ = std::fs::remove_dir_all(bare_parent);
 }
 
 #[test]
 fn db_file_rename_happens_in_place_and_is_idempotent() {
     // Already on the new bundle id, but the DB still carries the legacy name.
-    let dir = temp_dir().join(format!("le-dbfile-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let tmp = TmpDb::new("dbfile");
+    let dir = tmp.dir();
     std::fs::write(dir.join("learnenglish.db"), b"fake-db").unwrap();
     std::fs::write(dir.join("learnenglish.db-wal"), b"fake-wal").unwrap();
     std::fs::write(dir.join("learnenglish.db.premigrate-v10.bak"), b"old").unwrap();
@@ -1846,13 +1845,12 @@ fn db_file_rename_happens_in_place_and_is_idempotent() {
     // Rerun is a no-op once the new-named DB exists.
     assert_eq!(db::migrate_legacy_app_dir(&dir).unwrap(), 0);
 
-    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
 fn reorder_feeds_assigns_priority_within_category() {
-    let path = temp_dir().join(format!("le-reorder-{}.db", Uuid::new_v4()));
-    let conn = db::open_db(path.clone()).expect("open");
+    let tmp = TmpDb::new("reorder");
+    let conn = tmp.conn();
     // Start from a controlled feed set: two tech, two finance.
     conn.execute("DELETE FROM feed_sources", []).unwrap();
     for (id, cat) in [
@@ -1894,5 +1892,4 @@ fn reorder_feeds_assigns_priority_within_category() {
     assert_eq!(name_prio.get("t1"), Some(&2));
     assert_eq!(name_prio.get("f1"), Some(&2));
 
-    let _ = std::fs::remove_file(path);
 }

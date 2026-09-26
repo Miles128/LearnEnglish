@@ -5,6 +5,7 @@ import FeedDiscoverSection, {
   type DiscoverRow,
 } from "./FeedDiscoverSection";
 import { categoryLabel } from "../readerUtils";
+import { useShell } from "../store";
 import { useToast } from "./Toaster";
 
 type AddTab = "discover" | "paste" | "article";
@@ -13,8 +14,11 @@ type AddTab = "discover" | "paste" | "article";
 export default function ManageFeeds() {
   const navigate = useNavigate();
   const toast = useToast();
+  // The sidebar already owns the feed list; subscribing, muting or deleting
+  // here reloads that one copy so the tree updates without waiting for the
+  // next refresh. Only the category table is local to this page.
+  const { feeds, reloadFeeds } = useShell();
   const [categories, setCategories] = useState<FeedCategory[]>([]);
-  const [feeds, setFeeds] = useState<FeedSource[]>([]);
   const [categoryId, setCategoryId] = useState("all");
   const [newCatLabel, setNewCatLabel] = useState("");
   const [addingCat, setAddingCat] = useState(false);
@@ -31,16 +35,12 @@ export default function ManageFeeds() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [cats, list] = await Promise.all([
-        api.listFeedCategories(),
-        api.listFeeds(),
-      ]);
+      const [cats] = await Promise.all([api.listFeedCategories(), reloadFeeds()]);
       setCategories(cats);
-      setFeeds(list);
     } catch (e) {
       setError(String(e));
     }
-  }, []);
+  }, [reloadFeeds]);
 
   useEffect(() => {
     void load();
@@ -63,9 +63,7 @@ export default function ManageFeeds() {
     setError(null);
     try {
       await api.setFeedEnabled(id, enabled);
-      setFeeds((prev) =>
-        prev.map((f) => (f.id === id ? { ...f, enabled } : f)),
-      );
+      await reloadFeeds();
     } catch (e) {
       toast.err(String(e));
     }
@@ -82,7 +80,7 @@ export default function ManageFeeds() {
     setError(null);
     try {
       await api.deleteFeedSource(feed.id);
-      setFeeds((prev) => prev.filter((f) => f.id !== feed.id));
+      await reloadFeeds();
       toast.ok(`已删除订阅源：${feed.name}`);
     } catch (e) {
       toast.err(String(e));
@@ -177,7 +175,7 @@ export default function ManageFeeds() {
       setCandidates((prev) =>
         prev.map((c) => (c.url === row.url ? { ...c, subscribed: true } : c)),
       );
-      await load();
+      await reloadFeeds();
       toast.ok(`已订阅：${row.name}`);
     } catch (e) {
       toast.err(String(e));
@@ -225,7 +223,7 @@ export default function ManageFeeds() {
       });
       setPasteUrl("");
       setPasteName("");
-      await load();
+      await reloadFeeds();
       toast.ok(`已订阅：${name}`);
     } catch (err) {
       toast.err(String(err));
@@ -378,7 +376,6 @@ export default function ManageFeeds() {
         {addTab === "article" && (
           <form className="feeds-paste" onSubmit={(e) => void onImportArticle(e)}>
             <input
-              className="feeds-paste-url"
               type="url"
               value={articleUrl}
               onChange={(e) => setArticleUrl(e.target.value)}

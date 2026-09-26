@@ -188,8 +188,13 @@ export function useVocab(): VocabState {
 /**
  * Shell state shared between the global Sidebar + top-bar search and the Home
  * list: the draggable source-priority list, the tag filter (owned by the
- * sidebar so it stays visible while reading), the search query, and a rerank
- * nonce bumped after a priority change so Home reloads.
+ * sidebar so it stays visible while reading), and a rerank nonce bumped after
+ * a priority change so Home reloads.
+ *
+ * The search box deliberately lives in its own context (see
+ * [`useSearchQuery`]): it changes on every keystroke, and the sidebar has no
+ * use for it — sharing one value meant re-rendering 430 lines of draggable
+ * rows per character typed.
  */
 type ShellState = {
   /** Feeds in priority order (highest first) — the sidebar source list. */
@@ -207,10 +212,6 @@ type ShellState = {
   /** Home publishes the tags available in its loaded window for the sidebar chips. */
   availableTags: string[];
   publishAvailableTags: (tags: string[]) => void;
-
-  /** Top-bar search text, applied by Home as a client-side filter. */
-  query: string;
-  setQuery: (q: string) => void;
 
   /** Archive filter panel (source/level/read/liked) — toggled from the sidebar. */
   filtersOpen: boolean;
@@ -325,8 +326,6 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       clearTags,
       availableTags,
       publishAvailableTags,
-      query,
-      setQuery,
       filtersOpen,
       setFiltersOpen,
       focusSource,
@@ -344,7 +343,6 @@ export function ShellProvider({ children }: { children: ReactNode }) {
       clearTags,
       availableTags,
       publishAvailableTags,
-      query,
       filtersOpen,
       focusSource,
       topPickSources,
@@ -352,11 +350,31 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  return <ShellContext.Provider value={value}>{children}</ShellContext.Provider>;
+  const queryValue = useMemo(() => ({ query, setQuery }), [query]);
+
+  return (
+    <ShellContext.Provider value={value}>
+      <SearchQueryContext.Provider value={queryValue}>
+        {children}
+      </SearchQueryContext.Provider>
+    </ShellContext.Provider>
+  );
 }
 
 export function useShell(): ShellState {
   const ctx = useContext(ShellContext);
   if (!ctx) throw new Error("useShell must be used within ShellProvider");
+  return ctx;
+}
+
+const SearchQueryContext = createContext<{
+  query: string;
+  setQuery: (q: string) => void;
+} | null>(null);
+
+/** Top-bar search text, applied by Home as a client-side filter. */
+export function useSearchQuery() {
+  const ctx = useContext(SearchQueryContext);
+  if (!ctx) throw new Error("useSearchQuery must be used within ShellProvider");
   return ctx;
 }

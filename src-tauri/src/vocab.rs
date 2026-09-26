@@ -59,33 +59,47 @@ fn strip_fences(raw: &str) -> &str {
 const JSON_REMINDER: &str =
     "\n\nREMINDER: Reply with ONLY valid JSON in the exact shape requested. No markdown fences, no commentary.";
 
-/// Chat → parse JSON. Uses the provider's JSON output mode so responses are
-/// parseable in one shot; the stricter-instruction retry remains as a
-/// fallback for providers without it.
-fn chat_json<T: for<'de> Deserialize<'de>>(
+/// Chat → parse, with one stricter-instruction retry when the answer will not
+/// parse. The two callers below differ only in the parse step: the provider's
+/// JSON-object mode makes models wrap a requested array in an object, so array
+/// jobs must unwrap a layer a plain object read does not.
+fn chat_parsed<T>(
     cfg: &AppConfig,
     system: &str,
     user: &str,
     label: &str,
+    parse: impl Fn(&str) -> Result<T, AppError>,
 ) -> Result<T, AppError> {
     let raw = chat_json_mode(cfg, system, user)?;
-    match serde_json::from_str(strip_fences(&raw)) {
+    match parse(&raw) {
         Ok(v) => Ok(v),
         Err(first_err) => {
+            let first_err = first_err.to_string();
             let raw2 =
                 chat_json_mode(cfg, system, &format!("{user}{JSON_REMINDER}")).map_err(|e| {
                     AppError::msg(format!(
                         "{label}: first attempt failed to parse ({first_err}); retry request failed: {e}"
                     ))
                 })?;
-            serde_json::from_str(strip_fences(&raw2))
-                .map_err(|e| {
-                    AppError::msg(format!(
-                        "parse {label}: {first_err}; retry also failed: {e}"
-                    ))
-                })
+            parse(&raw2).map_err(|e| {
+                AppError::msg(format!("parse {label}: {first_err}; retry also failed: {e}"))
+            })
         }
     }
+}
+
+/// Chat → parse one JSON object. Uses the provider's JSON output mode so
+/// responses are parseable in one shot; the stricter-instruction retry remains
+/// as a fallback for providers without it.
+fn chat_json<T: for<'de> Deserialize<'de>>(
+    cfg: &AppConfig,
+    system: &str,
+    user: &str,
+    label: &str,
+) -> Result<T, AppError> {
+    chat_parsed(cfg, system, user, label, |raw| {
+        serde_json::from_str(strip_fences(raw)).map_err(|e| AppError::msg(e.to_string()))
+    })
 }
 
 /// Parse an array-shaped answer. The provider's JSON-object output mode makes
@@ -141,22 +155,7 @@ fn chat_json_array<T: for<'de> Deserialize<'de>>(
     user: &str,
     label: &str,
 ) -> Result<Vec<T>, AppError> {
-    let raw = chat_json_mode(cfg, system, user)?;
-    match parse_json_array(&raw) {
-        Ok(v) => Ok(v),
-        Err(first_err) => {
-            let raw2 = chat_json_mode(cfg, system, &format!("{user}{JSON_REMINDER}")).map_err(
-                |e| {
-                    AppError::msg(format!(
-                        "{label}: first attempt failed to parse ({first_err}); retry request failed: {e}"
-                    ))
-                },
-            )?;
-            parse_json_array(&raw2).map_err(|e| {
-                AppError::msg(format!("parse {label}: {first_err}; retry also failed: {e}"))
-            })
-        }
-    }
+    chat_parsed(cfg, system, user, label, |raw| parse_json_array::<T>(raw))
 }
 
 /// Translate article paragraphs in batch. Input order must match output order.

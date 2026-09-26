@@ -517,7 +517,7 @@ git commit -m "feat(sentences): save/list/delete commands and frontend api facad
 
 **Interfaces:**
 - Consumes: Task 2 的 `api.saveSentence`；`wordResolve.isPhraseSelection`；`useWordPopover` 的 `popover` / `closePopover`
-- Produces: `SelectionPopover` 可选 props `onSaveSentence?: () => void`、`sentenceSaved?: boolean`；`ReaderParagraph` 必填 prop `paraIndex: number`，DOM 上 `data-para-index`；Reader 内部 `savedSentence` state 与 `selParaRef`
+- Produces: `SelectionPopover` 可选 props `onSaveSentence?: () => void`、`sentenceSaved?: boolean`；`ReaderParagraph` 必填 prop `paraIndex: number`，DOM 上 `data-para-index`；Reader 内部 `savedSentence` 与 `selPara` 两个 state
 
 - [ ] **Step 1: 段落容器带序号**
 
@@ -584,14 +584,16 @@ function selectionParaIndex(sel: Selection | null): number | null {
 `onMouseUp` 内 `const text = sel?.toString().trim() ?? "";` 之后、`await showMeaning(...)` 之前加：
 
 ```tsx
-    selParaRef.current = selectionParaIndex(sel);
+    setSelPara(selectionParaIndex(sel));
     setSavedSentence(false);
 ```
 
 组件内（与 `const [showDone, setShowDone] = useState(false);` 相邻处）加：
 
 ```tsx
-  const selParaRef = useRef<number | null>(null);
+  // 必须是 state 而不是 ref：渲染处要用它决定「收一句」按钮出不出现，
+  // ref 的改变不触发渲染，按钮会在上一次选区和这一次之间错位。
+  const [selPara, setSelPara] = useState<number | null>(null);
   const [savedSentence, setSavedSentence] = useState(false);
 ```
 
@@ -605,7 +607,7 @@ function selectionParaIndex(sel: Selection | null): number | null {
     const quote = popover?.text.trim() ?? "";
     if (!quote || !id) return;
     try {
-      await api.saveSentence(id, quote, selParaRef.current);
+      await api.saveSentence(id, quote, selPara);
       setSavedSentence(true);
       window.setTimeout(() => closePopover(), 1200);
     } catch (e) {
@@ -617,13 +619,11 @@ function selectionParaIndex(sel: Selection | null): number | null {
 渲染处 `<WordPopoverShell ...>` 内加两行（`onToggleKnown` 之后）：
 
 ```tsx
-          onSaveSentence={
-            selParaRef.current === null ? undefined : () => void saveCurrentSentence()
-          }
+          onSaveSentence={selPara === null ? undefined : () => void saveCurrentSentence()}
           sentenceSaved={savedSentence}
 ```
 
-`selParaRef.current === null` 时不给按钮 —— 跨段与取不到序号一律不假装收得下。
+`selPara === null`（跨段或取不到序号）时不给按钮 —— 猜归属段落不如老实承认收不下。
 
 - [ ] **Step 6: 类型检查**
 
@@ -755,17 +755,14 @@ Expected: 全绿（`library` 的类型由 `as const` 数组自动推出，不需
     if (!id || view !== "ready" || restoredRef.current === id) return;
     restoredRef.current = id;
     if (jumpPara !== null) {
-      const scrollToPara = () => {
-        const el = document.querySelector<HTMLElement>(
-          jumpPara >= 0
-            ? `[data-para-index="${jumpPara}"]`
-            : '[data-para-index="0"]',
-        );
-        if (el) el.scrollIntoView({ block: "start", behavior: "auto" });
-        // 消费一次：从别处再进来时不该继续往这段跳。
-        window.history.replaceState({}, "");
-      };
-      requestAnimationFrame(scrollToPara);
+      // -1 = 当时跨段/取不到序号，老实只打开文章，不猜位置。
+      if (jumpPara >= 0) {
+        requestAnimationFrame(() => {
+          document
+            .querySelector<HTMLElement>(`[data-para-index="${jumpPara}"]`)
+            ?.scrollIntoView({ block: "start", behavior: "auto" });
+        });
+      }
       return;
     }
     const y = loadScroll(id);
@@ -775,7 +772,7 @@ Expected: 全绿（`library` 的类型由 `as const` 数组自动推出，不需
   }, [id, view, jumpPara]);
 ```
 
-`para_index` 为 -1（跨段/取不到时的存档值）时落到第 0 段；序号越界则 `querySelector` 落空、只打开文章不滚动，不报错。
+不要在这里清 location state（既有的 `restoredRef` 闸门已经保证同一篇只跳一次，动 `history.replaceState` 反而会让 react-router 的内部状态失配）。`para_index` 越界时 `querySelector` 落空、只打开文章不滚动，不报错。
 
 Run: `node scripts/stop-desktop.mjs; pnpm build 2>&1 | tail -6`
 Expected: build 成功。
